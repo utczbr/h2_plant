@@ -1,0 +1,26 @@
+{
+  "format": "h2plant",
+  "schema_version": "1.0",
+  "metadata": {
+    "name": "Untitled Plant",
+    "version": "1.0",
+    "created": "2025-12-05T11:46:08.027786",
+    "modified": "2025-12-05T11:46:08.027786",
+    "author": "H2 Plant GUI",
+    "description": "Plant configuration: Untitled Plant",
+    "tags": [],
+    "checksum": "c25532e356ebc65c8d708f4dcf1ad671fc2a61984c4ed23a22cc95547480fcc0"
+  },
+  "canvas_state": {
+    "zoom_level": 1.0,
+    "pan_x": 0.0,
+    "pan_y": 0.0,
+    "grid_enabled": true,
+    "grid_size": 20,
+    "snap_to_grid": true
+  },
+  "nodes": {},
+  "edges": [],
+  "validation_result": null,
+  "topology_analysis": null
+}

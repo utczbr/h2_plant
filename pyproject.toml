@@ -1,0 +1,88 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "h2_plant"
+version = "2.0.0"
+description = "Modular dual-path hydrogen production plant simulation system"
+authors = [{name = "Hydrogen Production Team", email = "team@h2plant.example.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.21.0",
+    "numba>=0.55.0",
+    "pyyaml>=6.0",
+    "jsonschema>=4.0.0",
+    "h5py>=3.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "mypy>=0.990",
+    "black>=22.0.0",
+    "flake8>=5.0.0",
+    "isort>=5.10.0",
+    "pytest-benchmark>=4.0.0",
+]
+coolprop = [
+    "CoolProp>=6.4.0",
+]
+viz = [
+    "matplotlib>=3.5.0",
+    "plotly>=5.0.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["h2_plant*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests as slow",
+    "benchmark: marks tests as performance benchmarks",
+    "integration: marks tests as integration tests",
+    "performance: marks tests as performance tests (can be slow)"
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
+
+[tool.coverage.run]
+source = ["h2_plant"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/env/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3

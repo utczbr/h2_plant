@@ -1,0 +1,153 @@
+{
+  "metadata": {
+    "name": "Reference Configuration - 5MW PEM",
+    "description": "Matches ALL_Reference setup",
+    "version": "1.0.0",
+    "author": "H2 Plant GUI"
+  },
+  "canvas_state": {
+    "zoom_level": 1.0,
+    "pan_x": 0.0,
+    "pan_y": 0.0
+  },
+  "nodes": {
+    "node_0": {
+      "type": "h2_plant.electrolysis.pem.PEMStackNode",
+      "display_name": "PEM Electrolyzer 5MW",
+      "properties": {
+        "component_id": "PEM-5MW",
+        "rated_power_kw": 5000.0,
+        "efficiency_rated": 65.0
+      },
+      "geometry": {
+        "x": -400,
+        "y": 0,
+        "width": 150.0,
+        "height": 80.0
+      }
+    },
+    "node_1": {
+      "type": "h2_plant.storage.lp.LPTankNode",
+      "display_name": "LP Buffer Tank",
+      "properties": {
+        "component_id": "LP-Tank-1",
+        "tank_count": 4.0,
+        "capacity_per_tank_kg": 50.0,
+        "operating_pressure_bar": 30.0
+      },
+      "geometry": {
+        "x": -100,
+        "y": 0,
+        "width": 150.0,
+        "height": 80.0
+      }
+    },
+    "node_2": {
+      "type": "h2_plant.compression.filling.FillingCompressorNode",
+      "display_name": "Filling Compressor",
+      "properties": {
+        "component_id": "Comp-Fill",
+        "max_flow_kg_h": 200.0,
+        "inlet_pressure_bar": 30.0,
+        "outlet_pressure_bar": 350.0,
+        "efficiency": 75.0
+      },
+      "geometry": {
+        "x": 200,
+        "y": 0,
+        "width": 150.0,
+        "height": 80.0
+      }
+    },
+    "node_3": {
+      "type": "h2_plant.storage.hp.HPTankNode",
+      "display_name": "HP Storage",
+      "properties": {
+        "component_id": "HP-Tank-1",
+        "tank_count": 8.0,
+        "capacity_per_tank_kg": 200.0,
+        "operating_pressure_bar": 350.0
+      },
+      "geometry": {
+        "x": 500,
+        "y": 0,
+        "width": 150.0,
+        "height": 80.0
+      }
+    },
+    "node_4": {
+      "type": "h2_plant.compression.outgoing.OutgoingCompressorNode",
+      "display_name": "Outgoing Compressor",
+      "properties": {
+        "component_id": "Comp-Out",
+        "max_flow_kg_h": 200.0,
+        "inlet_pressure_bar": 350.0,
+        "outlet_pressure_bar": 900.0,
+        "efficiency": 75.0
+      },
+      "geometry": {
+        "x": 800,
+        "y": 0,
+        "width": 150.0,
+        "height": 80.0
+      }
+    },
+    "node_5": {
+      "type": "h2_plant.logistics.ConsumerNode",
+      "display_name": "Refueling Station",
+      "properties": {
+        "component_id": "Station-1",
+        "num_bays": 4,
+        "filling_rate_kg_h": 50.0
+      },
+      "geometry": {
+        "x": 1100,
+        "y": 0,
+        "width": 150.0,
+        "height": 80.0
+      }
+    }
+  },
+  "edges": [
+    {
+      "source_node_id": "node_0",
+      "source_port": "h2_out",
+      "target_node_id": "node_1",
+      "target_port": "h2_in",
+      "flow_type": "hydrogen",
+      "geometry": {}
+    },
+    {
+      "source_node_id": "node_1",
+      "source_port": "h2_out",
+      "target_node_id": "node_2",
+      "target_port": "h2_in",
+      "flow_type": "hydrogen",
+      "geometry": {}
+    },
+    {
+      "source_node_id": "node_2",
+      "source_port": "h2_out",
+      "target_node_id": "node_3",
+      "target_port": "h2_in",
+      "flow_type": "hydrogen",
+      "geometry": {}
+    },
+    {
+      "source_node_id": "node_3",
+      "source_port": "h2_out",
+      "target_node_id": "node_4",
+      "target_port": "h2_in",
+      "flow_type": "hydrogen",
+      "geometry": {}
+    },
+    {
+      "source_node_id": "node_4",
+      "source_port": "h2_out",
+      "target_node_id": "node_5",
+      "target_port": "h2_in",
+      "flow_type": "hydrogen",
+      "geometry": {}
+    }
+  ]
+}

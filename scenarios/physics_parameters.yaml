@@ -1,0 +1,19 @@
+pem_system:
+  max_power_mw: 5.0
+  base_efficiency: 0.65
+  kwh_per_kg: 56.16
+  use_polynomials: true
+  degradation_rate_per_1000h: 0.001 # Example
+  water_excess_factor: 0.02 # 2% extra water consumption
+
+soec_cluster:
+  max_power_nominal_mw: 2.4
+  optimal_limit: 0.80
+  num_modules: 6
+  power_first_step_mw: 0.12
+  ramp_step_mw: 0.24
+  degradation_rate_per_1000h: 0.002 # Example
+  steam_input_ratio_kg_per_kg_h2: 10.5 # 4032 kg/h steam for 384 kg/h H2
+
+hhv_h2_kwh_kg: 39.4
+lhv_h2_kwh_kg: 33.3

@@ -1,0 +1,125 @@
+"""
+Physical constants and operational parameters for hydrogen production system.
+"""
+
+from typing import Final
+
+class GasConstants:
+    """Universal gas constant and species-specific data."""
+    R_UNIVERSAL_J_PER_MOL_K: Final[float] = 8.314
+    R_H2: Final[float] = 4124.0  # Specific gas constant for H2, J/(kg.K)
+    GAMMA_H2: Final[float] = 1.41 # Specific heat ratio for H2
+    SPECIES_DATA: Final[dict] = {
+        'O2': {
+            'molecular_weight': 32.0,
+            'h_formation': 0.0,
+            'cp_coeffs': [29.96, 4.18e-3, -1.67e-6, 0.0, 0.0],
+            'critical_temp': 154.6,
+            'critical_pressure': 5.043e6,
+            'acentric_factor': 0.022
+        },
+        'CO2': {
+            'molecular_weight': 44.01,
+            'h_formation': -393.51e3,
+            'cp_coeffs': [22.26, 5.98e-2, -3.50e-5, 7.47e-9, 0.0],
+            'critical_temp': 304.13,
+            'critical_pressure': 7.377e6,
+            'acentric_factor': 0.225
+        },
+        'CH4': {
+            'molecular_weight': 16.04,
+            'h_formation': -74.87e3,
+            'cp_coeffs': [19.89, 5.02e-2, 1.27e-5, -1.10e-8, 0.0],
+            'critical_temp': 190.56,
+            'critical_pressure': 4.599e6,
+            'acentric_factor': 0.011
+        },
+        'H2O': {
+            'molecular_weight': 18.015,
+            'h_formation': -241.83e3,
+            'h_vaporization': 44.01e3,
+            'cp_coeffs': [32.24, 1.92e-3, 1.06e-5, -3.60e-9, 0.0],
+            'antoine_coeffs': [8.07131, 1730.63, 233.426],
+            'critical_temp': 647.1,
+            'critical_pressure': 22.064e6,
+            'acentric_factor': 0.345
+        },
+        'H2': {
+            'molecular_weight': 2.016,
+            'h_formation': 0.0,
+            'cp_coeffs': [29.11, -0.1916e-2, 0.4003e-5, -0.8704e-9, 0.0],
+            'critical_temp': 33.19,
+            'critical_pressure': 1.313e6,
+            'acentric_factor': -0.216
+        },
+        'N2': {
+            'molecular_weight': 28.014,
+            'h_formation': 0.0,
+            'cp_coeffs': [28.98, -0.1571e-2, 0.8081e-5, -2.873e-9, 0.0],
+            'critical_temp': 126.2,
+            'critical_pressure': 3.396e6,
+            'acentric_factor': 0.037
+        }
+    }
+
+# Standard conditions
+T_REF: Final[float] = 298.15  # K
+P_REF: Final[float] = 101325  # Pa
+
+class StandardConditions:
+    TEMPERATURE_K: Final[float] = 298.15
+    TEMPERATURE_C: Final[float] = 25.0
+    PRESSURE_PA: Final[float] = 101325.0
+    PRESSURE_BAR: Final[float] = 1.01325
+
+class ConversionFactors:
+    PA_TO_BAR: Final[float] = 1e-5
+    BAR_TO_PA: Final[float] = 1e5
+    PSI_TO_PA: Final[float] = 6894.76
+    KWH_TO_J: Final[float] = 3.6e6
+    J_TO_KWH: Final[float] = 1 / 3.6e6
+    MWH_TO_KWH: Final[float] = 1000.0
+    KG_TO_G: Final[float] = 1000.0
+    KG_TO_LB: Final[float] = 2.20462
+    MW_TO_KW: Final[float] = 1000.0
+    KW_TO_W: Final[float] = 1000.0
+
+class ProductionConstants:
+    H2_ENERGY_CONTENT_LHV_KWH_PER_KG: Final[float] = 33.0
+    H2_ENERGY_CONTENT_HHV_KWH_PER_KG: Final[float] = 39.4
+    ELECTROLYSIS_THEORETICAL_ENERGY_KWH_PER_KG: Final[float] = 39.4
+    ELECTROLYSIS_TYPICAL_EFFICIENCY: Final[float] = 0.65
+    ATR_TYPICAL_EFFICIENCY: Final[float] = 0.75
+    ATR_STARTUP_TIME_HOURS: Final[float] = 1.0
+    ATR_COOLDOWN_TIME_HOURS: Final[float] = 0.5
+    O2_TO_H2_MASS_RATIO: Final[float] = 7.94
+
+class StorageConstants:
+    LOW_PRESSURE_PA: Final[float] = 30e5
+    HIGH_PRESSURE_PA: Final[float] = 350e5
+    DELIVERY_PRESSURE_PA: Final[float] = 900e5
+    TYPICAL_LP_CAPACITY_KG: Final[float] = 50.0
+    TYPICAL_HP_CAPACITY_KG: Final[float] = 200.0
+    TANK_FULL_THRESHOLD: Final[float] = 0.99
+    TANK_EMPTY_THRESHOLD: Final[float] = 0.01
+
+class CompressionConstants:
+    ISENTROPIC_EFFICIENCY: Final[float] = 0.75
+    MECHANICAL_EFFICIENCY: Final[float] = 0.95
+    TYPICAL_STAGE_PRESSURE_RATIO: Final[float] = 3.5
+    MAX_STAGES: Final[int] = 4
+
+class EconomicConstants:
+    ENERGY_PRICE_MIN: Final[float] = 20.0
+    ENERGY_PRICE_MAX: Final[float] = 200.0
+    ENERGY_PRICE_AVERAGE: Final[float] = 60.0
+    H2_SELLING_PRICE: Final[float] = 5.0
+    NG_PRICE_TYPICAL: Final[float] = 3.5
+
+class SimulationDefaults:
+    TIMESTEP_HOURS: Final[float] = 1.0
+    ANNUAL_HOURS: Final[int] = 8760
+    CHECKPOINT_INTERVAL_HOURS: Final[int] = 168
+    MASS_TOLERANCE_KG: Final[float] = 1e-6
+    PRESSURE_TOLERANCE_PA: Final[float] = 1e3
+    TEMPERATURE_TOLERANCE_K: Final[float] = 0.01

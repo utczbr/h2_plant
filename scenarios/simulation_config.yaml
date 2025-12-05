@@ -1,0 +1,6 @@
+timestep_hours: 0.0167 # 1 minute
+duration_hours: 24
+start_hour: 0
+checkpoint_interval_hours: 8
+energy_price_file: "NL_Prices_2024_15min.csv"
+wind_data_file: "producao_horaria_2_turbinas.csv"

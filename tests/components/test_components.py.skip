@@ -1,0 +1,274 @@
+"""
+Unit tests for ElectrolyzerProductionSource.
+"""
+
+import pytest
+from h2_plant.components.production.electrolyzer_source import ElectrolyzerProductionSource
+from h2_plant.core.component_registry import ComponentRegistry
+from h2_plant.core.enums import ProductionState
+
+
+class TestElectrolyzerSource:
+    """Test suite for electrolyzer component."""
+
+    @pytest.fixture
+    def electrolyzer(self):
+        """Create electrolyzer instance."""
+        return ElectrolyzerProductionSource(
+            max_power_mw=2.5,
+            base_efficiency=0.65,
+            min_load_factor=0.20
+        )
+
+    @pytest.fixture
+    def initialized_electrolyzer(self, electrolyzer):
+        """Create and initialize electrolyzer."""
+        registry = ComponentRegistry()
+        electrolyzer.initialize(dt=1.0, registry=registry)
+        return electrolyzer
+
+    def test_initialization(self, electrolyzer):
+        """Test electrolyzer initializes correctly."""
+        registry = ComponentRegistry()
+        electrolyzer.initialize(dt=1.0, registry=registry)
+
+        assert electrolyzer._initialized
+        assert electrolyzer.state == ProductionState.OFFLINE
+
+    def test_production_at_rated_load(self, initialized_electrolyzer):
+        """Test production at rated load (100%)."""
+        elec = initialized_electrolyzer
+
+        elec.power_input_mw = 2.5  # 100% load
+        elec.step(0.0)
+
+        assert elec.state == ProductionState.PRODUCING
+        assert elec.h2_output_kg > 0
+
+        # Check efficiency at rated load
+        expected_h2 = (2.5 * 1000 * 1.0) / 33.0 * 0.65  # Approximate
+        assert abs(elec.h2_output_kg - expected_h2) < 5.0  # Within 5 kg
+
+    def test_production_below_min_load(self, initialized_electrolyzer):
+        """Test electrolyzer shuts down below minimum load."""
+        elec = initialized_electrolyzer
+
+        # 10% load (below 20% minimum)
+        elec.power_input_mw = 0.25
+        elec.step(0.0)
+
+        assert elec.state == ProductionState.OFFLINE
+        assert elec.h2_output_kg == 0.0
+
+    def test_oxygen_byproduct_generation(self, initialized_electrolyzer):
+        """Test oxygen byproduct calculation."""
+        elec = initialized_electrolyzer
+
+        elec.power_input_mw = 2.0
+        elec.step(0.0)
+
+        # O2:H2 mass ratio should be ~7.94:1
+        expected_o2 = elec.h2_output_kg * 7.94
+
+        assert abs(elec.o2_output_kg - expected_o2) < 0.01
+
+    def test_cumulative_tracking(self, initialized_electrolyzer):
+        """Test cumulative production tracking."""
+        elec = initialized_electrolyzer
+
+        # Run 10 timesteps
+        elec.power_input_mw = 2.0
+        for hour in range(10):
+            elec.step(hour)
+
+        assert elec.cumulative_h2_kg > 0
+        assert elec.cumulative_energy_kwh > 0
+
+    def test_state_serialization(self, initialized_electrolyzer):
+        """Test get_state returns complete state."""
+        elec = initialized_electrolyzer
+
+        elec.power_input_mw = 2.0
+        elec.step(0.0)
+
+        state = elec.get_state()
+
+        required_keys = [
+            'power_input_mw', 'h2_output_kg', 'o2_output_kg',
+            'efficiency', 'state', 'cumulative_h2_kg'
+        ]
+
+        for key in required_keys:
+            assert key in state
+
+
+class TestATRSource:
+    """Test suite for ATR component."""
+    
+    @pytest.fixture
+    def atr_source(self):
+        """Create ATR source instance."""
+        from h2_plant.components.production.atr_source import ATRProductionSource
+        return ATRProductionSource(
+            max_ng_flow_kg_h=100.0,
+            efficiency=0.75
+        )
+
+    @pytest.fixture
+    def initialized_atr_source(self, atr_source):
+        """Create and initialize ATR source."""
+        registry = ComponentRegistry()
+        atr_source.initialize(dt=1.0, registry=registry)
+        return atr_source
+
+    def test_atr_initialization(self, atr_source):
+        """Test ATR source initializes correctly."""
+        registry = ComponentRegistry()
+        atr_source.initialize(dt=1.0, registry=registry)
+
+        assert atr_source._initialized
+        assert atr_source.state in [ProductionState.OFFLINE, ProductionState.STARTING]
+
+    def test_atr_production(self, initialized_atr_source):
+        """Test ATR production calculation."""
+        atr = initialized_atr_source
+
+        # Put ATR in starting state first
+        atr.ng_flow_rate_kg_h = 50.0
+        atr.step(0.0)  # This should start the ATR
+
+        # Now set flow rate and step again
+        atr.ng_flow_rate_kg_h = 50.0
+        atr.step(0.0)
+
+        # Verify production occurs
+        assert atr.h2_output_kg > 0
+        assert atr.co2_emissions_kg > 0
+
+    def test_atr_shutdown(self, initialized_atr_source):
+        """Test ATR shutdown when flow rate is 0."""
+        atr = initialized_atr_source
+
+        # Start ATR
+        atr.ng_flow_rate_kg_h = 50.0
+        atr.step(0.0)
+
+        # Shutdown ATR
+        atr.ng_flow_rate_kg_h = 0.0
+        atr.step(1.0)
+
+        # Verify shutdown state
+        assert atr.state == ProductionState.OFFLINE
+        assert atr.h2_output_kg == 0.0
+        assert atr.co2_emissions_kg == 0.0
+
+
+class TestTankArray:
+    """Test suite for TankArray component."""
+    
+    @pytest.fixture
+    def tank_array(self):
+        """Create TankArray instance."""
+        from h2_plant.components.storage.tank_array import TankArray
+        return TankArray(
+            n_tanks=4,
+            capacity_kg=200.0,
+            pressure_bar=350
+        )
+
+    @pytest.fixture
+    def initialized_tank_array(self, tank_array):
+        """Create and initialize TankArray."""
+        registry = ComponentRegistry()
+        tank_array.initialize(dt=1.0, registry=registry)
+        return tank_array
+
+    def test_tank_initialization(self, tank_array):
+        """Test tank array initializes correctly."""
+        registry = ComponentRegistry()
+        tank_array.initialize(dt=1.0, registry=registry)
+
+        assert tank_array._initialized
+        assert len(tank_array.masses) == 4
+        assert all(m == 0.0 for m in tank_array.masses)
+
+    def test_tank_fill_operation(self, initialized_tank_array):
+        """Test filling tanks with mass."""
+        tanks = initialized_tank_array
+
+        # Fill with 500 kg
+        stored, overflow = tanks.fill(500.0)
+
+        assert stored == 500.0  # Should fit in 4 tanks of 200 kg capacity
+        assert overflow == 0.0
+        assert tanks.get_total_mass() == 500.0
+
+    def test_tank_discharge_operation(self, initialized_tank_array):
+        """Test discharging tanks."""
+        tanks = initialized_tank_array
+
+        # First fill the tanks
+        tanks.fill(500.0)
+        assert tanks.get_total_mass() == 500.0
+
+        # Then discharge 300 kg
+        discharged = tanks.discharge(300.0)
+
+        assert discharged == 300.0
+        assert tanks.get_total_mass() == 200.0
+
+    def test_tank_overflow_handling(self, initialized_tank_array):
+        """Test overflow when filling exceeds capacity."""
+        tanks = initialized_tank_array
+
+        # Try to fill more than capacity (4 tanks * 200 kg = 800 kg total)
+        stored, overflow = tanks.fill(1000.0)
+
+        assert stored == 800.0  # All tanks filled
+        assert overflow == 200.0  # 200 kg overflow
+
+
+class TestFillingCompressor:
+    """Test suite for FillingCompressor component."""
+    
+    @pytest.fixture
+    def filling_compressor(self):
+        """Create FillingCompressor instance."""
+        from h2_plant.components.compression.filling_compressor import FillingCompressor
+        return FillingCompressor(
+            max_flow_kg_h=100.0,
+            inlet_pressure_bar=30.0,
+            outlet_pressure_bar=350.0,
+            num_stages=3
+        )
+
+    @pytest.fixture
+    def initialized_filling_compressor(self, filling_compressor):
+        """Create and initialize FillingCompressor."""
+        registry = ComponentRegistry()
+        filling_compressor.initialize(dt=1.0, registry=registry)
+        return filling_compressor
+
+    def test_compressor_initialization(self, filling_compressor):
+        """Test compressor initializes correctly."""
+        registry = ComponentRegistry()
+        filling_compressor.initialize(dt=1.0, registry=registry)
+
+        assert filling_compressor._initialized
+        assert filling_compressor.mode == 0  # IDLE mode
+
+    def test_compressor_operation(self, initialized_filling_compressor):
+        """Test compressor operation."""
+        comp = initialized_filling_compressor
+
+        # Set transfer mass
+        comp.transfer_mass_kg = 50.0
+        comp.step(0.0)
+
+        # Verify compression occurred
+        assert comp.mode != 0  # Should not be idle
+        assert comp.actual_mass_transferred_kg > 0
+        assert comp.energy_consumed_kwh > 0
+
+
+# Coverage target: 95% for all component modules

@@ -1,0 +1,75 @@
+# Visualization Configuration Template
+# Controls which graphs are enabled/disabled for generation
+
+visualization:
+  # Enable/disable entire categories
+  categories:
+    production: true
+    performance: true
+    economics: true
+    soec_ops: true
+    storage: false  # Disabled by default (not yet implemented)
+  
+  # Override individual graphs (takes precedence over category settings)
+  graphs:
+    # Production graphs
+    pem_h2_production_over_time: true
+    soec_h2_production_over_time: true
+    total_h2_production_stacked: true
+    cumulative_h2_production: true
+    oxygen_production_stacked: true
+    water_consumption_stacked: true
+    
+    # Performance graphs
+    pem_cell_voltage_over_time: true
+    pem_efficiency_over_time: true
+    dispatch_curve_scatter: true
+    
+    # Economics graphs
+    energy_price_over_time: true
+    dispatch_strategy_stacked: true
+    dispatch_detailed_overlay: true
+    power_consumption_breakdown_pie: true
+    price_histogram: true
+    arbitrage_scatter: true
+    
+    # SOEC operations
+    soec_active_modules_over_time: true
+    soec_modules_temporal: true
+    soec_modules_stats: true
+    
+    # Storage
+    tank_storage_timeline: true
+    compressor_power_stacked: true
+  
+  # Export settings
+  export:
+    enabled: true
+    output_directory: "simulation_output/{simulation_name}/graphs"
+    formats:
+      - html  # Interactive Plotly graphs
+      # - png  # Requires kaleido: pip install kaleido
+      # - pdf  # Requires kaleido
+    
+    # Dashboard generation
+    dashboard:
+      enabled: true
+      filename: "dashboard.html"
+      title: "H2 Plant Simulation Dashboard"
+      include_graphs:  # Specify order (empty = all enabled)
+        - total_h2_production_stacked
+        - dispatch_strategy_stacked
+        - pem_cell_voltage_over_time
+        - soec_active_modules_over_time
+        - energy_price_over_time
+        - cumulative_h2_production
+        - power_consumption_breakdown_pie
+  
+  # Performance settings
+  performance:
+    # Downsample data for large simulations (>10k timesteps)
+    downsample_threshold: 10000
+    downsample_factor: 10  # Keep every Nth point
+    
+    # Use WebGL for large datasets
+    use_webgl: true

@@ -1,0 +1,141 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Hydrogen Production Plant Configuration",
+  "description": "Configuration schema for dual-path H2 production plant",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Plant name"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "production": {
+      "type": "object",
+      "properties": {
+        "electrolyzer": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "max_power_mw": {"type": "number", "minimum": 0},
+            "base_efficiency": {"type": "number", "minimum": 0, "maximum": 1},
+            "min_load_factor": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        },
+        "atr": {
+          "type": "object",
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "max_ng_flow_kg_h": {"type": "number", "minimum": 0},
+            "efficiency": {"type": "number", "minimum": 0, "maximum": 1}
+          }
+        }
+      },
+      "minProperties": 1
+    },
+    "storage": {
+      "type": "object",
+      "properties": {
+        "lp_tanks": {
+          "$ref": "#/definitions/tank_array"
+        },
+        "hp_tanks": {
+          "$ref": "#/definitions/tank_array"
+        },
+        "source_isolated": {"type": "boolean"},
+        "isolated_config": {
+            "type": "object",
+            "properties": {
+                "electrolyzer_tanks": {"$ref": "#/definitions/tank_array"},
+                "atr_tanks": {"$ref": "#/definitions/tank_array"},
+                "oxygen_buffer_capacity_kg": {"type": "number", "minimum": 0}
+            },
+            "required": ["electrolyzer_tanks"]
+        }
+      },
+      "required": ["lp_tanks", "hp_tanks"]
+    },
+    "compression": {
+      "type": "object",
+      "properties": {
+        "filling_compressor": {
+          "$ref": "#/definitions/compressor"
+        },
+        "outgoing_compressor": {
+          "$ref": "#/definitions/compressor"
+        }
+      }
+    },
+    "demand": {
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "enum": ["constant", "day_night", "weekly", "custom"]
+        },
+        "base_demand_kg_h": {"type": "number", "minimum": 0},
+        "day_demand_kg_h": {"type": "number", "minimum": 0},
+        "night_demand_kg_h": {"type": "number", "minimum": 0},
+        "day_start_hour": {"type": "integer", "minimum": 0, "maximum": 23},
+        "night_start_hour": {"type": "integer", "minimum": 0, "maximum": 23},
+        "custom_profile_file": {"type": "string"}
+      }
+    },
+    "energy_price": {
+      "type": "object",
+      "properties": {
+        "source": {"type": "string", "enum": ["constant", "file", "api"]},
+        "constant_price_per_mwh": {"type": "number", "minimum": 0},
+        "price_file": {"type": "string"}
+      }
+    },
+    "pathway": {
+      "type": "object",
+      "properties": {
+        "allocation_strategy": {"type": "string", "enum": ["COST_OPTIMAL", "PRIORITY_GRID", "PRIORITY_ATR", "BALANCED", "EMISSIONS_OPTIMAL"]},
+                "priority_source": {
+                  "oneOf": [
+                    {"type": "string", "enum": ["electrolyzer", "atr"]},
+                    {"type": "null"}
+                  ]
+                }
+      }
+    },
+    "simulation": {
+      "type": "object",
+      "properties": {
+        "timestep_hours": {"type": "number", "minimum": 0},
+        "duration_hours": {"type": "integer", "minimum": 1},
+        "start_hour": {"type": "integer", "minimum": 0},
+        "checkpoint_interval_hours": {"type": "integer", "minimum": 0}
+      }
+    }
+  },
+  "required": ["production", "storage", "compression", "demand", "energy_price", "pathway", "simulation"],
+  
+  "definitions": {
+    "tank_array": {
+      "type": "object",
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "capacity_kg": {"type": "number", "minimum": 0},
+        "pressure_bar": {"type": "number", "minimum": 0},
+        "temperature_k": {"type": "number", "minimum": 0}
+      },
+      "required": ["count", "capacity_kg", "pressure_bar"]
+    },
+    "compressor": {
+      "type": "object",
+      "properties": {
+        "max_flow_kg_h": {"type": "number", "minimum": 0},
+        "inlet_pressure_bar": {"type": "number", "minimum": 0},
+        "outlet_pressure_bar": {"type": "number", "minimum": 0},
+        "num_stages": {"type": "integer", "minimum": 1},
+        "efficiency": {"type": "number", "minimum": 0, "maximum": 1}
+      },
+      "required": ["max_flow_kg_h", "inlet_pressure_bar", "outlet_pressure_bar"]
+    }
+  }
+}

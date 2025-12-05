@@ -1,0 +1,20 @@
+# Virtual Environments
+Hidrogenio/
+venv/
+env/
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.backups_trash/
+.configs_trash/
+
+# Outputs
+simulation_output/
+output/
+test_reports/
+vendor/
+*.png
+*.zip

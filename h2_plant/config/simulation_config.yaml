@@ -1,0 +1,60 @@
+name: "Hybrid Hydrogen Plant - 30 Day Simulation"
+version: "1.0"
+description: "Configuration for 30-day simulation with PEM and SOEC"
+
+simulation:
+  timestep_hours: 0.016666666666666666  # 1 minute
+  duration_hours: 720  # 30 days
+  start_hour: 0
+  checkpoint_interval_hours: 168
+
+pem_system:
+  enabled: true
+  max_power_mw: 5.0
+  base_efficiency: 0.65
+
+soec_cluster:
+  enabled: true
+  num_modules: 6
+  max_power_nominal_mw: 2.4
+  efficient_threshold: 0.80
+  rotation_enabled: false
+
+production:
+  # Keep empty production to satisfy schema if needed, or just omit if optional
+  electrolyzer:
+     enabled: false
+
+energy_price:
+  source: "file"
+  price_file: "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/EnergyPriceAverage2023-24.csv"
+  wind_data_file: "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/producao_horaria_2_turbinas.csv"
+  data_resolution_minutes: 15
+
+pathway:
+  allocation_strategy: "COST_OPTIMAL"
+  arbitrage_threshold_eur_mwh: 338.29
+
+storage:
+  lp_tanks:
+    count: 4
+    capacity_kg: 50.0
+    pressure_bar: 30.0
+  hp_tanks:
+    count: 8
+    capacity_kg: 200.0
+    pressure_bar: 350.0
+
+compression:
+  filling_compressor:
+    max_flow_kg_h: 100.0
+    inlet_pressure_bar: 30.0
+    outlet_pressure_bar: 350.0
+  outgoing_compressor:
+    max_flow_kg_h: 100.0
+    inlet_pressure_bar: 350.0
+    outlet_pressure_bar: 900.0
+
+demand:
+  pattern: "constant"
+  base_demand_kg_h: 50.0

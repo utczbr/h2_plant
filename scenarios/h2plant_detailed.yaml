@@ -1,0 +1,497 @@
+name: "Detailed H2 Production Plant"
+version: "3.0"
+description: ""
+
+simulation:
+  timestep_hours: 0.0167  # 1 minute
+  duration_hours: 8  # 8 hours for testing
+  start_hour: 0
+  checkpoint_interval_hours: 8
+
+# Component Arrays
+thermal_components:
+  chillers: 11
+  heat_exchangers: 5
+  steam_generators: 2
+
+separation_components:
+  separation_tanks: 4
+  psa_units: 4
+
+fluid_components:
+  pumps: 3
+  compressors: 7
+
+power_components:
+  rectifiers: 2
+
+# Legacy components (still required for some logic)
+#production:
+#  electrolyzer:
+#    enabled: true
+#    max_power_mw: 5.0
+#  atr:
+#    enabled: false
+#    max_ng_flow_kg_h: 1500.0
+
+pem_system:
+  enabled: true
+  max_power_mw: 5.0
+  base_efficiency: 0.65
+  kwh_per_kg: 56.16
+
+SOEC:
+  enabled: true
+  num_modules: 6
+  max_power_nominal_mw: 2.4
+  optimal_limit: 0.80
+  rotation_enabled: false
+  use_native: true
+  degradation_year: 0.0 # Years of operation for degradation calculation
+  real_off_modules: []
+
+atr_system:
+  reactors:
+    - component_id: "ATR-1"
+      max_flow_kg_h: 1500.0
+  wgs_reactors:
+    - component_id: "WGS-HT"
+      conversion_rate: 0.7
+    - component_id: "WGS-LT"
+      conversion_rate: 0.9
+
+storage:
+  lp_tanks:
+    count: 4
+    capacity_kg: 50.0
+    pressure_bar: 30.0
+  hp_tanks:
+    count: 8
+    capacity_kg: 200.0
+    pressure_bar: 350.0
+
+compression:
+  filling_compressor:
+    max_flow_kg_h: 100.0
+    inlet_pressure_bar: 30.0
+    outlet_pressure_bar: 350.0
+  outgoing_compressor:
+    max_flow_kg_h: 100.0
+    inlet_pressure_bar: 350.0
+    outlet_pressure_bar: 900.0
+
+demand:
+  pattern: "day_night"
+  base_demand_kg_h: 20.0
+  day_demand_kg_h: 80.0
+  night_demand_kg_h: 20.0
+
+energy_price:
+  source: "file"
+  price_file: "h2_plant/data/EnergyPriceAverage2023-24.csv"
+  data_resolution_minutes: 60
+  constant_price_per_mwh: 50.0
+
+pathway:
+  allocation_strategy: "COST_OPTIMAL"
+  priority_source: "electrolyzer"
+
+external_inputs:
+  biogas_source:
+    enabled: false
+    max_flow_rate_kg_h: 1000.0
+    methane_content: 0.60
+    pressure_bar: 5.0
+  oxygen_source:
+    enabled: true
+    flow_rate_kg_h: 50.0
+  heat_source:
+    enabled: true
+    thermal_power_kw: 500.0
+
+# Indexed Topology
+indexed_topology:
+  # --- Water Treatment to PEM (P-1) ---
+  # Water Tank -> Pump P-1
+  - source_name: "ultrapure_water_storage"
+    source_index: 0  # Only 1 instance
+    source_port: "water_out"
+    target_name: "pump"
+    target_index: 0  # P-1
+    target_port: "water_in"
+    resource_type: "water"
+
+  # Pump P-1 -> Pump P-2
+  - source_name: "pump"
+    source_index: 0  # P-1
+    source_port: "water_out"
+    target_name: "pump"
+    target_index: 1  # P-2
+    target_port: "water_in"
+    resource_type: "water"
+
+  # --- PEM Loop (P-2, HX-1, Stacks) ---
+  # Pump P-2 -> Chiller HX-1
+  - source_name: "pump"
+    source_index: 1  # P-2
+    source_port: "water_out"
+    target_name: "chiller"
+    target_index: 0  # HX-1
+    target_port: "fluid_in"
+    resource_type: "water"
+
+  # Chiller HX-1 -> PEM Stacks (using detailed component)
+  - source_name: "chiller"
+    source_index: 0  # HX-1
+    source_port: "fluid_out"
+    target_name: "PEM"
+    target_index: 0
+    target_port: "water_in"
+    resource_type: "water"
+
+  # Rectifier RT-1 -> PEM Stacks
+  - source_name: "rectifier"
+    source_index: 0  # RT-1
+    source_port: "dc_out"
+    target_name: "PEM"
+    target_index: 0
+    target_port: "power_in"
+    resource_type: "electricity"
+
+  # --- PEM Outputs to Separation ---
+  # PEM Stacks -> Chiller HX-2 (Oxygen side)
+  - source_name: "PEM"
+    source_index: 0
+    source_port: "oxygen_out"
+    target_name: "chiller"
+    target_index: 1  # HX-2
+    target_port: "fluid_in"
+    resource_type: "oxygen"
+
+  # PEM Stacks -> Chiller HX-3 (Hydrogen side)
+  - source_name: "PEM"
+    source_index: 0
+    source_port: "h2_out"
+    target_name: "chiller"
+    target_index: 2  # HX-3
+    target_port: "fluid_in"
+    resource_type: "hydrogen"
+
+  # Chiller HX-2 -> Separation Tank ST-1 (Oxygen)
+  - source_name: "chiller"
+    source_index: 1  # HX-2
+    source_port: "fluid_out"
+    target_name: "separation_tank"
+    target_index: 0  # ST-1
+    target_port: "mixture_in"
+    resource_type: "oxygen"
+
+  # Chiller HX-3 -> Separation Tank ST-2 (Hydrogen)
+  - source_name: "chiller"
+    source_index: 2  # HX-3
+    source_port: "fluid_out"
+    target_name: "separation_tank"
+    target_index: 1  # ST-2
+    target_port: "mixture_in"
+    resource_type: "hydrogen"
+
+  # --- Separation to PSA ---
+  # ST-1 -> PSA D-1 (Oxygen)
+  - source_name: "separation_tank"
+    source_index: 0  # ST-1
+    source_port: "gas_out"
+    target_name: "psa"
+    target_index: 0  # D-1
+    target_port: "gas_in"
+    resource_type: "oxygen"
+
+  # ST-2 -> PSA D-2 (Hydrogen)
+  - source_name: "separation_tank"
+    source_index: 1  # ST-2
+    source_port: "gas_out"
+    target_name: "psa"
+    target_index: 1  # D-2
+    target_port: "gas_in"
+    resource_type: "hydrogen"
+
+  # --- PSA to Compression/Storage ---
+  # PSA D-2 -> Compressor C-6
+  - source_name: "psa"
+    source_index: 1  # D-2
+    source_port: "purified_gas_out"
+    target_name: "compressor"
+    target_index: 5  # C-6
+    target_port: "gas_in"
+    resource_type: "hydrogen"
+
+  # Compressor C-6 -> Chiller HX-11
+  - source_name: "compressor"
+    source_index: 5  # C-6
+    source_port: "gas_out"
+    target_name: "chiller"
+    target_index: 10 # HX-11
+    target_port: "fluid_in"
+    resource_type: "hydrogen"
+
+  # Chiller HX-11 -> LP Storage
+  - source_name: "chiller"
+    source_index: 10 # HX-11
+    source_port: "fluid_out"
+    target_name: "lp_tanks"
+    target_index: 0
+    target_port: "h2_in"
+    resource_type: "hydrogen"
+
+  # --- SOEC Electrolyzer Path (Process Flow rows 47-69) ---
+  # Water Tank -> Pump P-3
+  - source_name: "ultrapure_water_storage"
+    source_index: 0
+    source_port: "water_out"
+    target_name: "pump"
+    target_index: 2  # P-3
+    target_port: "water_in"
+    resource_type: "water"
+
+  # Pump P-3 -> Steam Generator HX-4
+  - source_name: "pump"
+    source_index: 2  # P-3
+    source_port: "water_out"
+    target_name: "steam_generator"
+    target_index: 0  # HX-4
+    target_port: "water_in"
+    resource_type: "water"
+
+  # Steam Generator HX-4 -> SOEC Stacks
+  - source_name: "steam_generator"
+    source_index: 0  # HX-4
+    source_port: "steam_out"
+    target_name: "SOEC"
+    target_index: 0
+    target_port: "steam_in"
+    resource_type: "steam"
+
+  # Rectifier RT-2 -> SOEC Stacks
+  - source_name: "rectifier"
+    source_index: 1  # RT-2
+    source_port: "dc_out"
+    target_name: "SOEC"
+    target_index: 0
+    target_port: "power_in"
+    resource_type: "electricity"
+
+  # SOEC Stacks -> Chiller HX-5 (Oxygen)
+  - source_name: "SOEC"
+    source_index: 0
+    source_port: "oxygen_out"
+    target_name: "chiller"
+    target_index: 4  # HX-5
+    target_port: "fluid_in"
+    resource_type: "oxygen"
+
+  # SOEC Stacks -> Chiller HX-6 (Syngas)
+  - source_name: "SOEC"
+    source_index: 0
+    source_port: "syngas_out"
+    target_name: "chiller"
+    target_index: 5  # HX-6
+    target_port: "fluid_in"
+    resource_type: "syngas"
+
+  # Chiller HX-6 -> Separation Tank SP-3
+  - source_name: "chiller"
+    source_index: 5  # HX-6
+    source_port: "fluid_out"
+    target_name: "separation_tank"
+    target_index: 2  # SP-3
+    target_port: "mixture_in"
+    resource_type: "syngas"
+
+  # Separation Tank SP-3 -> Compressor C-2
+  - source_name: "separation_tank"
+    source_index: 2  # SP-3
+    source_port: "gas_out"
+    target_name: "compressor"
+    target_index: 1  # C-2
+    target_port: "gas_in"
+    resource_type: "syngas"
+
+  # Compressor C-2 -> PSA D-3
+  - source_name: "compressor"
+    source_index: 1  # C-2
+    source_port: "gas_out"
+    target_name: "psa"
+    target_index: 2  # D-3
+    target_port: "gas_in"
+    resource_type: "syngas"
+
+  # PSA D-3 -> H2 Distribution Line
+  - source_name: "psa"
+    source_index: 2  # D-3 (SOEC hydrogen)
+    source_port: "purified_gas_out"
+    target_name: "h2_distribution"
+    target_index: 0
+    target_port: "h2_in"
+    resource_type: "hydrogen"
+
+  # --- ATR Path (DISABLED) ---
+  # # Biogas Source -> Compressor C-3
+  # - source_name: "biogas_source"
+  #   source_index: 0
+  #   source_port: "biogas_out"
+  #   target_name: "compressor"
+  #   target_index: 2  # C-3
+  #   target_port: "gas_in"
+  #   resource_type: "biogas"
+  #
+  # # Compressor C-3 -> ATR Reactor
+  # - source_name: "compressor"
+  #   source_index: 2  # C-3
+  #   source_port: "gas_out"
+  #   target_name: "atr_reactor"
+  #   target_index: 0
+  #   target_port: "biogas_in"
+  #   resource_type: "biogas"
+  #
+  # # Steam Generator HX-7 -> ATR Reactor
+  # - source_name: "steam_generator"
+  #   source_index: 1  # HX-7
+  #   source_port: "steam_out"
+  #   target_name: "atr_reactor"
+  #   target_index: 0
+  #   target_port: "steam_in"
+  #   resource_type: "steam"
+  #
+  # # ATR Reactor -> Heat Exchanger HX-8
+  # - source_name: "atr_reactor"
+  #   source_index: 0
+  #   source_port: "syngas_out"
+  #   target_name: "heat_exchanger"
+  #   target_index: 0  # HX-8
+  #   target_port: "hot_gas_in"
+  #   resource_type: "syngas"
+  #
+  # # HX-8 -> WGS High Temp
+  # - source_name: "heat_exchanger"
+  #   source_index: 0  # HX-8
+  #   source_port: "cooled_gas_out"
+  #   target_name: "wgs_reactor"
+  #   target_index: 0  # WGS-HT
+  #   target_port: "syngas_in"
+  #   resource_type: "syngas"
+  #
+  # # WGS-HT -> Heat Exchanger HX-9
+  # - source_name: "wgs_reactor"
+  #   source_index: 0  # WGS-HT
+  #   source_port: "shifted_gas_out"
+  #   target_name: "heat_exchanger"
+  #   target_index: 1  # HX-9
+  #   target_port: "hot_gas_in"
+  #   resource_type: "syngas"
+  #
+  # # HX-9 -> WGS Low Temp
+  # - source_name: "heat_exchanger"
+  #   source_index: 1  # HX-9
+  #   source_port: "cooled_gas_out"
+  #   target_name: "wgs_reactor"
+  #   target_index: 1  # WGS-LT
+  #   target_port: "syngas_in"
+  #   resource_type: "syngas"
+  #
+  # # WGS-LT -> Heat Exchanger HX-10
+  # - source_name: "wgs_reactor"
+  #   source_index: 1  # WGS-LT
+  #   source_port: "shifted_gas_out"
+  #   target_name: "heat_exchanger"
+  #   target_index: 2  # HX-10
+  #   target_port: "hot_gas_in"
+  #   resource_type: "syngas"
+  #
+  # # HX-10 -> Separation Tank ST-4
+  # - source_name: "heat_exchanger"
+  #   source_index: 2  # HX-10
+  #   source_port: "cooled_gas_out"
+  #   target_name: "separation_tank"
+  #   target_index: 3  # ST-4
+  #   target_port: "mixture_in"
+  #   resource_type: "syngas"
+  #
+  # # ST-4 -> Compressor C-4
+  # - source_name: "separation_tank"
+  #   source_index: 3  # ST-4
+  #   source_port: "gas_out"
+  #   target_name: "compressor"
+  #   target_index: 3  # C-4
+  #   target_port: "gas_in"
+  #   resource_type: "hydrogen_rich_gas"
+  #
+  # # Compressor C-4 -> PSA D-4
+  # - source_name: "compressor"
+  #   source_index: 3  # C-4
+  #   source_port: "gas_out"
+  #   target_name: "psa"
+  #   target_index: 3  # D-4
+  #   target_port: "gas_in"
+  #   resource_type: "hydrogen_rich_gas"
+  #
+  # # PSA D-4 -> H2 Distribution Line
+  # - source_name: "psa"
+  #   source_index: 3  # D-4 (ATR hydrogen)
+  #   source_port: "purified_gas_out"
+  #   target_name: "h2_distribution"
+  #   target_index: 0
+  #   target_port: "h2_in"
+  #   resource_type: "hydrogen"
+  #
+  # # PSA D-4 -> CO2 Capture (tail gas) - DISABLED
+  # - source_name: "psa"
+  #   source_index: 3  # D-4
+  #   source_port: "tail_gas_out"
+  #   target_name: "co2_capture"
+  #   target_index: 0
+  #   target_port: "tail_gas_in"
+  #   resource_type: "co2_tail_gas"
+
+  # --- Compression and Storage Chain (Process Flow rows 95-104) ---
+  # H2 Distribution -> Compressor C-6
+  - source_name: "h2_distribution"
+    source_index: 0
+    source_port: "h2_out"
+    target_name: "compressor"
+    target_index: 5  # C-6
+    target_port: "gas_in"
+    resource_type: "hydrogen"
+
+  # NOTE: Connection to Chiller HX-11 -> LP Storage already defined above (lines 194-201)
+
+  # LP Storage -> Compressor C-7
+  - source_name: "lp_tanks"
+    source_index: 0
+    source_port: "h2_out"
+    target_name: "compressor"
+    target_index: 6  # C-7
+    target_port: "gas_in"
+    resource_type: "hydrogen"
+
+  # Compressor C-7 -> HP Storage
+  - source_name: "compressor"
+    source_index: 6  # C-7
+    source_port: "gas_out"
+    target_name: "hp_tanks"
+    target_index: 0
+    target_port: "h2_in"
+    resource_type: "hydrogen"
+
+  # HP Storage -> Final Delivery
+  - source_name: "hp_tanks"
+    source_index: 0
+    source_port: "h2_out"
+    target_name: "demand_scheduler"
+    target_index: 0
+    target_port: "h2_in"
+    resource_type: "hydrogen"
+
+
+water_treatment:
+  enabled: true
+  ultrapure_storage:
+    capacity_l: 5000.0
