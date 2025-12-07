@@ -2,100 +2,142 @@
 
 A comprehensive view of the Dual-Path Hydrogen Production System's 6-layer architecture.
 
-## System Layers Overview
+## High-Level Architecture
 
 ```mermaid
+%%{init: {
+  "theme": "neutral",
+  "flowchart": { "nodeSpacing": 50, "rankSpacing": 60, "curve": "basis" }
+}}%%
 graph TB
-    subgraph L6["Layer 6: User Interface"]
-        GUI["PlantEditorWindow<br/>(PySide6)"]
-        NodeEditor["NodeEditor<br/>(NodeGraphQt)"]
-        SimReport["SimulationReportWidget"]
+    classDef ui fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef engine fill:#ede7f6,stroke:#5e35b1,stroke-width:2px
+    classDef orch fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef comp fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    classDef core fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef ext fill:#eceff1,stroke:#546e7a,stroke-width:2px
+
+    UI["User Interface\n(GUI + Reports)"]:::ui
+    Engine["Simulation Engine\n(Execution + Monitoring)"]:::engine
+    Orch["Orchestration\n(Dispatch + Flow)"]:::orch
+    Components["Components\n(SOEC, PEM, Tank, ...)"]:::comp
+    Core["Core Foundation\n(ABC + Registry)"]:::core
+    External["External Data\n(YAML, Prices, Wind)"]:::ext
+
+    UI -->|configures| Orch
+    External -->|inputs| Orch
+    Orch -->|coordinates| Engine
+    Engine -->|steps| Components
+    Components -->|inherits| Core
+    Engine -.->|reports| UI
+```
+
+---
+
+## Detailed System Layers
+
+```mermaid
+%%{init: {
+  "theme": "neutral",
+  "flowchart": { "nodeSpacing": 40, "rankSpacing": 70, "curve": "linear" }
+}}%%
+graph TB
+    classDef ui fill:#e3f2fd,stroke:#1565c0,stroke-width:1px
+    classDef engine fill:#ede7f6,stroke:#5e35b1,stroke-width:1px
+    classDef orch fill:#e8f5e9,stroke:#2e7d32,stroke-width:1px
+    classDef comp fill:#fff3e0,stroke:#ef6c00,stroke-width:1px
+    classDef perf fill:#fff8e1,stroke:#f9a825,stroke-width:1px
+    classDef core fill:#fce4ec,stroke:#c2185b,stroke-width:1px
+    classDef ext fill:#eceff1,stroke:#546e7a,stroke-width:1px
+
+    %% Layer 6: UI
+    subgraph L6["Layer 6 · User Interface"]
+        GUI["PlantEditorWindow"]:::ui
+        NodeEditor["NodeEditor"]:::ui
+        SimReport["SimReportWidget"]:::ui
     end
 
-    subgraph L5["Layer 5: Simulation Engine"]
-        Engine["SimulationEngine"]
-        EventSched["EventScheduler"]
-        FlowNet["FlowNetwork"]
-        StateMan["StateManager"]
-        Monitor["MonitoringSystem"]
+    %% Layer 5: Simulation Engine
+    subgraph L5["Layer 5 · Simulation Engine"]
+        Engine["SimulationEngine"]:::engine
+        FlowNet["FlowNetwork"]:::engine
+        Monitor["MonitoringSystem"]:::engine
+        StateMan["StateManager"]:::engine
     end
 
-    subgraph L4["Layer 4: Pathway Orchestration"]
-        Orch["Orchestrator"]
-        Dispatch["DispatchStrategy"]
-        GraphAdapter["GraphToConfigAdapter"]
+    %% Layer 4: Orchestration
+    subgraph L4["Layer 4 · Orchestration"]
+        Orch["Orchestrator"]:::orch
+        Dispatch["DispatchStrategy"]:::orch
+        Adapter["GraphToConfigAdapter"]:::orch
     end
 
-    subgraph L3["Layer 3: Component Implementations"]
-        subgraph Production
-            SOEC["SOECOperator"]
-            PEM["DetailedPEMElectrolyzer"]
-        end
-        subgraph Storage
-            Tank["Tank"]
-            Battery["BatteryStorage"]
-        end
-        subgraph BoP["Balance of Plant"]
-            Comp["Compressor"]
-            Pump["Pump"]
-            Mixer["MultiComponentMixer"]
-        end
-        subgraph Thermal
-            Chiller["Chiller"]
-            HX["HeatExchanger"]
-        end
+    %% Layer 3: Components
+    subgraph L3["Layer 3 · Components"]
+        SOEC["SOEC"]:::comp
+        PEM["PEM"]:::comp
+        Tank["Tank"]:::comp
+        Comp["Compressor"]:::comp
+        Pump["Pump"]:::comp
+        Mixer["Mixer"]:::comp
     end
 
-    subgraph L2["Layer 2: Performance Optimization"]
-        LUT["LUTManager<br/>(Thermodynamics)"]
-        NumbaOps["numba_ops<br/>(JIT Flash Calcs)"]
+    %% Layer 2: Performance
+    subgraph L2["Layer 2 · Performance"]
+        LUT["LUTManager"]:::perf
+        Numba["numba_ops"]:::perf
     end
 
-    subgraph L1["Layer 1: Core Foundation"]
-        CompABC["Component ABC"]
-        Registry["ComponentRegistry"]
-        Stream["Stream/MassStream"]
-        Enums["IntEnums<br/>(TankState, FlowType)"]
+    %% Layer 1: Core
+    subgraph L1["Layer 1 · Core Foundation"]
+        CompABC["Component ABC"]:::core
+        Registry["ComponentRegistry"]:::core
+        Stream["Stream"]:::core
     end
 
-    subgraph External["External Data"]
-        YAML["YAML Configs"]
-        PriceData["Energy Prices"]
-        WindData["Wind Data"]
+    %% External
+    subgraph Ext["External Data"]
+        YAML["YAML Configs"]:::ext
+        Prices["Energy Prices"]:::ext
+        Wind["Wind Data"]:::ext
     end
 
-    %% Connections
+    %% Top-to-bottom flow
     GUI --> NodeEditor
-    GUI --> SimReport
-    NodeEditor --> GraphAdapter
-    SimReport --> Monitor
+    NodeEditor -->|builds| Adapter
+    SimReport -->|shows| Monitor
 
-    Engine --> Registry
-    Engine --> EventSched
-    Engine --> FlowNet
-    Engine --> StateMan
-    Engine --> Monitor
-
-    Orch --> Registry
+    Adapter -->|configures| Orch
     Orch --> Dispatch
-    GraphAdapter --> Orch
+    Orch -->|uses| Registry
+    Ext -->|inputs| Orch
 
+    Engine --> FlowNet
+    Engine --> Monitor
+    Engine --> StateMan
+    Engine -->|steps| Registry
+
+    Registry -->|manages| CompABC
     SOEC --> CompABC
     PEM --> CompABC
     Tank --> CompABC
-    Comp --> CompABC
-    Pump --> CompABC
-    Mixer --> CompABC
 
-    SOEC --> LUT
-    PEM --> LUT
-    Mixer --> LUT
-
-    Registry --> CompABC
-    FlowNet --> Stream
-
-    External --> Orch
+    SOEC -->|uses| LUT
+    PEM -->|uses| LUT
+    FlowNet -->|uses| Stream
 ```
+
+### Technology Stack
+
+| Layer | Technologies |
+|-------|--------------|
+| UI | PySide6, NodeGraphQt, Matplotlib |
+| Engine | NumPy, async workers |
+| Orchestration | YAML loader, Pydantic |
+| Components | CoolProp, SciPy |
+| Performance | Numba JIT, LUT caching |
+| Core | Python ABC, dataclasses |
+
 
 ## Component Lifecycle Flow
 
