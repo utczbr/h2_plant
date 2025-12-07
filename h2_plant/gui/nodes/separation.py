@@ -61,3 +61,36 @@ class SeparationTankNode(ConfigurableNode):
         self.add_color_property('node_color', default=(150, 150, 200), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
         self.add_spacer('collapse_spacer', height=60)
+
+
+class CoalescerNode(ConfigurableNode):
+    """Coalescer node for aerosol/liquid removal from gas streams."""
+    __identifier__ = 'h2_plant.separation.coalescer'
+    NODE_NAME = 'Coalescer'
+
+    def __init__(self):
+        super(CoalescerNode, self).__init__()
+        self.enable_collapse()
+
+    def _init_ports(self):
+        self.add_input('inlet', flow_type='gas')
+        self.add_output('outlet', flow_type='gas')
+        self.add_output('drain', flow_type='water')
+
+    def _init_properties(self):
+        self.add_text_property('component_id', default='C-1', tab='Properties')
+
+        # Coalescer Tab
+        self.add_float_property(
+            'd_shell_m', default=0.32, min_val=0.05, max_val=2.0, unit='m', tab='Coalescer'
+        )
+        self.add_float_property(
+            'l_elem_m', default=1.0, min_val=0.1, max_val=5.0, unit='m', tab='Coalescer'
+        )
+        self.add_enum_property(
+            'gas_type', options=['H2', 'O2'], default_index=0, tab='Coalescer'
+        )
+
+        self.add_color_property('node_color', default=(150, 200, 150), tab='Custom')
+        self.add_text_property('custom_label', default='', tab='Custom')
+        self.add_spacer('collapse_spacer', height=60)

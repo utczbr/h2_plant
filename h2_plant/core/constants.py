@@ -126,3 +126,26 @@ class SimulationDefaults:
     MASS_TOLERANCE_KG: Final[float] = 1e-6
     PRESSURE_TOLERANCE_PA: Final[float] = 1e3
     TEMPERATURE_TOLERANCE_K: Final[float] = 0.01
+
+class CoalescerConstants:
+    """
+    Coalescer cartridge filter performance constants.
+    Source: CoalescerModel.py / coalescedor-1.pdf
+    """
+    # Geometry defaults
+    D_SHELL_DEFAULT_M: Final[float] = 0.32  # Vessel diameter (32 cm)
+    D_ELEM_DEFAULT_M: Final[float] = 0.20   # Element diameter (20 cm)
+    L_ELEM_DEFAULT_M: Final[float] = 1.00   # Element length (100 cm)
+    N_ELEM_DEFAULT: Final[int] = 1          # Elements per vessel
+
+    # Physics / Performance (CoalescerModel.py lines 41-45)
+    K_PERDA: Final[float] = 0.5e6           # Loss factor (empirical)
+    ETA_LIQUID_REMOVAL: Final[float] = 0.9999  # 99.99% efficiency
+
+    # Sutherland viscosity reference (CoalescerModel.py lines 41-42)
+    MU_REF_H2_PA_S: Final[float] = 9.0e-6   # H2 viscosity at T_ref
+    MU_REF_O2_PA_S: Final[float] = 2.1e-5   # O2 viscosity at T_ref (approx)
+    T_REF_K: Final[float] = 303.15          # 30°C reference temperature
+
+    # Worst case sizing (for reference)
+    C_LIQ_IN_WORST_CASE_MG_M3: Final[float] = 100.0

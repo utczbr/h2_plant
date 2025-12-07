@@ -30,8 +30,8 @@ from h2_plant.gui.core.graph_adapter import GraphToConfigAdapter, GraphNode, Gra
 # Node imports
 from h2_plant.gui.nodes.electrolysis import PEMStackNode, SOECStackNode, RectifierNode
 from h2_plant.gui.nodes.reforming import ATRReactorNode, WGSReactorNode, SteamGeneratorNode
-from h2_plant.gui.nodes.separation import PSAUnitNode, SeparationTankNode
-from h2_plant.gui.nodes.thermal import HeatExchangerNode
+from h2_plant.gui.nodes.separation import PSAUnitNode, SeparationTankNode, CoalescerNode
+from h2_plant.gui.nodes.thermal import HeatExchangerNode, ChillerNode
 from h2_plant.gui.nodes.fluid import ProcessCompressorNode, RecirculationPumpNode
 from h2_plant.gui.nodes.pumping import PumpNode 
 from h2_plant.gui.nodes.logistics import ConsumerNode
@@ -110,6 +110,7 @@ GRAPH_HIERARCHY = {
     "Resource Consumption": ["water_consumption", "cumulative_energy"],
     "Efficiency": ["efficiency_curve"],
     "Physics & Degradation": ["polarization", "degradation", "compressor_ts", "module_power"],
+    "Thermal & Separation": ["chiller_cooling", "coalescer_separation"],
 }
 
 
@@ -199,44 +200,53 @@ class FigureCache:
 
 
 class GraphWorkerSignals(QObject):
-    """Signals emitted by GraphWorker."""
-    graph_ready = Signal(str, object)  # graph_id, Figure
+    """Signals emitted by graph generation workers."""
+    graph_ready = Signal(str, object)  # graph_id, Figure or path
     error = Signal(str, str)  # graph_id, error_message
+    progress = Signal(int, int, str)  # current, total, graph_name
+    all_complete = Signal(dict)  # graph_id -> file_path
 
 
-class GraphWorker(QRunnable):
-    """Worker for generating Matplotlib figures in a background thread."""
+class ImageGenerationWorker(QThread):
+    """
+    Worker thread that generates all graphs as PNG files.
     
-    def __init__(self, graph_id: str, simulation_data: dict, normalized_df=None):
+    This is the preferred approach - generates high-quality images once,
+    then displays them using fast QLabel/QPixmap widgets.
+    """
+    progress = Signal(int, int, str)  # current, total, graph_name
+    finished_with_paths = Signal(dict)  # graph_id -> file_path
+    error = Signal(str)
+    
+    def __init__(self, simulation_data: dict, output_dir: str, graph_ids: list = None):
         super().__init__()
-        self.graph_id = graph_id
         self.simulation_data = simulation_data
-        self.normalized_df = normalized_df
-        self.signals = GraphWorkerSignals()
-        self.setAutoDelete(True)
-    
-    @Slot()
+        self.output_dir = output_dir
+        self.graph_ids = graph_ids
+        
     def run(self):
-        """Generate the figure in background thread."""
+        """Generate all graphs as PNG files."""
         try:
-            from h2_plant.gui.core.plotter import create_figure, normalize_history, GRAPH_REGISTRY
+            from h2_plant.gui.core.plotter import generate_all_graphs_to_files
             
-            # Use pre-normalized DataFrame if available
-            if self.normalized_df is not None:
-                df = self.normalized_df
-                func = GRAPH_REGISTRY.get(self.graph_id, {}).get('func')
-                if func:
-                    fig = func(df)
-                else:
-                    fig = None
-            else:
-                fig = create_figure(self.graph_id, self.simulation_data)
+            def on_progress(current, total, name):
+                self.progress.emit(current, total, name)
             
-            self.signals.graph_ready.emit(self.graph_id, fig)
+            result = generate_all_graphs_to_files(
+                self.simulation_data,
+                self.output_dir,
+                graph_ids=self.graph_ids,
+                dpi=100,  # High quality
+                progress_callback=on_progress
+            )
+            
+            self.finished_with_paths.emit(result)
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
-            self.signals.error.emit(self.graph_id, str(e))
+            self.error.emit(str(e))
+
 
 
 class LazyGraphSlot(QFrame):
@@ -290,6 +300,11 @@ class LazyGraphSlot(QFrame):
         # Get global position of this widget
         my_rect = self.rect()
         my_global = self.mapToGlobal(my_rect.topLeft())
+        
+        # Safety check: skip if widget hasn't been laid out yet (position 0,0 with small size)
+        if my_global.x() == 0 and my_global.y() == 0 and my_rect.height() < 50:
+            return  # Widget not ready yet
+        
         my_global_rect = my_rect.translated(my_global.x(), my_global.y())
         
         # Check intersection with viewport
@@ -312,14 +327,12 @@ class LazyGraphSlot(QFrame):
 
 class SimulationReportWidget(QWidget):
     """
-    Widget to display simulation reports with hierarchical tree selection.
+    Widget to display simulation reports using pre-generated static images.
     
     Features:
-    - LAZY LOADING: Only generates graphs visible in viewport
-    - FIGURE CACHING: Reuses already-generated figures on checkbox toggle
-    - QSplitter with resizable sidebar and content panes
-    - Async background generation via QThreadPool
-    - Debounced rendering to prevent excessive reloads
+    - PRE-GENERATION: All graphs generated as PNG files before display
+    - FAST SCROLLING: Uses QLabel/QPixmap for GPU-accelerated display
+    - Progress indication during image generation
     
     EXTENSIBILITY:
     - Add new graphs by registering in plotter.py GRAPH_REGISTRY
@@ -328,35 +341,24 @@ class SimulationReportWidget(QWidget):
     
     # Graph display constants
     GRAPH_MIN_HEIGHT = 400
-    DEBOUNCE_DELAY_MS = 300
     SIDEBAR_MIN_WIDTH = 180
     SIDEBAR_DEFAULT_WIDTH = 250
-    VISIBILITY_CHECK_INTERVAL_MS = 150
+    ZOOM_LEVELS = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]  # Available zoom levels
+    DEFAULT_ZOOM_INDEX = 2  # 1.0 = 100%
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.graph_canvases = {}  # graph_id -> FigureCanvas
-        self.lazy_slots = {}  # graph_id -> LazyGraphSlot
+        self.image_labels = {}  # graph_id -> QLabel
+        self.image_paths = {}  # graph_id -> file path
         self.simulation_data = None
-        self.normalized_df = None  # Cached normalized DataFrame
         self.no_data_label = None
         self._tree_items = {}
-        self._pending_graphs = set()
+        self._generation_worker = None
+        self._zoom_index = self.DEFAULT_ZOOM_INDEX  # Current zoom level index
         
-        # Performance: Figure cache
-        self._figure_cache = FigureCache(max_size=15)
-        
-        # Thread pool for async graph generation
-        self._thread_pool = QThreadPool.globalInstance()
-        
-        # Debounce timer for graph rendering
-        self._render_timer = QTimer(self)
-        self._render_timer.setSingleShot(True)
-        self._render_timer.timeout.connect(self._do_load_graphs)
-        
-        # Visibility check timer for lazy loading
-        self._visibility_timer = QTimer(self)
-        self._visibility_timer.timeout.connect(self._check_slot_visibility)
+        # Temp directory for generated images
+        import tempfile
+        self._temp_dir = tempfile.mkdtemp(prefix="h2_graphs_")
         
         self.setup_ui()
     
@@ -379,8 +381,9 @@ class SimulationReportWidget(QWidget):
         button_layout = QHBoxLayout()
         select_all_btn = QPushButton("All")
         deselect_all_btn = QPushButton("None")
-        refresh_btn = QPushButton("⟳")
-        refresh_btn.setFixedWidth(30)
+        refresh_btn = QPushButton("Refresh Graphs")
+        refresh_btn.setToolTip("Generate selected graphs")
+        refresh_btn.setStyleSheet("font-weight: bold; background-color: #2196F3; color: white;")
         
         select_all_btn.clicked.connect(self.select_all_graphs)
         deselect_all_btn.clicked.connect(self.deselect_all_graphs)
@@ -390,6 +393,29 @@ class SimulationReportWidget(QWidget):
         button_layout.addWidget(deselect_all_btn)
         button_layout.addWidget(refresh_btn)
         sidebar_layout.addLayout(button_layout)
+        
+        # Zoom controls
+        zoom_layout = QHBoxLayout()
+        zoom_out_btn = QPushButton("−")
+        zoom_out_btn.setFixedWidth(30)
+        zoom_out_btn.setToolTip("Zoom Out")
+        zoom_out_btn.clicked.connect(self._zoom_out)
+        
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setAlignment(Qt.AlignCenter)
+        self._zoom_label.setFixedWidth(50)
+        
+        zoom_in_btn = QPushButton("+")
+        zoom_in_btn.setFixedWidth(30)
+        zoom_in_btn.setToolTip("Zoom In")
+        zoom_in_btn.clicked.connect(self._zoom_in)
+        
+        zoom_layout.addWidget(QLabel("Zoom:"))
+        zoom_layout.addWidget(zoom_out_btn)
+        zoom_layout.addWidget(self._zoom_label)
+        zoom_layout.addWidget(zoom_in_btn)
+        zoom_layout.addStretch()
+        sidebar_layout.addLayout(zoom_layout)
         
         self.graph_tree = QTreeWidget()
         self.graph_tree.setHeaderHidden(True)
@@ -405,9 +431,6 @@ class SimulationReportWidget(QWidget):
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
-        # Connect scroll events for lazy loading
-        self.scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll)
         
         self.graphs_container = QWidget()
         self.graphs_layout = QVBoxLayout(self.graphs_container)
@@ -442,14 +465,18 @@ class SimulationReportWidget(QWidget):
             for folder_name, graph_ids in GRAPH_HIERARCHY.items():
                 folder_item = QTreeWidgetItem([folder_name])
                 folder_item.setFlags(folder_item.flags() | Qt.ItemIsUserCheckable)
-                folder_item.setCheckState(0, Qt.Checked)
+                
+                # Default behavior: Only "Plant Overview" is checked
+                is_default = (folder_name == "Plant Overview")
+                folder_state = Qt.Checked if is_default else Qt.Unchecked
+                folder_item.setCheckState(0, folder_state)
                 
                 for graph_id in graph_ids:
                     if graph_id in GRAPH_REGISTRY:
                         graph_info = GRAPH_REGISTRY[graph_id]
                         child_item = QTreeWidgetItem([graph_info['name']])
                         child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable)
-                        child_item.setCheckState(0, Qt.Checked)
+                        child_item.setCheckState(0, folder_state)
                         child_item.setData(0, Qt.UserRole, graph_id)
                         child_item.setToolTip(0, graph_info.get('description', ''))
                         folder_item.addChild(child_item)
@@ -475,7 +502,7 @@ class SimulationReportWidget(QWidget):
         finally:
             self.graph_tree.blockSignals(False)
         
-        self._schedule_load_graphs()
+        self._display_selected_graphs()
     
     def _update_parent_check_state(self, parent):
         """Update parent check state."""
@@ -500,7 +527,7 @@ class SimulationReportWidget(QWidget):
                     folder.child(j).setCheckState(0, Qt.Checked)
         finally:
             self.graph_tree.blockSignals(False)
-        self._schedule_load_graphs()
+        self._display_selected_graphs()
     
     def deselect_all_graphs(self):
         self.graph_tree.blockSignals(True)
@@ -512,70 +539,107 @@ class SimulationReportWidget(QWidget):
                     folder.child(j).setCheckState(0, Qt.Unchecked)
         finally:
             self.graph_tree.blockSignals(False)
-        self._schedule_load_graphs()
+        self._display_selected_graphs()
     
     def set_simulation_data(self, history):
-        """Set simulation history data."""
+        """Set simulation history data and generate all graph images."""
         self.simulation_data = history
-        
-        # Pre-normalize DataFrame once
-        from h2_plant.gui.core.plotter import normalize_history
-        self.normalized_df = normalize_history(history)
-        
-        # Update cache with new data hash
-        self._figure_cache.set_data(history)
-        
-        self._do_load_graphs()
+        self._generate_all_graphs()
     
     def _get_checked_graph_ids(self):
         return [gid for gid, item in self._tree_items.items() 
                 if item.checkState(0) == Qt.Checked]
     
-    def _schedule_load_graphs(self):
-        self._render_timer.start(self.DEBOUNCE_DELAY_MS)
-    
     def load_graphs(self):
-        self._schedule_load_graphs()
+        """Reload visible graphs based on current selection."""
+        self._display_selected_graphs()
     
     def _force_refresh(self):
-        """Force clear cache and reload."""
-        self._figure_cache.clear()
-        self._do_load_graphs()
+        """Force regenerate all graphs."""
+        self._generate_all_graphs()
     
     def _clear_layout(self):
-        """Clear layout without clearing cache."""
-        self._visibility_timer.stop()
-        
-        for canvas in self.graph_canvases.values():
-            canvas.setParent(None)
-            # Don't close figures - they're in cache
-        self.graph_canvases.clear()
-        
-        for slot in self.lazy_slots.values():
-            slot.setParent(None)
-            slot.deleteLater()
-        self.lazy_slots.clear()
-        
-        self._pending_graphs.clear()
+        """Clear all displayed images."""
+        for label in self.image_labels.values():
+            label.setParent(None)
+            label.deleteLater()
+        self.image_labels.clear()
         
         if self.no_data_label:
             self.no_data_label.setParent(None)
+            self.no_data_label.deleteLater()
             self.no_data_label = None
         
         while self.graphs_layout.count():
             item = self.graphs_layout.takeAt(0)
-            if item.widget():
-                item.widget().setParent(None)
+            widget = item.widget()
+            if widget:
+                widget.setParent(None)
+                widget.deleteLater()
     
-    def _do_load_graphs(self):
-        """Create lazy slots for all selected graphs."""
+    def _generate_all_graphs(self):
+        """Generate all checked graphs as PNG files in background."""
+        if self.simulation_data is None:
+            self._clear_layout()
+            self._show_message("No simulation data. Run simulation first.", "gray")
+            return
+        
+        checked_ids = self._get_checked_graph_ids()
+        if not checked_ids:
+            self._clear_layout()
+            self._show_message("No graphs selected.", "gray")
+            return
+        
+        # Show progress bar
+        self._clear_layout()
+        self._progress_label = QLabel("Generating graphs...")
+        self._progress_label.setStyleSheet("color: #888; font-size: 14px;")
+        self._progress_label.setAlignment(Qt.AlignCenter)
+        self.graphs_layout.addWidget(self._progress_label)
+        
+        self._progress_bar = QProgressBar()
+        self._progress_bar.setMaximum(len(checked_ids))
+        self._progress_bar.setValue(0)
+        self.graphs_layout.addWidget(self._progress_bar)
+        self.graphs_layout.addStretch()
+        
+        # Start background worker
+        self._generation_worker = ImageGenerationWorker(
+            self.simulation_data, 
+            self._temp_dir,
+            graph_ids=checked_ids
+        )
+        self._generation_worker.progress.connect(self._on_generation_progress)
+        self._generation_worker.finished_with_paths.connect(self._on_generation_complete)
+        self._generation_worker.error.connect(self._on_generation_error)
+        self._generation_worker.start()
+    
+    @Slot(int, int, str)
+    def _on_generation_progress(self, current, total, name):
+        """Update progress bar during generation."""
+        if hasattr(self, '_progress_bar'):
+            self._progress_bar.setValue(current)
+        if hasattr(self, '_progress_label'):
+            self._progress_label.setText(f"Generating: {name} ({current}/{total})")
+    
+    @Slot(dict)
+    def _on_generation_complete(self, paths: dict):
+        """Handle completion of all graph generation."""
+        self.image_paths = paths
+        self._display_selected_graphs()
+    
+    @Slot(str)
+    def _on_generation_error(self, error_msg):
+        """Handle generation error."""
+        self._clear_layout()
+        self._show_message(f"Error generating graphs: {error_msg}", "red")
+    
+    def _display_selected_graphs(self):
+        """Display all generated images for selected graphs."""
+        from PySide6.QtGui import QPixmap
         from h2_plant.gui.core.plotter import GRAPH_REGISTRY
         
         self._clear_layout()
-        
-        if self.simulation_data is None:
-            self._show_message("No simulation data. Run simulation first.", "gray")
-            return
         
         checked_ids = self._get_checked_graph_ids()
         
@@ -583,112 +647,65 @@ class SimulationReportWidget(QWidget):
             self._show_message("No graphs selected.", "gray")
             return
         
-        # Create lazy slots for all checked graphs
+        if not self.image_paths:
+            self._show_message("No images available. Run simulation first.", "gray")
+            return
+        
         for graph_id in checked_ids:
-            # Check cache first
-            cached_fig = self._figure_cache.get(graph_id)
-            if cached_fig:
-                # Instantly display cached figure
-                self._display_figure(graph_id, cached_fig)
+            # Create container frame
+            frame = QFrame()
+            frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+            frame.setStyleSheet("""
+                QFrame {
+                    background-color: #2a2a2a;
+                    border: 1px solid #3a3a3a;
+                    border-radius: 6px;
+                    padding: 5px;
+                }
+            """)
+            frame_layout = QVBoxLayout(frame)
+            
+            # Graph title
+            graph_info = GRAPH_REGISTRY.get(graph_id, {})
+            title = QLabel(graph_info.get('name', graph_id))
+            title.setStyleSheet("font-weight: bold; font-size: 14px; color: #eee;")
+            title.setAlignment(Qt.AlignCenter)
+            frame_layout.addWidget(title)
+            
+            filepath = self.image_paths.get(graph_id)
+            if not filepath:
+                # Placeholder for not generated yet
+                placeholder = QLabel("Not generated yet.\nClick 'Refresh Graphs' to generate.")
+                placeholder.setStyleSheet("color: #888; font-style: italic; padding: 20px;")
+                placeholder.setAlignment(Qt.AlignCenter)
+                placeholder.setMinimumHeight(200)
+                frame_layout.addWidget(placeholder)
+                self.graphs_layout.addWidget(frame)
+                continue
+            
+            # Image display with zoom support
+            image_label = QLabel()
+            pixmap = QPixmap(filepath)
+            if not pixmap.isNull():
+                # Calculate target width with zoom
+                zoom_factor = self.ZOOM_LEVELS[self._zoom_index]
+                base_width = self.scroll_area.viewport().width() - 40
+                target_width = int(base_width * zoom_factor)
+                
+                # Scale image
+                scaled = pixmap.scaledToWidth(target_width, Qt.SmoothTransformation)
+                image_label.setPixmap(scaled)
             else:
-                # Create lazy slot
-                graph_info = GRAPH_REGISTRY.get(graph_id, {})
-                slot = LazyGraphSlot(graph_id, graph_info.get('name', graph_id))
-                slot.request_generation.connect(self._on_slot_requests_generation)
-                self.lazy_slots[graph_id] = slot
-                self.graphs_layout.addWidget(slot)
+                image_label.setText("Failed to load image")
+                image_label.setStyleSheet("color: red;")
+            
+            image_label.setAlignment(Qt.AlignCenter)
+            frame_layout.addWidget(image_label)
+            
+            self.image_labels[graph_id] = image_label
+            self.graphs_layout.addWidget(frame)
         
         self.graphs_layout.addStretch()
-        
-        # Start visibility checking
-        self._visibility_timer.start(self.VISIBILITY_CHECK_INTERVAL_MS)
-        
-        # Trigger initial visibility check
-        QTimer.singleShot(50, self._check_slot_visibility)
-    
-    def _on_scroll(self):
-        """Handle scroll to check visibility."""
-        self._check_slot_visibility()
-    
-    def _check_slot_visibility(self):
-        """Check which lazy slots are visible and trigger generation."""
-        if not self.lazy_slots:
-            self._visibility_timer.stop()
-            return
-        
-        # Get viewport rectangle in global coordinates
-        viewport = self.scroll_area.viewport()
-        viewport_rect = viewport.rect()
-        viewport_global = viewport.mapToGlobal(viewport_rect.topLeft())
-        from PySide6.QtCore import QRect
-        global_viewport = QRect(viewport_global.x(), viewport_global.y(),
-                                viewport_rect.width(), viewport_rect.height())
-        
-        for slot in list(self.lazy_slots.values()):
-            slot.check_visibility(global_viewport)
-    
-    @Slot(str)
-    def _on_slot_requests_generation(self, graph_id: str):
-        """Handle lazy slot requesting graph generation."""
-        if graph_id in self._pending_graphs:
-            return
-        
-        self._pending_graphs.add(graph_id)
-        
-        worker = GraphWorker(graph_id, self.simulation_data, self.normalized_df)
-        worker.signals.graph_ready.connect(self._on_graph_generated)
-        worker.signals.error.connect(self._on_graph_error)
-        self._thread_pool.start(worker)
-    
-    @Slot(str, object)
-    def _on_graph_generated(self, graph_id: str, figure):
-        """Handle completed graph generation."""
-        self._pending_graphs.discard(graph_id)
-        
-        if figure is None:
-            return
-        
-        # Cache the figure
-        self._figure_cache.put(graph_id, figure)
-        
-        # Replace lazy slot with canvas
-        slot = self.lazy_slots.pop(graph_id, None)
-        if slot:
-            index = self.graphs_layout.indexOf(slot)
-            slot.setParent(None)
-            slot.deleteLater()
-            
-            self._display_figure(graph_id, figure, index)
-    
-    def _display_figure(self, graph_id: str, figure, index: int = -1):
-        """Display a figure as a canvas."""
-        from h2_plant.gui.core.plotter import GRAPH_REGISTRY
-        
-        canvas = FigureCanvas(figure)
-        canvas.setMinimumHeight(self.GRAPH_MIN_HEIGHT)
-        canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        
-        graph_info = GRAPH_REGISTRY.get(graph_id, {})
-        canvas.setToolTip(graph_info.get('description', graph_id))
-        
-        self.graph_canvases[graph_id] = canvas
-        
-        if index >= 0:
-            self.graphs_layout.insertWidget(index, canvas)
-        else:
-            insert_pos = max(0, self.graphs_layout.count() - 1)
-            self.graphs_layout.insertWidget(insert_pos, canvas)
-    
-    @Slot(str, str)
-    def _on_graph_error(self, graph_id: str, error_msg: str):
-        """Handle graph generation error."""
-        print(f"Error generating {graph_id}: {error_msg}")
-        self._pending_graphs.discard(graph_id)
-        
-        slot = self.lazy_slots.pop(graph_id, None)
-        if slot:
-            slot._status_label.setText("Error")
-            slot._status_label.setStyleSheet("color: #ff6b6b;")
     
     def _show_message(self, text, color):
         self.no_data_label = QLabel(text)
@@ -696,6 +713,33 @@ class SimulationReportWidget(QWidget):
         self.no_data_label.setStyleSheet(f"color: {color}; font-size: 14px; padding: 50px;")
         self.graphs_layout.addWidget(self.no_data_label)
         self.graphs_layout.addStretch()
+    
+    def _zoom_in(self):
+        """Increase zoom level."""
+        if self._zoom_index < len(self.ZOOM_LEVELS) - 1:
+            self._zoom_index += 1
+            self._update_zoom_label()
+            self._display_selected_graphs()
+    
+    def _zoom_out(self):
+        """Decrease zoom level."""
+        if self._zoom_index > 0:
+            self._zoom_index -= 1
+            self._update_zoom_label()
+            self._display_selected_graphs()
+    
+    def _update_zoom_label(self):
+        """Update the zoom level label."""
+        zoom_percent = int(self.ZOOM_LEVELS[self._zoom_index] * 100)
+        self._zoom_label.setText(f"{zoom_percent}%")
+    
+    def cleanup(self):
+        """Clean up temp directory."""
+        import shutil
+        try:
+            shutil.rmtree(self._temp_dir)
+        except:
+            pass
 
 
 class PlantEditorWindow(QMainWindow):
@@ -761,6 +805,10 @@ class PlantEditorWindow(QMainWindow):
             ArbitrageNode,
             # Flow Control (NEW)
             MixerNode, WaterMixerNode,
+            # Thermal (NEW)
+            ChillerNode,
+            # Separation (NEW)
+            CoalescerNode,
             # Logic
             DemandSchedulerNode, EnergyPriceNode,
             # Logistics

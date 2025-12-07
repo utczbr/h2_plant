@@ -54,5 +54,8 @@ class ComponentID(Enum):
     WATER_PUMP_A = "water_pump_a"
     WATER_PUMP_B = "water_pump_b"
 
+    # Separation / Purification
+    COALESCER = "coalescer"
+
     def __str__(self) -> str:
         return self.value

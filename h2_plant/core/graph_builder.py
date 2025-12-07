@@ -69,6 +69,14 @@ class PlantGraphBuilder:
         elif node.type == "Mixer":
             return Mixer(**node.params)
 
+        elif node.type == "Chiller":
+            from h2_plant.components.thermal.chiller import Chiller
+            return Chiller(**node.params)
+
+        elif node.type == "Coalescer":
+            from h2_plant.components.separation.coalescer import Coalescer
+            return Coalescer(**node.params)
+
         else:
             logger.warning(f"Unknown component type: {node.type}")
             return PassiveComponent()
