@@ -15,20 +15,25 @@ class OxygenMixer(Component):
     Multi-source oxygen mixing component.
     """
     
+
     def __init__(
         self,
-        capacity_kg: float = 1000.0,
+        volume_m3: float = 1.0, # Changed from capacity_kg
         target_pressure_bar: float = 5.0,
         target_temperature_c: float = 25.0,
-        input_source_ids: Optional[List[str]] = None
     ):
         super().__init__()
         
-        self.capacity_kg = capacity_kg
+        self.volume_m3 = volume_m3 
+        # Calculate capacity at target pressure (approximate for reporting)
+        # Using Ideal Gas approximation for 'capacity' estimation: PV = mRT -> m = PV/RT
+        # Or user provided density 1.429 kg/m3 at STP.
+        # Let's use user formula: capacity = V * rho_stp * (P_target_bar / 1.01325)
+        rho_o2_stp = 1.429 
+        self.capacity_kg = self.volume_m3 * rho_o2_stp * (target_pressure_bar / 1.01325)
         self.target_pressure_pa = target_pressure_bar * 1e5
         self.target_pressure_bar = target_pressure_bar
         self.target_temperature_k = target_temperature_c + 273.15
-        self.input_source_ids = input_source_ids or []
         
         self.mass_kg = 0.0
         self.pressure_pa = 1e5
@@ -40,100 +45,107 @@ class OxygenMixer(Component):
         self.cumulative_output_kg = 0.0
         self.cumulative_vented_kg = 0.0
         
-        self._input_sources: List[Component] = []
+        # Buffer for push architecture
+        self._input_buffer: List[Stream] = []
     
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
-        """Initialize mixer and resolve input sources."""
+        """Initialize mixer."""
         super().initialize(dt, registry)
-        
-        for source_id in self.input_source_ids:
-            if registry.has(source_id):
-                self._input_sources.append(registry.get(source_id))
-            else:
-                logger.warning(f"Input source '{source_id}' not found in registry")
     
+    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
+        """
+        Receive input stream from upstream component.
+        
+        Args:
+            port_name: 'oxygen_in'
+            value: Stream object
+            resource_type: 'oxygen' (optional)
+        """
+        if port_name == 'oxygen_in' or port_name == 'inlet':
+            if isinstance(value, Stream):
+                if value.mass_flow_kg_h > 0:
+                    self._input_buffer.append(value)
+                return value.mass_flow_kg_h # Accept all
+        return 0.0
+
     def step(self, t: float) -> None:
-        """Execute timestep - mix oxygen from all sources."""
+        """Execute timestep - mix oxygen from buffered inputs."""
         super().step(t)
         
-        # 1. Aggregate all inputs into a single input stream
+        # 1. Aggregate all inputs from buffer
         combined_input_stream: Optional[Stream] = None
         
-        for source in self._input_sources:
-            source_state = source.get_state()
-            
-            # Try to get stream from source
-            input_stream = None
-            
-            # Check for o2_stream (Electrolyzer)
-            if hasattr(source, 'o2_stream') and source.o2_stream is not None:
-                input_stream = source.o2_stream
-            # Check for generic output stream (Compressor, etc)
-            elif hasattr(source, 'output_stream') and source.output_stream is not None:
-                input_stream = source.output_stream
-            
-            # Fallback: Create stream from legacy outputs
-            if input_stream is None:
-                o2_output = self._extract_o2_output(source_state)
-                if o2_output > 0:
-                    input_stream = Stream(
-                        mass_flow_kg_h=o2_output / self.dt,
-                        temperature_k=self._extract_temperature(source_state),
-                        pressure_pa=self._extract_pressure(source_state),
-                        composition={'O2': 1.0}
-                    )
-            
-            # Mix into combined stream
-            if input_stream is not None and input_stream.mass_flow_kg_h > 0:
-                if combined_input_stream is None:
-                    combined_input_stream = input_stream
-                else:
-                    combined_input_stream = combined_input_stream.mix_with(input_stream)
+        for input_stream in self._input_buffer:
+             if combined_input_stream is None:
+                 combined_input_stream = input_stream
+             else:
+                 combined_input_stream = combined_input_stream.mix_with(input_stream)
+        
+        # Clear buffer for next step
+        self._input_buffer = []
+
+        mixed_stream = None # Initialize scope
         
         # 2. Mix combined input with stored mass
         if combined_input_stream is not None:
             input_mass = combined_input_stream.mass_flow_kg_h * self.dt
             
-            # Create stream representing current storage
-            # Treat current mass as a flow over 1 hour for mixing calc (simplified)
-            # or better: use mix_with logic manually
-            
             if self.mass_kg > 0:
+                # Create stream representing current storage
                 stored_stream = Stream(
                     mass_flow_kg_h=self.mass_kg / self.dt, # Virtual flow
                     temperature_k=self.temperature_k,
                     pressure_pa=self.pressure_pa,
-                    composition={'O2': 1.0} # Assume pure O2 for now
+                    composition={'O2': 1.0} 
                 )
                 
                 # Mix input + stored
                 mixed_stream = stored_stream.mix_with(combined_input_stream)
                 
                 # Update state
-                self.temperature_k = mixed_stream.temperature_k
-                # Pressure logic for tank is different (PV=nRT), not just mixing
-                # But for now we keep the mixing temp
+                # self.temperature_k updated by Damping logic below
             else:
                 # Tank empty, takes input state
-                self.temperature_k = combined_input_stream.temperature_k
+                mixed_stream = combined_input_stream # Treat as mixed
+                # self.temperature_k updated by Damping logic below
             
             # Update mass
             self.mass_kg += input_mass
             self.cumulative_input_kg += input_mass
+
+            # 2a. Temperature Damping (Stability)
+            # Tau = 5.0 seconds standard time constant
+            tau = 5.0
+            dt_sec = self.dt * 3600.0
+            alpha = min(1.0, dt_sec / tau) 
             
-            # Pressure update (Ideal Gas Law: P = mRT/V)
-            # V = m_cap * R * T_target / P_target
-            # So P = m * P_target / m_cap * (T / T_target)
-            if self.capacity_kg > 0:
-                # Simplified pressure scaling
-                self.pressure_pa = (self.mass_kg / self.capacity_kg) * self.target_pressure_pa * (self.temperature_k / self.target_temperature_k)
+            # mixed_stream is defined in lines above
+            if mixed_stream is not None:
+                target_T = mixed_stream.temperature_k
+            else:
+                 target_T = combined_input_stream.temperature_k
+            
+            if self.mass_kg > input_mass: # If we had significant mass before (mass added above)
+                 self.temperature_k = alpha * target_T + (1 - alpha) * self.temperature_k
+            else:
+                 self.temperature_k = target_T
+
+            # 2b. Pressure Upgrade (CoolProp) based on Density
+            # P = f(T, Density)
+            # Density = mass / volume
+            if self.volume_m3 > 0:
+                density_kg_m3 = self.mass_kg / self.volume_m3
+                try:
+                    import CoolProp.CoolProp as CP
+                    # PropsSI('P', 'T', T_K, 'D', D_kg_m3, 'Oxygen')
+                    self.pressure_pa = CP.PropsSI('P', 'T', self.temperature_k, 'D', density_kg_m3, 'Oxygen')
+                except:
+                    # Fallback to Ideal Gas if CoolProp fails or missing
+                    moles_o2 = self.mass_kg * 1000.0 / GasConstants.SPECIES_DATA['O2']['molecular_weight']
+                    self.pressure_pa = (moles_o2 * GasConstants.R_UNIVERSAL_J_PER_MOL_K * self.temperature_k) / self.volume_m3
         
         # 3. Handle overflow
-        if self.mass_kg > self.capacity_kg:
-            vented = self.mass_kg - self.capacity_kg
-            self.mass_kg = self.capacity_kg
-            self.cumulative_vented_kg += vented
-            logger.warning(f"Oxygen mixer overflow: {vented:.2f} kg vented")
+        pass
     
     def get_state(self) -> Dict[str, Any]:
         return {
@@ -152,15 +164,9 @@ class OxygenMixer(Component):
         self.cumulative_output_kg += removed
         return removed
     
-    def _extract_o2_output(self, state: Dict[str, Any]) -> float:
-        if 'o2_output_kg' in state:
-            return state['o2_output_kg']
-        if 'flows' in state and 'outputs' in state['flows'] and 'oxygen' in state['flows']['outputs']:
-            return state['flows']['outputs']['oxygen'].get('value', 0.0)
-        return 0.0
-    
-    def _extract_temperature(self, state: Dict[str, Any]) -> float:
-        return state.get('temperature_k', 298.15)
-    
-    def _extract_pressure(self, state: Dict[str, Any]) -> float:
-        return state.get('pressure_pa', 1e5)
+    def get_ports(self) -> Dict[str, Dict[str, str]]:
+        return {
+            'oxygen_in': {'type': 'input', 'resource_type': 'oxygen', 'units': 'kg/h'},
+            'oxygen_out': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'}
+        }
+

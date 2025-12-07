@@ -6,9 +6,10 @@ from h2_plant.core.component import Component
 # Import Components
 from h2_plant.components.electrolysis.pem_electrolyzer import DetailedPEMElectrolyzer
 from h2_plant.components.electrolysis.soec_operator import SOECOperator
-from h2_plant.components.balance_of_plant.compressor import Compressor
-from h2_plant.components.balance_of_plant.pump import Pump
 from h2_plant.components.balance_of_plant.tank import Tank
+from h2_plant.components.compression.compressor import CompressorStorage as Compressor
+from h2_plant.components.balance_of_plant.pump import Pump
+from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer as Mixer
 
 # Passive Components (Placeholder implementations for now)
 class PassiveComponent(Component):
@@ -57,20 +58,17 @@ class PlantGraphBuilder:
             return SOECOperator(physics_spec)
             
         elif node.type == "Compressor":
-            config = node.dict()
-            config.update(node.params)
-            return Compressor(config)
+            return Compressor(**node.params)
             
         elif node.type == "Tank":
-            config = node.dict()
-            config.update(node.params)
-            return Tank(config)
+            return Tank(node.params)
             
         elif node.type == "Pump":
-            config = node.dict()
-            config.update(node.params)
-            return Pump(config)
+            return Pump(**node.params)
             
+        elif node.type == "Mixer":
+            return Mixer(**node.params)
+
         else:
             logger.warning(f"Unknown component type: {node.type}")
             return PassiveComponent()

@@ -37,11 +37,16 @@ class Orchestrator:
         logger.info("Initializing components...")
         dt = self.context.simulation.timestep_hours
         
-        # Mock Registry for now (or implement a real one)
-        registry = {} 
+        # Create proper ComponentRegistry
+        from h2_plant.core.component_registry import ComponentRegistry
+        self.registry = ComponentRegistry()
         
+        # Register all components in the registry
         for cid, comp in self.components.items():
-            comp.initialize(dt, registry)
+            self.registry.register(cid, comp)
+        
+        # Initialize all components via registry
+        self.registry.initialize_all(dt)
             
         # Build Process Flow Map
         self._build_process_flow_map()
@@ -394,34 +399,15 @@ class Orchestrator:
         if not self.context or not self.context.topology:
             return
 
-        # 1. Map UUIDs to Component IDs
-        uuid_map = self._map_topology_ids()
-        
-        # 2. Build Map
+        # Use UUIDs directly as Component IDs are now set to UUIDs
         for node in self.context.topology.nodes:
-            source_uuid = node.id
-            source_id = uuid_map.get(source_uuid)
-            
-            if not source_id:
-                # Try direct ID match (legacy)
-                if source_uuid in self.components:
-                    source_id = source_uuid
-                else:
-                    continue
+            source_id = node.id
             
             if source_id not in self.process_flow_map:
                 self.process_flow_map[source_id] = {}
                 
             for conn in node.connections:
-                target_uuid = conn.target_name # This is the UUID
-                target_id = uuid_map.get(target_uuid)
-                
-                if not target_id:
-                     if target_uuid in self.components:
-                         target_id = target_uuid
-                     else:
-                         continue
-                
+                target_id = conn.target_name # This is the target UUID defined in GraphToConfigAdapter
                 source_port = conn.source_port
                 target_port = conn.target_port
                 

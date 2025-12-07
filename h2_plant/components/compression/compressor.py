@@ -223,6 +223,14 @@ class CompressorStorage(Component):
         
         lut = self.get_registry_safe(ComponentID.LUT_MANAGER)
         
+        # If LUT not available, use fallback
+        if lut is None:
+            logger.warning(
+                "LUT Manager not available. Using fallback stage calculation."
+            )
+            self._calculate_stages_fallback()
+            return
+        
         p_in_pa = self.inlet_pressure_bar * self.BAR_TO_PA
         p_out_pa = self.outlet_pressure_bar * self.BAR_TO_PA
         
@@ -267,6 +275,59 @@ class CompressorStorage(Component):
         self.num_stages = max(1, n_stages)
         self.stage_pressure_ratio = r_total ** (1.0 / self.num_stages)
 
+    def _calculate_compression_fallback(self) -> None:
+        """
+        Simplified compression energy calculation when LUT is unavailable.
+        Uses ideal gas approximation for hydrogen.
+        """
+        # Hydrogen properties (ideal gas approximation)
+        gamma = 1.41  # Cp/Cv for H2
+        cp = 14300.0  # J/(kg·K) - specific heat at constant pressure
+        
+        p_in_pa = self.inlet_pressure_bar * self.BAR_TO_PA
+        p_out_pa = self.outlet_pressure_bar * self.BAR_TO_PA
+        r_total = p_out_pa / p_in_pa
+        
+        # Simplified adiabatic work per stage with isentropic efficiency
+        # W = cp * T1 * [(P2/P1)^((gamma-1)/gamma) - 1] / eta_is
+        exponent = (gamma - 1) / gamma
+        
+        w_compression_total = 0.0
+        q_removed_total = 0.0
+        t_current = self.inlet_temperature_k
+        
+        for i in range(self.num_stages):
+            # Temperature rise for isentropic compression
+            t_out_isentropic = t_current * (self.stage_pressure_ratio ** exponent)
+            
+            # Actual temperature rise (considering efficiency)
+            delta_t_ideal = t_out_isentropic - t_current
+            delta_t_actual = delta_t_ideal / self.isentropic_efficiency
+            t_out_actual = t_current + delta_t_actual
+            
+            # Work for this stage
+            w_stage = cp * delta_t_actual  # J/kg
+            w_compression_total += w_stage
+            
+            # Cooling work (cool back to inlet temperature)
+            if i < self.num_stages - 1:
+                q_stage = cp * (t_out_actual - self.inlet_temperature_k)
+                q_removed_total += q_stage
+                t_current = self.inlet_temperature_k  # Reset for next stage
+            else:
+                t_current = t_out_actual  # Final stage temperature
+        
+        # Convert to kWh/kg
+        self.specific_energy_kwh_kg = w_compression_total / (3.6e6)  # J/kg -> kWh/kg
+        
+        # Chilling energy
+        q_chiller_j_kg = q_removed_total / self.chiller_cop
+        self.chilling_energy_kwh_kg = q_chiller_j_kg / (3.6e6)
+        
+        # Calculate actual energy for this step
+        self.energy_consumed_kwh = self.specific_energy_kwh_kg * self.transfer_mass_kg
+        self.chilling_energy_kwh = self.chilling_energy_kwh_kg * self.transfer_mass_kg
+
     def _calculate_compression_physics(self) -> None:
         """
         Calculate compression energy and work distribution.
@@ -275,6 +336,11 @@ class CompressorStorage(Component):
         Uses LUT for most lookups, CoolProp for inverse lookup (H from P,S).
         """
         lut = self.get_registry_safe(ComponentID.LUT_MANAGER)
+        
+        # If LUT not available, use simplified energy calculation
+        if lut is None:
+            self._calculate_compression_fallback()
+            return
         
         p_in_pa = self.inlet_pressure_bar * self.BAR_TO_PA
         p_out_pa = self.outlet_pressure_bar * self.BAR_TO_PA
@@ -293,37 +359,54 @@ class CompressorStorage(Component):
         p_current = p_in_pa
         
         # Multi-stage compression loop (from legacy)
+        # We model each stage independently:
+        # Inlet -> Isentropic Compression -> Outlet -> Cooley -> Next Inlet
+        
+        # Current stage inlet temperature (initially global inlet temp)
+        t_stage_in = self.inlet_temperature_k
+        
         for i in range(self.num_stages):
-            # Determine stage outlet pressure
+            # 1. Determine local stage inlet conditions
+            # If i > 0, gas was cooled to self.inlet_temperature_k (t_stage_in) at P_current
+            # We must recalculate Entropy at this new state for the next compression step
+            # This fixes the "constant entropy across all stages" inaccuracy
+            
+            s_stage_in = lut.lookup('H2', 'S', p_current, t_stage_in)
+            h_stage_in = lut.lookup('H2', 'H', p_current, t_stage_in)
+            
+            # 2. Determine stage outlet pressure
             p_out_stage = p_current * r_stage
             if i == self.num_stages - 1:
                 p_out_stage = p_out_pa  # Exact final pressure
             
-            # Isentropic compression (constant entropy s1)
-            # Need to find H at (P_out_stage, S=s1)
-            # This is an inverse lookup that LUT doesn't support
-            if COOLPROP_AVAILABLE:
-                h2s = CP.PropsSI('H', 'P', p_out_stage, 'S', s1, 'H2')
-            else:
-                # Fallback: approximate using temperature estimate
-                # This won't be exact but maintains calculation structure
-                h2s = lut.lookup('H2', 'H', p_out_stage, self.max_temperature_k)
+            # 3. Isentropic compression
+            # H2s = H(P_out, S_in)
+            try:
+                h2s = lut.lookup_isentropic_enthalpy('H2', p_out_stage, s_stage_in)
+            except Exception:
+                # Fallback if LUT fails
+                if COOLPROP_AVAILABLE:
+                    h2s = CP.PropsSI('H', 'P', p_out_stage, 'S', s_stage_in, 'H2')
+                else:
+                    # Rough fallback
+                    h2s = h_stage_in * (p_out_stage/p_current)**0.28 
             
-            # Actual work accounting for efficiency
-            ws = h2s - h1
+            # 4. Actual work accounting for efficiency
+            ws = h2s - h_stage_in
             wa = ws / self.isentropic_efficiency
-            h2a = h1 + wa
+            h2a = h_stage_in + wa
             w_compression_total += wa
             
-            # Inter-cooling (if not last stage)
+            # 5. Inter-cooling (if not last stage)
             if i < self.num_stages - 1:
                 # Cool gas back to inlet temperature at elevated pressure
-                h_cooled = lut.lookup('H2', 'H', p_out_stage, self.inlet_temperature_k)
-                q_removed = h2a - h_cooled
+                h_cooled_next = lut.lookup('H2', 'H', p_out_stage, self.inlet_temperature_k)
+                q_removed = h2a - h_cooled_next
                 q_removed_total += q_removed
                 
-                # Update pressure for next stage
+                # Update for next stage
                 p_current = p_out_stage
+                t_stage_in = self.inlet_temperature_k # Cooled back to target
         
         # Calculate chilling work (heat removed / COP)
         w_chilling_total = q_removed_total / self.chiller_cop

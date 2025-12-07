@@ -281,61 +281,73 @@ class GraphToConfigAdapter:
     def _extract_node_config(self, node: GraphNode) -> Dict[str, Any]:
         """Extract properties from a node, potentially restructuring them."""
         
-        # Get short type name
-        node_type_short = node.type.split('.')[-1]
+        # Get short type name (suffix of identifier)
+        node_type_suffix = node.type.split('.')[-1]
         
         # Property name mappings: GUI name -> Backend schema name
         PROPERTY_MAPPINGS = {
-            'LPTankNode': {
-                'tank_count': 'count',
-                'capacity_per_tank_kg': 'capacity_kg',
-                'operating_pressure_bar': 'pressure_bar'
-            },
-            'HPTankNode': {
-                'tank_count': 'count',
-                'capacity_per_tank_kg': 'capacity_kg',
-                'operating_pressure_bar': 'pressure_bar'
-            },
-            'FillingCompressorNode': {
-                # No renaming needed - backend uses same names
-            },
-            'OutgoingCompressorNode': {
-                # No renaming needed - backend uses same names
-            },
-            'PEMStackNode': {
-                'rated_power_kw': 'max_power_mw',  # Convert kW to MW
-                'efficiency_rated': 'base_efficiency'
-            },
-            'SOECStackNode': {
-                'rated_power_kw': 'max_power_mw',  # Convert kW to MW
-            },
-            'ConsumerNode': {
-                'num_bays': 'num_dispensers',
-                'filling_rate_kg_h': 'demand_rate_kg_h'
-            }
+            'lp': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            'LPTankNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            
+            'hp': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            'HPTankNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            
+            'filling': {'efficiency': 'isentropic_efficiency'},
+            'FillingCompressorNode': {'efficiency': 'isentropic_efficiency'},
+            
+            'outgoing': {'efficiency': 'isentropic_efficiency'},
+            'OutgoingCompressorNode': {'efficiency': 'isentropic_efficiency'},
+            
+            'pem': {'rated_power_kw': 'max_power_mw', 'efficiency_rated': 'base_efficiency'},
+            'PEMStackNode': {'rated_power_kw': 'max_power_mw', 'efficiency_rated': 'base_efficiency'},
+            
+            'soec': {'rated_power_kw': 'max_power_mw'},
+            'SOECStackNode': {'rated_power_kw': 'max_power_mw'},
+            
+            'consumer': {'num_bays': 'num_dispensers', 'filling_rate_kg_h': 'demand_rate_kg_h'},
+            'ConsumerNode': {'num_bays': 'num_dispensers', 'filling_rate_kg_h': 'demand_rate_kg_h'},
+            
+            'pump': {'design_flow_kg_h': 'capacity_kg_h', 'isentropic_efficiency': 'eta_is', 'mechanical_efficiency': 'eta_m'},
+            'PumpNode': {'design_flow_kg_h': 'capacity_kg_h', 'isentropic_efficiency': 'eta_is', 'mechanical_efficiency': 'eta_m'},
+            
+            'water_mixer': {},  # No renaming needed - WaterMixer maps to MultiComponentMixer
+            'WaterMixerNode': {}
         }
         
         # Property whitelists: Only these properties are passed to backend
+        pem_wl = ['rated_power_kw', 'efficiency_rated', 'component_id']
+        soec_wl = ['rated_power_kw', 'operating_temp_c', 'component_id']
+        lp_wl = ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id']
+        hp_wl = ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id']
+        comp_wl = ['max_flow_kg_h', 'inlet_pressure_bar', 'outlet_pressure_bar', 'efficiency', 'component_id']
+        cons_wl = ['num_bays', 'filling_rate_kg_h', 'component_id']
+        pump_wl = ['target_pressure_bar', 'isentropic_efficiency', 'mechanical_efficiency', 'design_flow_kg_h', 'component_id']
+        wmix_wl = ['volume_m3', 'component_id']  # capacity_kg_h not supported by MultiComponentMixer
+        mix_wl = ['volume_m3', 'component_id']  # Only volume_m3 is required
+
         PROPERTY_WHITELISTS = {
-            'PEMStackNode': ['rated_power_kw', 'efficiency_rated', 'component_id'],
-            'SOECStackNode': ['rated_power_kw', 'operating_temp_c', 'component_id'],
-            'SOECStackNode': ['rated_power_kw', 'efficiency_rated', 'component_id'],
-            'LPTankNode': ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id'],
-            'HPTankNode': ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id'],
-            'FillingCompressorNode': ['max_flow_kg_h', 'inlet_pressure_bar', 'outlet_pressure_bar', 'efficiency', 'component_id'],
-            'OutgoingCompressorNode': ['max_flow_kg_h', 'inlet_pressure_bar', 'outlet_pressure_bar', 'efficiency', 'component_id'],
-            'ConsumerNode': ['num_bays', 'filling_rate_kg_h', 'component_id']
+            'pem': pem_wl, 'PEMStackNode': pem_wl,
+            'soec': soec_wl, 'SOECStackNode': soec_wl,
+            'lp': lp_wl, 'LPTankNode': lp_wl,
+            'hp': hp_wl, 'HPTankNode': hp_wl,
+            'filling': comp_wl, 'FillingCompressorNode': comp_wl,
+            'outgoing': comp_wl, 'OutgoingCompressorNode': comp_wl,
+            'consumer': cons_wl, 'ConsumerNode': cons_wl,
+            'pump': pump_wl, 'PumpNode': pump_wl,
+            'water_mixer': wmix_wl, 'WaterMixerNode': wmix_wl,
+            'mixer': mix_wl, 'MixerNode': mix_wl
         }
         
         # Get mapping and whitelist for this node type
-        mapping = PROPERTY_MAPPINGS.get(node_type_short, {})
-        whitelist = PROPERTY_WHITELISTS.get(node_type_short, None)
+        # Try suffix first, then full name as fallback/alternative
+        mapping = PROPERTY_MAPPINGS.get(node_type_suffix, PROPERTY_MAPPINGS.get(node.type, {}))
+        whitelist = PROPERTY_WHITELISTS.get(node_type_suffix, PROPERTY_WHITELISTS.get(node.type, None))
         
         # Apply mapping and filter GUI properties
         config = {}
         for k, v in node.properties.items():
-            # Skip GUI-only properties
-            if k in ['node_color', 'custom_label']:
+            # Skip GUI-only and internal properties
+            if k in ['node_color', 'custom_label', 'type_', 'selected', 'pos', 'icon', 'name', 'disabled']:
                 continue
             
             # Apply whitelist if defined for this node type
@@ -364,22 +376,25 @@ class GraphToConfigAdapter:
                 # Convert percentage to decimal if needed
                 if isinstance(v, (int, float)) and v > 1:
                     v = v / 100.0
-            elif backend_key == 'efficiency':
+            elif backend_key in ['efficiency', 'isentropic_efficiency']:
                 # Convert percentage to decimal if needed (for compressors, etc.)
                 if isinstance(v, (int, float)) and v > 1:
                     v = v / 100.0
+            elif backend_key in ['eta_is', 'eta_m']:
+                 # Convert percentage to decimal for efficiencies
+                 if isinstance(v, (int, float)) and v > 1:
+                     v = v / 100.0
                     
             config[backend_key] = v
         
         # Custom handlers
-        lookup_type = node_type_short
-        if lookup_type == "PEMStackNode": lookup_type = "ElectrolyzerNode"
-        if lookup_type == "SOECStackNode": lookup_type = "ElectrolyzerNode"
+        # Map specific types to generic config flags if needed
+        is_electrolyzer = node_type_suffix in ['pem', 'soec']
         
-        if lookup_type in ["ElectrolyzerNode", "ATRSourceNode", "BatteryNode", "OxygenSourceNode", "HeatSourceNode"]:
+        if is_electrolyzer or node_type_suffix in ["atr", "battery", "oxygen", "heat"]:
             config["enabled"] = True
             
-        if node.type == "WaterTreatmentNode":
+        if node.type == "WaterTreatmentNode": # Check suffix if used
             # Remap flat properties to nested structure
             return {
                 "treatment_block": {
@@ -525,15 +540,64 @@ class GraphToConfigAdapter:
         )
 
     def _map_node_type(self, gui_type: str) -> str:
-        """Map GUI node class name to Backend component type string."""
+        """Map GUI node class name or identifier suffix to Backend component type string."""
         MAPPING = {
+            # Full class names
             "PEMStackNode": "PEM",
             "SOECStackNode": "SOEC",
             "FillingCompressorNode": "Compressor",
             "OutgoingCompressorNode": "Compressor",
+            "ProcessCompressorNode": "Compressor",
             "LPTankNode": "Tank",
             "HPTankNode": "Tank",
             "RecirculationPumpNode": "Pump",
-            # Add more as needed
+            "PumpNode": "Pump",
+            "MixerNode": "Mixer",
+            "WaterMixerNode": "Mixer",
+            "ArbitrageNode": "Controller",
+            "ConsumerNode": "Consumer",
+            "DemandSchedulerNode": "Scheduler",
+            "EnergyPriceNode": "DataSource",
+            "WindEnergySourceNode": "DataSource",
+            "GridConnectionNode": "DataSource",
+            "WaterSupplyNode": "DataSource",
+            
+            # Identifier suffixes (from __identifier__)
+            "pem": "PEM",
+            "soec": "SOEC",
+            "filling": "Compressor",
+            "outgoing": "Compressor",
+            "lp": "Tank",
+            "hp": "Tank",
+            "pump": "Pump",
+            "mixer": "Mixer",
+            "water_mixer": "Mixer",
+            "arbitrage": "Controller",
+            "consumer": "Consumer",
+            "demand": "Scheduler",
+            "energy_price": "DataSource",
+            "wind": "DataSource",
+            "grid": "DataSource",
+            "water_supply": "DataSource",
         }
         return MAPPING.get(gui_type, "PassiveComponent")
+        
+    def _extract_economics_from_graph(self) -> 'EconomicsConfig':
+        """Search for ArbitrageNode and extract settings."""
+        from h2_plant.config.models import EconomicsConfig
+        
+        # Default
+        econ = EconomicsConfig(
+            h2_price_eur_kg=9.60,
+            ppa_price_eur_mwh=50.0
+        )
+        
+        # Search for ArbitrageNode
+        arb_nodes = [n for n in self.nodes.values() if n.type.endswith("ArbitrageNode")]
+        if arb_nodes:
+            node = arb_nodes[0]
+            econ.h2_price_eur_kg = node.properties.get('h2_price_eur_kg', 9.60)
+            econ.ppa_price_eur_mwh = node.properties.get('ppa_price_eur_mwh', 50.0)
+            # Threshold is handled in Pathway but good to extract if model supports it
+            
+        return econ

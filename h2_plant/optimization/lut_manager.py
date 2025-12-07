@@ -35,13 +35,20 @@ class LUTConfig:
     
     # Pressure range (Pa)
     pressure_min: float = 1e5          # 1 bar
-    pressure_max: float = 900e5        # 900 bar
-    pressure_points: int = 200
+    pressure_max: float = 1000e5       # 1000 bar (High Range)
+    pressure_points: int = 2000        # MAXIMUM Resolution
     
     # Temperature range (K)
-    temperature_min: float = 273.15    # 0°C (water freezing point - realistic minimum)
-    temperature_max: float = 400.0     # 127°C (covers PEM, compression, storage with margin)
-    temperature_points: int = 100
+    temperature_min: float = 273.15    # 0°C
+    temperature_max: float = 1200.0    # ~927°C (Covers SOEC)
+    temperature_points: int = 2000     # MAXIMUM Resolution
+
+    # Entropy range for Isentropic Lookups (J/kg/K)
+    # H2 is ~60k. O2/H2O are ~6k-10k. 
+    # Must start at 0 to cover heavy fluids/liquids!
+    entropy_min: float = 0.0           
+    entropy_max: float = 100000.0
+    entropy_points: int = 500          # High resolution for isentropic
     
     # Properties to pre-compute
     properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C')
@@ -76,13 +83,14 @@ class LUTManager(Component):
         self._luts: Dict[str, Dict[PropertyType, npt.NDArray]] = {}
         self._pressure_grid: Optional[npt.NDArray] = None
         self._temperature_grid: Optional[npt.NDArray] = None
+        self._entropy_grid: Optional[npt.NDArray] = None # For isentropic lookups
         
         # Create cache directory
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
         
         logger.info(f"LUTManager initialized with cache dir: {self.config.cache_dir}")
     
-    def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
+    def initialize(self, dt: float = 0.0, registry: Optional['ComponentRegistry'] = None) -> None:
         """
         Initialize LUT Manager by loading or generating lookup tables.
         
@@ -107,6 +115,11 @@ class LUTManager(Component):
             self.config.temperature_max,
             self.config.temperature_points
         )
+        self._entropy_grid = np.linspace(
+            self.config.entropy_min,
+            self.config.entropy_max,
+            self.config.entropy_points
+        )
         
         # Load or generate LUTs for each fluid
         for fluid in self.config.fluids:
@@ -117,13 +130,13 @@ class LUTManager(Component):
                 try:
                     self._luts[fluid] = self._load_from_cache(cache_path)
                 except Exception as e:
-                    logger.warning(f"Failed to load cached LUT for {fluid}: {e}. Regenerating...")
+                    logger.warning(f"Failed to load cache for {fluid}: {e}. Regenerating.")
                     self._luts[fluid] = self._generate_lut(fluid)
-                    self._save_to_cache(fluid, cache_path)
+                    self._save_to_cache(fluid, self._luts[fluid]) # Save newly generated LUT
             else:
-                logger.info(f"Generating LUT for {fluid} (this may take 1-2 minutes)...")
+                logger.info(f"Cache not found for {fluid}. Generating new LUT...")
                 self._luts[fluid] = self._generate_lut(fluid)
-                self._save_to_cache(fluid, cache_path)
+                self._save_to_cache(fluid, self._luts[fluid])
         
         # self._initialized is set by super().initialize
         logger.info("LUT Manager initialization complete")
@@ -235,6 +248,44 @@ class LUTManager(Component):
         
         return results
     
+    def lookup_isentropic_enthalpy(
+        self,
+        fluid: str,
+        pressure: float,
+        entropy: float
+    ) -> float:
+        """
+        Lookup Enthalpy given Pressure and Entropy (Isentropic step).
+        Uses the special 'H_from_PS' table.
+        """
+        if not self._initialized:
+             self.initialize()
+             
+        if fluid not in self._luts or 'H_from_PS' not in self._luts[fluid]:
+            # Fallback to CoolProp if table missing (e.g. old cache)
+            if CP:
+                return CP.PropsSI('H', 'P', pressure, 'S', entropy, fluid)
+            else:
+                raise RuntimeError("Isentropic LUT missing and CoolProp unavailable")
+                
+        lut = self._luts[fluid]['H_from_PS']
+        
+        # Check bounds for Entropy
+        if entropy < self.config.entropy_min or entropy > self.config.entropy_max:
+             if CP: return CP.PropsSI('H', 'P', pressure, 'S', entropy, fluid)
+        
+        # Use JIT interpolation with Pressure and Entropy grids
+        # Note: self._entropy_grid must be initialized in __init__ or initialize
+        from h2_plant.optimization.numba_ops import bilinear_interp_jit
+        
+        return float(bilinear_interp_jit(
+            self._pressure_grid,
+            self._entropy_grid,
+            lut,
+            pressure,
+            entropy
+        ))
+    
     def _interpolate_2d(
         self,
         lut: npt.NDArray,
@@ -321,6 +372,22 @@ class LUTManager(Component):
             lut[prop] = table
             logger.info(f"  ✓ {fluid} {prop} table complete ({table.shape})")
         
+            lut[prop] = table
+            logger.info(f"  ✓ {fluid} {prop} table complete ({table.shape})")
+            
+        # Generate H(P, S) table for Isentropic compression
+        logger.info(f"Generating {fluid} isentropic H(P,S) table...")
+        h_ps_table = np.zeros((self.config.pressure_points, self.config.entropy_points))
+        for i, p in enumerate(self._pressure_grid):
+            for j, s in enumerate(self._entropy_grid):
+                try:
+                    # 'H' from 'P', 'S'
+                    h_ps_table[i, j] = CP.PropsSI('H', 'P', p, 'S', s, fluid)
+                except:
+                    h_ps_table[i, j] = np.nan
+        lut['H_from_PS'] = h_ps_table
+        logger.info(f"  ✓ {fluid} H(P,S) table complete")
+        
         return lut
     
     def _in_bounds(self, pressure: float, temperature: float) -> bool:
@@ -358,6 +425,7 @@ class LUTManager(Component):
             'lut': self._luts[fluid],
             'pressure_grid': self._pressure_grid,
             'temperature_grid': self._temperature_grid,
+            'entropy_grid': self._entropy_grid,
             'config': self.config
         }
         
@@ -366,12 +434,47 @@ class LUTManager(Component):
     
     def _load_from_cache(self, cache_path: Path) -> Dict[PropertyType, npt.NDArray]:
         """Load LUT from disk cache."""
+        logger.info(f"Attempting to load LUT from: {cache_path}")
         with open(cache_path, 'rb') as f:
             cache_data = pickle.load(f)
         
-        # Validate cache matches current config
-        if cache_data['config'] != self.config:
-            logger.warning("Cached LUT config mismatch - regenerating")
+        # Validate cache matches current config - RELAXED CHECK
+        # We check critical parameters only, ignoring fluid lists/names.
+        # This allows using "Hydrogen" table for "H2" etc.
+        c_saved = cache_data['config']
+        c_curr = self.config
+        
+        match = False
+        if isinstance(c_saved, dict):
+            # Dict comparison
+            match = (
+                c_saved.get('pressure_min') == c_curr.pressure_min and
+                c_saved.get('pressure_max') == c_curr.pressure_max and
+                c_saved.get('pressure_points') == c_curr.pressure_points and
+                c_saved.get('temperature_min') == c_curr.temperature_min and
+                c_saved.get('temperature_max') == c_curr.temperature_max and
+                c_saved.get('temperature_points') == c_curr.temperature_points
+            )
+            saved_desc = f"P={c_saved.get('pressure_min')}-{c_saved.get('pressure_max')}/{c_saved.get('pressure_points')}"
+        else:
+            # Object comparison
+            match = (
+                c_saved.pressure_min == c_curr.pressure_min and
+                c_saved.pressure_max == c_curr.pressure_max and
+                c_saved.pressure_points == c_curr.pressure_points and
+                c_saved.temperature_min == c_curr.temperature_min and
+                c_saved.temperature_max == c_curr.temperature_max and
+                c_saved.temperature_points == c_curr.temperature_points
+            )
+            saved_desc = f"P={c_saved.pressure_min}-{c_saved.pressure_max}/{c_saved.pressure_points}"
+        
+        if not match:
+            logger.warning(
+                f"Cached LUT config mismatch (P/T ranges). Regenerating.\n"
+                f"Saved: {saved_desc}\n"
+                f"Curr:  P={c_curr.pressure_min}-{c_curr.pressure_max}/{c_curr.pressure_points}, "
+                f"T={c_curr.temperature_min}-{c_curr.temperature_max}/{c_curr.temperature_points}"
+            )
             return self._generate_lut(cache_path.stem.split('_')[1])
         
         return cache_data['lut']

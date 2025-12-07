@@ -169,8 +169,9 @@ class DetailedPEMElectrolyzer(Component):
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         super().initialize(dt, registry)
-        # Resolve LUT from registry (already loaded)
-        self._lut = registry.get(ComponentID.LUT_MANAGER)
+        # Resolve LUT from registry (if available)
+        if registry.has(ComponentID.LUT_MANAGER.value):
+            self._lut = registry.get(ComponentID.LUT_MANAGER)
         
     def step(self, t: float) -> None:
         super().step(t)

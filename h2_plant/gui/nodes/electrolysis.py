@@ -88,6 +88,7 @@ class SOECStackNode(ConfigurableNode):
         self.add_input('power_in', flow_type='electricity')
         self.add_input('steam_in', flow_type='water')
         self.add_output('h2_out', flow_type='hydrogen')
+        self.add_output('o2_out', flow_type='oxygen') # Added Oxygen Output
         self.add_output('heat_out', flow_type='heat')
 
     def _init_properties(self):

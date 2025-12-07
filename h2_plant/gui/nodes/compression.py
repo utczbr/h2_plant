@@ -8,7 +8,7 @@ from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class FillingCompressorNode(ConfigurableNode):
     __identifier__ = 'h2_plant.compression.filling'
-    NODE_NAME = 'Compressor Filling'
+    NODE_NAME = 'Compressor (Production -> Storage)'
 
     def __init__(self):
         super(FillingCompressorNode, self).__init__()
@@ -48,7 +48,7 @@ class FillingCompressorNode(ConfigurableNode):
 
 class OutgoingCompressorNode(ConfigurableNode):
     __identifier__ = 'h2_plant.compression.outgoing'
-    NODE_NAME = 'Compressor Outgoing'
+    NODE_NAME = 'Compressor (Storage -> Export)'
 
     def __init__(self):
         super(OutgoingCompressorNode, self).__init__()

@@ -574,3 +574,80 @@ def simulate_soec_step_jit(
         real_limits[idx] = active_limit[i]
         
     return real_powers, real_states, real_limits
+
+
+@njit
+def bilinear_interp_jit(
+    grid_x: npt.NDArray[np.float64], # e.g. Pressure
+    grid_y: npt.NDArray[np.float64], # e.g. Temperature
+    data: npt.NDArray[np.float64],   # 2D table [x, y]
+    x: float,
+    y: float
+) -> float:
+    """
+    Perform 2D bilinear interpolation (JIT compiled).
+    
+    Args:
+        grid_x: 1D array of x coordinates (sorted increasing)
+        grid_y: 1D array of y coordinates (sorted increasing)
+        data: 2D array of values, shape (len(grid_x), len(grid_y))
+        x: Query x coordinate
+        y: Query y coordinate
+        
+    Returns:
+        Interpolated value
+    """
+    # 1. Find indices (manual search-sorted for JIT compatibility if needed, 
+    # but np.searchsorted is supported by Numba)
+    
+    # Clip to bounds
+    if x <= grid_x[0]:
+        ix = 1
+    elif x >= grid_x[-1]:
+        ix = len(grid_x) - 1
+    else:
+        ix = np.searchsorted(grid_x, x)
+        if ix == 0: ix = 1 # Safety
+    
+    if y <= grid_y[0]:
+        iy = 1
+    elif y >= grid_y[-1]:
+        iy = len(grid_y) - 1
+    else:
+        iy = np.searchsorted(grid_y, y)
+        if iy == 0: iy = 1
+        
+    # 2. Get bounding box
+    x0 = grid_x[ix-1]
+    x1 = grid_x[ix]
+    y0 = grid_y[iy-1]
+    y1 = grid_y[iy]
+    
+    q00 = data[ix-1, iy-1]
+    q01 = data[ix-1, iy]
+    q10 = data[ix, iy-1]
+    q11 = data[ix, iy]
+    
+    # 3. Weights
+    dx = x1 - x0
+    dy = y1 - y0
+    
+    if dx == 0:
+        wx = 0.0
+    else:
+        wx = (x - x0) / dx
+        
+    if dy == 0:
+        wy = 0.0
+    else:
+        wy = (y - y0) / dy
+        
+    # 4. Interpolate
+    val = (
+        q00 * (1 - wx) * (1 - wy) +
+        q10 * wx * (1 - wy) +
+        q01 * (1 - wx) * wy +
+        q11 * wx * wy
+    )
+    
+    return val

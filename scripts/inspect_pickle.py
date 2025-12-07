@@ -1,42 +1,24 @@
+
 import pickle
-import numpy as np
-import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+import sys
+import numpy as np
+# Add project root to path
+sys.path.append(str(Path(__file__).parent.parent))
+from h2_plant.optimization.lut_manager import LUTConfig
 
-def inspect_pickle():
-    path = Path("h2_plant/data/degradation_polynomials.pkl")
-    if not path.exists():
-        print(f"File not found: {path}")
-        return
+path = Path('/home/stuart/.h2_plant/lut_cache/lut_H2_v1.pkl')
+print(f"Inspecting {path}...")
+with open(path, 'rb') as f:
+    data = pickle.load(f)
 
-    with open(path, 'rb') as f:
-        polys = pickle.load(f)
+c = data['config']
+print(f"Config in file:")
+print(f"  Pressure: {c.pressure_points} pts ({c.pressure_min} - {c.pressure_max})")
+print(f"  Temperature: {c.temperature_points} pts ({c.temperature_min} - {c.temperature_max})")
+print(f"  Fluids: {c.fluids}")
 
-    print(f"Loaded {len(polys)} polynomials.")
-    
-    if not polys:
-        return
-
-    poly0 = polys[0]
-    print(f"Polynomial 0: {poly0}")
-    
-    # Test values
-    powers_W = [1e5, 1e6, 5e6]
-    powers_kW = [100, 1000, 5000]
-    powers_MW = [0.1, 1.0, 5.0]
-    
-    print("\nTesting Watts:")
-    for p in powers_W:
-        print(f"P={p:.1e} W -> j={poly0(p):.4f}")
-        
-    print("\nTesting kW:")
-    for p in powers_kW:
-        print(f"P={p:.1f} kW -> j={poly0(p):.4f}")
-
-    print("\nTesting MW:")
-    for p in powers_MW:
-        print(f"P={p:.1f} MW -> j={poly0(p):.4f}")
-
-if __name__ == "__main__":
-    inspect_pickle()
+lut = data['lut']
+print(f"LUT Data Data Shapes:")
+for prop, arr in lut.items():
+    print(f"  {prop}: {arr.shape}")

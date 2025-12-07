@@ -27,41 +27,33 @@ class ArbitrageNode(ConfigurableNode):
     def _init_properties(self):
         self.add_text_property('component_id', default='ARB-1', tab='Properties')
 
-        # Price Parameters Tab (maps to economics_parameters.yaml)
+        # Price Parameters Tab (Backend Alignment)
         self.add_float_property(
-            'electricity_buy_price', default=0.08, min_val=0.0,
-            unit='€/kWh', tab='Price Parameters'
+            'ppa_price_eur_mwh', default=50.0, min_val=0.0,
+            unit='€/MWh', tab='Price Parameters'
         )
         self.add_float_property(
-            'electricity_sell_price', default=0.05, min_val=0.0,
-            unit='€/kWh', tab='Price Parameters'
-        )
-        self.add_float_property(
-            'h2_sell_price', default=5.0, min_val=0.0,
+            'h2_price_eur_kg', default=9.60, min_val=0.0,
             unit='€/kg', tab='Price Parameters'
         )
         self.add_float_property(
-            'h2_production_cost', default=3.5, min_val=0.0,
-            unit='€/kg', tab='Price Parameters'
+            'arbitrage_threshold_eur_mwh', default=306.0, min_val=0.0,
+            unit='€/MWh', tab='Price Parameters'
         )
 
         # Arbitrage Strategy Tab
         self.add_enum_property(
-            'strategy_mode',
-            options=['Simple Threshold', 'Price Forecast', 'Storage Optimization'],
+            'allocation_strategy',
+            options=['COST_OPTIMAL', 'MAX_PRODUCTION', 'GRID_BALANCING'],
             default_index=0,
             tab='Strategy'
         )
         self.add_float_property(
-            'min_storage_threshold', default=20.0, min_val=0.0, max_val=100.0,
-            unit='%', tab='Strategy'
-        )
-        self.add_float_property(
-            'sell_trigger_price', default=6.0, min_val=0.0,
+            'sell_trigger_price', default=0.0, min_val=0.0, # Deprecated/Secondary
             unit='€/kg', tab='Strategy'
         )
         self.add_float_property(
-            'buy_trigger_price', default=0.05, min_val=0.0,
+            'buy_trigger_price', default=0.0, min_val=0.0, # Deprecated/Secondary
             unit='€/kWh', tab='Strategy'
         )
 

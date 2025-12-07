@@ -1,2 +1,1 @@
-from .pump import WaterPump
-from .water_pump_thermodynamic import WaterPumpThermodynamic
+from .water_pump import WaterPumpThermodynamic

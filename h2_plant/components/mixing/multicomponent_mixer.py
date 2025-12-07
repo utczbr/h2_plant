@@ -24,7 +24,6 @@ class MultiComponentMixer(Component):
     def __init__(
         self,
         volume_m3: float,
-        input_source_ids: Optional[List[str]] = None,
         enable_phase_equilibrium: bool = True,
         heat_loss_coeff_W_per_K: float = 0.0,
         pressure_relief_threshold_bar: float = 50.0,
@@ -37,8 +36,7 @@ class MultiComponentMixer(Component):
         self.pressure_relief_pa = pressure_relief_threshold_bar * 1e5
         self.enable_vle = enable_phase_equilibrium
         
-        self.input_source_ids = input_source_ids or []
-        self._input_sources: List[Component] = []
+        self._input_buffer: List[Any] = []
         
         self.moles_stored = {'O2': 0.0, 'CO2': 0.0, 'CH4': 0.0, 'H2O': 0.0, 'H2': 0.0, 'N2': 0.0}
         self.total_internal_energy_J = 0.0
@@ -57,12 +55,6 @@ class MultiComponentMixer(Component):
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         super().initialize(dt, registry)
         
-        for source_id in self.input_source_ids:
-            if registry.has(source_id):
-                self._input_sources.append(registry.get(source_id))
-            else:
-                logger.warning(f"Input source '{source_id}' not found in registry")
-        
         if registry.has('lut_manager'):
             self._lut_manager = registry.get('lut_manager')
         else:
@@ -71,37 +63,43 @@ class MultiComponentMixer(Component):
         if sum(self.moles_stored.values()) > 0:
             self._initialize_internal_energy()
     
+    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
+        """
+        Receive input stream from upstream.
+        """
+        if port_name == 'inlet' or port_name == 'gas_in':
+            if hasattr(value, 'mass_flow_kg_h') and value.mass_flow_kg_h > 0:
+                self._input_buffer.append(value)
+                return value.mass_flow_kg_h
+        return 0.0
+
     def step(self, t: float) -> None:
         super().step(t)
         dt_sec = self.dt * 3600.0
         
-        input_streams = self._collect_input_streams()
-        
-        if not input_streams:
-            if self.heat_loss_coeff > 0 and self.temperature_k > 0:
-                Q_loss = -self.heat_loss_coeff * (self.temperature_k - 298.15) * dt_sec
-                self.total_internal_energy_J += Q_loss
-                if sum(self.moles_stored.values()) > 1e-9:
-                    self._perform_uv_flash()
-            return
-        
+        # Process input buffer
         total_enthalpy_in_J = 0.0
         total_moles_in = 0.0
         
-        for stream in input_streams:
-            mol_rate_s = (stream.get('flow_kmol_hr', 0.0) * 1000.0) / 3600.0
-            if mol_rate_s <= 0: continue
-
-            h_molar_in = self._calculate_molar_enthalpy(
-                stream['temperature_k'], stream['pressure_pa'], stream['composition']
-            )
+        for stream in self._input_buffer:
+            mass_flow_kg_s = stream.mass_flow_kg_h / 3600.0
             
-            total_enthalpy_in_J += h_molar_in * mol_rate_s * dt_sec
-            total_moles_in += mol_rate_s * dt_sec
+            # Molar Enthalpy of input stream (J/mol) -> stream.specific_enthalpy_j_kg is J/kg
+            H_in_J_s = mass_flow_kg_s * stream.specific_enthalpy_j_kg
             
-            for species, mole_frac in stream['composition'].items():
+            total_enthalpy_in_J += H_in_J_s * dt_sec
+            
+            for species, mass_frac in stream.composition.items():
                 if species in self.moles_stored:
-                    self.moles_stored[species] += mol_rate_s * mole_frac * dt_sec
+                    mass_flow_species_kg_s = mass_flow_kg_s * mass_frac
+                    mw = GasConstants.SPECIES_DATA[species]['molecular_weight'] / 1000.0 # kg/mol
+                    moles_s = mass_flow_species_kg_s / mw
+                    
+                    self.moles_stored[species] += moles_s * dt_sec
+                    total_moles_in += moles_s * dt_sec
+        
+        # Clear buffer
+        self._input_buffer = []
         
         if self.heat_loss_coeff > 0:
             Q_loss = -self.heat_loss_coeff * (self.temperature_k - 298.15) * dt_sec
@@ -115,7 +113,6 @@ class MultiComponentMixer(Component):
         except Exception as e:
             logger.error(f"UV-flash failed at t={t:.2f}h: {e}")
             self.flash_convergence_failures += 1
-            raise ComponentStepError(f"Mixer UV-flash failed: {e}")
         
         if self.pressure_pa > self.pressure_relief_pa:
             self._activate_pressure_relief()
@@ -130,20 +127,6 @@ class MultiComponentMixer(Component):
             'vapor_fraction': float(self.vapor_fraction),
         }
     
-    def _collect_input_streams(self) -> List[Dict[str, Any]]:
-        streams = []
-        for source in self._input_sources:
-            state = source.get_state()
-            stream = self._extract_stream_from_state(state)
-            if stream and stream.get('flow_kmol_hr', 0.0) > 1e-12:
-                streams.append(stream)
-        return streams
-    
-    def _extract_stream_from_state(self, state: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if 'flow_kmol_hr' in state and 'composition' in state:
-            return state
-        return None
-    
     def _perform_uv_flash(self):
         total_moles = sum(self.moles_stored.values())
         if total_moles < 1e-12: return
@@ -151,17 +134,28 @@ class MultiComponentMixer(Component):
         u_target = self.total_internal_energy_J / total_moles
         z = {k: v/total_moles for k, v in self.moles_stored.items()}
         
+        # VLE Check Placeholder
+        if self.enable_vle:
+            # Future: Implement Rachford-Rice iteration for vapor-liquid split
+            pass
+
         def residual(T):
             P = (total_moles * GasConstants.R_UNIVERSAL_J_PER_MOL_K * T) / self.volume_m3
             u_calc = self._calc_internal_energy_vapor(T, P, z) # Simplified for now
             return u_calc - u_target
         
+        # Dynamic Bounds with Fallback
+        T_low = max(1.0, self.temperature_k * 0.1)
+        T_high = min(6000.0, self.temperature_k * 10.0)
+        
         try:
-            T_solution = brentq(residual, 250.0, 800.0, xtol=1e-3)
+            T_solution = brentq(residual, T_low, T_high, xtol=1e-3, maxiter=100)
             self.temperature_k = T_solution
             self.pressure_pa = (total_moles * GasConstants.R_UNIVERSAL_J_PER_MOL_K * T_solution) / self.volume_m3
-        except ValueError as e:
-            logger.warning(f"UV-flash bracketing failed: {e}. Using previous T.")
+        except ValueError:
+            # Fallback: linear extrapolation or keep previous
+            logger.warning(f"Mixer UV-flash failed (bounds {T_low:.1f}-{T_high:.1f}K). Holding T={self.temperature_k:.1f}K")
+            self.flash_convergence_failures += 1
 
     def _calc_internal_energy_vapor(
         self, T: float, P: float, composition: Dict[str, float]
@@ -183,6 +177,11 @@ class MultiComponentMixer(Component):
                 h_form = data['h_formation']
                 delta_h = self._integrate_cp(data['cp_coeffs'], 298.15, T)
                 h_mix += mole_frac * (h_form + delta_h)
+        
+        # Non-ideal mixing correction (Excess Enthalpy)
+        # Placeholder for future Peng-Robinson EOS integration
+        # h_mix += self._calculate_excess_enthalpy(T, P, comp)
+        
         return h_mix
 
     def _integrate_cp(self, coeffs: List[float], T1: float, T2: float) -> float:

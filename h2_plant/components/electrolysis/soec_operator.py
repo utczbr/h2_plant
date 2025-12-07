@@ -240,6 +240,29 @@ class SOECOperator(Component):
         
         return current_total_power, h2_produced_kg, steam_input_kg
 
+        return current_total_power, h2_produced_kg, steam_input_kg
+
+    def receive_input(self, port_name: str, value: Any, resource_type: str) -> float:
+        """
+        Receive input stream/resource.
+        
+        Args:
+            port_name: 'power_in' or 'water_in'/'steam_in'
+            value: Stream or float
+            resource_type: 'electricity' or 'water'
+        """
+        if port_name == 'power_in':
+            if isinstance(value, (int, float)):
+                # Could set setpoint here, or strictly power available
+                # For now just accept it
+                return float(value)
+        elif port_name in ('water_in', 'steam_in'):
+            if hasattr(value, 'mass_flow_kg_h'):
+                # Store available steam/water flow for the step
+                self.available_water_kg_h = value.mass_flow_kg_h
+                return value.mass_flow_kg_h
+        return 0.0
+
     def get_output(self, port_name: str) -> Any:
         """Get output from specific port."""
         from h2_plant.core.stream import Stream
@@ -277,6 +300,7 @@ class SOECOperator(Component):
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         return {
             'power_in': {'type': 'input', 'resource_type': 'electricity', 'units': 'MW'},
+            'steam_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
             'h2_out': {'type': 'output', 'resource_type': 'hydrogen', 'units': 'kg/h'},
             'steam_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'}
         }

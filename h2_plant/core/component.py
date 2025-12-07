@@ -83,31 +83,31 @@ class Component(ABC):
         self._registry = registry
         self._initialized = True
     
-    def get_registry_safe(self, component_id: Union[str, 'ComponentID']) -> 'Component':
+    def get_registry_safe(self, component_id: Union[str, 'ComponentID']) -> Optional['Component']:
         """
-        Get component from registry with validation.
+        Get component from registry safely, returning None if not found.
         
         Args:
             component_id: ID of component to retrieve (str or ComponentID)
             
         Returns:
-            Component instance
-            
-        Raises:
-            ComponentNotInitializedError: If component not initialized
-            RuntimeError: If registry reference is missing
-            ComponentNotFoundError: If component not found in registry
+            Component instance or None if not found/not initialized
         """
         if not self._initialized:
-            raise ComponentNotInitializedError(
-                f"Component {self.component_id} not yet initialized. Cannot access registry."
-            )
+            return None
         
         if self._registry is None:
-            raise RuntimeError(f"Component {self.component_id} registry reference is None")
+            return None
         
-        # Registry.get handles both str and ComponentID
-        return self._registry.get(component_id)
+        # Convert ComponentID to string if needed
+        if hasattr(component_id, 'value'):
+            component_id = component_id.value
+        
+        # Check if component exists before trying to get it
+        if self._registry.has(component_id):
+            return self._registry.get(component_id)
+        
+        return None
 
     @abstractmethod
     def step(self, t: float) -> None:
@@ -202,7 +202,7 @@ class Component(ABC):
         """
         raise NotImplementedError(f"Component {self.component_id} does not implement get_output")
 
-    def receive_input(self, port_name: str, value: Any, resource_type: str) -> float:
+    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """
         Receive input into a specific port.
         
@@ -213,11 +213,10 @@ class Component(ABC):
             
         Returns:
             Amount accepted (e.g., mass in kg or energy in kWh)
-            
-        Raises:
-            ValueError: If port does not exist or is not an input
+            Default implementation returns 0 (accepts nothing).
         """
-        raise NotImplementedError(f"Component {self.component_id} does not implement receive_input")
+        # Default implementation: component doesn't accept input
+        return 0.0
 
     def extract_output(self, port_name: str, amount: float, resource_type: str) -> None:
         """

@@ -27,8 +27,12 @@ try:
     CP.PropsSI('H', 'P', 101325, 'T', 298.15, 'Water')
     COOLPROP_AVAILABLE = True
 except:
-    COOLPROP_AVAILABLE = False
     logger.warning("CoolProp not available - WaterPumpThermodynamic will use simplified model")
+
+try:
+    from h2_plant.optimization.coolprop_lut import CoolPropLUT
+except ImportError:
+    CoolPropLUT = None
 
 
 class WaterPumpThermodynamic(Component):
@@ -103,10 +107,15 @@ class WaterPumpThermodynamic(Component):
         # Cumulative tracking
         self.cumulative_energy_kwh: float = 0.0
         self.cumulative_water_kg: float = 0.0
+        
+        self._lut_manager = None
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Initialize pump."""
         super().initialize(dt, registry)
+        
+        if registry.has('lut_manager'):
+            self._lut_manager = registry.get('lut_manager')
         
         if not COOLPROP_AVAILABLE:
             logger.warning(
@@ -156,11 +165,26 @@ class WaterPumpThermodynamic(Component):
 
         try:
             # 2. Inlet properties (divide by 1000 for kJ/kg units)
-            h1 = CP.PropsSI('H', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
-            s1 = CP.PropsSI('S', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
+            h1 = 0.0
+            s1 = 0.0
+            
+            # Optimization: Try LUT
+            if self._lut_manager:
+                try:
+                    # LUT returns J/kg -> /1000 for kJ/kg
+                    h1 = self._lut_manager.lookup(fluido, 'H', P1_Pa, T1_K) / 1000.0
+                    s1 = self._lut_manager.lookup(fluido, 'S', P1_Pa, T1_K) / 1000.0
+                except:
+                    h1 = CoolPropLUT.PropsSI('H', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
+                    s1 = CoolPropLUT.PropsSI('S', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
+            else:
+                 h1 = CoolPropLUT.PropsSI('H', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
+                 s1 = CoolPropLUT.PropsSI('S', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
 
             # 3. Isentropic outlet state (constant entropy)
-            h2s = CP.PropsSI('H', 'P', P2_Pa, 'S', s1 * 1000.0, fluido) / 1000.0
+            # Inverse lookup: H from S, P. LUTManager typically doesn't support this direction directly.
+            # Use CoolPropLUT (Cached)
+            h2s = CoolPropLUT.PropsSI('H', 'P', P2_Pa, 'S', s1 * 1000.0, fluido) / 1000.0
 
             # 4. Actual work accounting for efficiency
             Trabalho_is = h2s - h1
@@ -168,7 +192,8 @@ class WaterPumpThermodynamic(Component):
             h2 = h1 + Trabalho_real
 
             # 5. Actual outlet temperature
-            T2_K = CP.PropsSI('T', 'P', P2_Pa, 'H', h2 * 1000.0, fluido)
+            # Inverse: T from P, H
+            T2_K = CoolPropLUT.PropsSI('T', 'P', P2_Pa, 'H', h2 * 1000.0, fluido)
             
             # 6. Store results
             self.work_isentropic_kj_kg = Trabalho_is
@@ -255,10 +280,21 @@ class WaterPumpThermodynamic(Component):
 
         try:
             # Outlet properties
-            h2 = CP.PropsSI('H', 'P', P2_Pa, 'T', T2_K, fluido) / 1000.0
+            # Optimization: Try LUT for properties at P2, T2
+            h2 = 0.0
+            rho_2 = 0.0
             
-            # Incompressible approximation for work
-            rho_2 = CP.PropsSI('D', 'P', P2_Pa, 'T', T2_K, fluido)
+            if self._lut_manager:
+                 try:
+                     h2 = self._lut_manager.lookup(fluido, 'H', P2_Pa, T2_K) / 1000.0
+                     rho_2 = self._lut_manager.lookup(fluido, 'D', P2_Pa, T2_K)
+                 except:
+                     h2 = CoolPropLUT.PropsSI('H', 'P', P2_Pa, 'T', T2_K, fluido) / 1000.0
+                     rho_2 = CoolPropLUT.PropsSI('D', 'P', P2_Pa, 'T', T2_K, fluido)
+            else:
+                 h2 = CoolPropLUT.PropsSI('H', 'P', P2_Pa, 'T', T2_K, fluido) / 1000.0
+                 rho_2 = CoolPropLUT.PropsSI('D', 'P', P2_Pa, 'T', T2_K, fluido)
+            
             v_avg = 1.0 / rho_2
             
             P_diff = P2_Pa - P1_Pa
@@ -269,7 +305,7 @@ class WaterPumpThermodynamic(Component):
             h1 = h2 - w_real_kj
             
             # Inlet temperature
-            T1_K = CP.PropsSI('T', 'P', P1_Pa, 'H', h1 * 1000.0, fluido)
+            T1_K = CoolPropLUT.PropsSI('T', 'P', P1_Pa, 'H', h1 * 1000.0, fluido)
             
             # Store results
             self.work_isentropic_kj_kg = w_is_kj

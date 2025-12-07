@@ -494,7 +494,7 @@ def run_hybrid_management():
     
     #times = len(HOUR_OFFER) * 60 # 8 * 60 = 480 minutes
     # --- NOVO: Carregar dados reais ---
-    HORAS_PARA_SIMULAR = 24*360 # Exemplo:
+    HORAS_PARA_SIMULAR = 24 # Exemplo:
     vec_precos, vec_vento = carregar_dados_reais_interpolados(HORAS_PARA_SIMULAR)
     
     OFFERED_POWER_PROFILE = vec_vento

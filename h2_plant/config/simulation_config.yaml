@@ -33,7 +33,9 @@ energy_price:
 
 pathway:
   allocation_strategy: "COST_OPTIMAL"
-  arbitrage_threshold_eur_mwh: 338.29
+  h2_price_eur_kg: 9.60
+  ppa_price_eur_mwh: 50.0
+  arbitrage_threshold_eur_mwh: 306.0
 
 storage:
   lp_tanks:

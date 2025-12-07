@@ -317,7 +317,15 @@ class PathwayConfig:
     """Dual-path coordination configuration."""
     allocation_strategy: AllocationStrategy = AllocationStrategy.COST_OPTIMAL
     priority_source: Optional[Literal['electrolyzer', 'atr']] = None
-    arbitrage_threshold_eur_mwh: float = 338.29
+    
+    # Economics (Legacy Defaults)
+    h2_price_eur_kg: float = 9.60
+    ppa_price_eur_mwh: float = 50.0
+    
+    # Threshold calculated as: PPA + (1000/Eff * H2_Price)
+    # Default 306.0 corresponds to Legacy system values.
+    arbitrage_threshold_eur_mwh: float = 306.0 
+    
     priority_order: List[str] = field(default_factory=lambda: ["arbitrage", "production"])
     
     def validate(self) -> None:
@@ -325,6 +333,8 @@ class PathwayConfig:
         # AllocationStrategy enum validates itself
         if self.arbitrage_threshold_eur_mwh < 0:
             raise ValueError("Arbitrage threshold must be non-negative")
+        if self.h2_price_eur_kg < 0:
+            raise ValueError("H2 price must be non-negative")
         pass
 
 @dataclass
