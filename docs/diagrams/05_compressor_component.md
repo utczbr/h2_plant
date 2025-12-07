@@ -113,13 +113,14 @@ flowchart LR
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `max_flow_kg_h` | - | Maximum mass flow rate |
-| `inlet_pressure_bar` | 1.0 | Suction pressure |
-| `outlet_pressure_bar` | 200.0 | Discharge pressure |
+| `max_flow_kg_h` | (required) | Maximum mass flow rate |
+| `inlet_pressure_bar` | (required) | Suction pressure |
+| `outlet_pressure_bar` | (required) | Discharge pressure |
 | `inlet_temperature_c` | 10.0 | Suction temperature |
 | `max_temperature_c` | 85.0 | Max discharge temp per stage |
 | `isentropic_efficiency` | 0.65 | Compression efficiency |
 | `chiller_cop` | 3.0 | Intercooler COP |
+
 
 ## Thermodynamic Calculations
 

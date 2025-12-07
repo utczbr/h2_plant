@@ -129,12 +129,13 @@ flowchart LR
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `n_cells` | 110 | Number of cells in stack |
-| `A_cell_m2` | 0.25 | Active cell area (m²) |
-| `max_power_mw` | 4.0 | Maximum input power |
-| `T_op_C` | 80 | Operating temperature |
-| `kwh_per_kg` | 50.0 | Specific energy consumption |
-| `faradaic_eff` | 0.99 | Current to H₂ efficiency |
+| `N_stacks` | 35 | Number of stacks |
+| `N_cell_per_stack` | 85 | Cells per stack |
+| `A_cell` | 300 cm² | Active cell area |
+| `max_power_mw` | 5.0 | Maximum input power |
+| `T_op` | 333.15 K (60°C) | Operating temperature |
+| `P_op` | 40 bar | Operating pressure |
+
 
 ## Degradation Model
 

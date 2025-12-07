@@ -116,10 +116,12 @@ flowchart LR
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `num_modules` | 6 | Number of SOEC modules |
-| `max_power_nominal_mw` | 8.0 | Max power per module (MW) |
-| `optimal_limit` | 0.8 | Operating limit factor |
+| `max_power_nominal_mw` | 2.4 | Max power per module (MW) |
+| `optimal_limit` | 0.80 | Operating limit factor |
 | `h2_kwh_kg` | 37.5 | Energy per kg H₂ produced |
-| `ramp_time_min` | 15 | Time to ramp up/down |
+| `power_first_step_mw` | 0.12 | First ramp step power |
+| `ramp_step_mw` | 0.24 | Subsequent ramp step |
+
 
 ## Integration with Orchestrator
 
