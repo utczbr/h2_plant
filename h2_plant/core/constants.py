@@ -9,6 +9,9 @@ class GasConstants:
     R_UNIVERSAL_J_PER_MOL_K: Final[float] = 8.314
     R_H2: Final[float] = 4124.0  # Specific gas constant for H2, J/(kg.K)
     GAMMA_H2: Final[float] = 1.41 # Specific heat ratio for H2
+    # Average specific heat for gas phase (J/kg·K) - used in chiller fallback
+    CP_H2_AVG: Final[float] = 14300.0  # Hydrogen
+    CP_O2_AVG: Final[float] = 918.0    # Oxygen
     SPECIES_DATA: Final[dict] = {
         'O2': {
             'molecular_weight': 32.0,

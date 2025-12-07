@@ -2,22 +2,29 @@
 Chiller/Heat Exchanger component for thermal management.
 
 Used for cooling streams in PEM/SOEC electrolysis systems.
+Aligned with reference model (modelo_chiller.py) for accuracy.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
+from h2_plant.core.constants import GasConstants
 from h2_plant.models.thermal_inertia import ThermalInertiaModel
 from h2_plant.models.flow_dynamics import PumpFlowDynamics
 import numpy as np
+import logging
 
 
 class Chiller(Component):
     """
     Heat exchanger for cooling fluid streams.
     
-    Implements thermal energy balance:
-    Q = m_fluid * Cp * (T_in - T_out)
+    Implements enthalpy-based thermal energy balance:
+    Q = m_dot * (h_in - h_out)
+    
+    With gas-specific Cp fallback for H2/O2 streams.
+    Electrical power: W = |Q| / COP
+    Pressure drop: P_out = P_in - ΔP
     
     Used in Process Flow as HX-1, HX-2, HX-3, HX-5, HX-6, HX-10, HX-11.
     """
@@ -27,7 +34,10 @@ class Chiller(Component):
         component_id: str = "chiller",
         cooling_capacity_kw: float = 100.0,
         efficiency: float = 0.95,
-        target_temp_k: float = 298.15  # 25°C default
+        target_temp_k: float = 298.15,  # 25°C default
+        cop: float = 4.0,               # Coefficient of Performance
+        pressure_drop_bar: float = 0.2,  # Pressure drop across chiller
+        enable_dynamics: bool = False    # Off by default for reference matching
     ):
         """
         Initialize Chiller.
@@ -37,12 +47,21 @@ class Chiller(Component):
             cooling_capacity_kw: Maximum cooling capacity in kW
             efficiency: Heat transfer efficiency (0-1)
             target_temp_k: Target outlet temperature in Kelvin
+            cop: Coefficient of Performance for electrical consumption
+            pressure_drop_bar: Pressure drop across the heat exchanger (bar)
+            enable_dynamics: Enable pump/thermal dynamics (False for steady-state)
         """
         super().__init__()
         self.component_id = component_id
         self.cooling_capacity_kw = cooling_capacity_kw
         self.efficiency = efficiency
         self.target_temp_k = target_temp_k
+        self.cop = cop
+        self.pressure_drop_bar = pressure_drop_bar
+        self.enable_dynamics = enable_dynamics
+        
+        # Logger for fallback warnings
+        self.logger = logging.getLogger(f"chiller.{component_id}")
         
         # State variables
         self.inlet_stream: Stream = Stream(0.0)
@@ -50,28 +69,72 @@ class Chiller(Component):
         self.cooling_load_kw: float = 0.0
         self.cooling_water_flow_kg_h: float = 0.0
         self.heat_rejected_kw: float = 0.0
+        self.electrical_power_kw: float = 0.0  # COP-based electrical consumption
         
-        # Dynamics Models
-        self.pump = PumpFlowDynamics(
-            initial_flow_m3_h=0.0,
-            fluid_inertance_kg_m4=1e9 # Stable default
-        )
-        
-        self.coolant_thermal = ThermalInertiaModel(
-            C_thermal_J_K=1.0e6,
-            h_A_passive_W_K=50.0,
-            T_initial_K=293.15,
-            max_cooling_kw=cooling_capacity_kw
-        )
+        # Dynamics Models (only initialized if enabled)
+        if self.enable_dynamics:
+            self.pump = PumpFlowDynamics(
+                initial_flow_m3_h=0.0,
+                fluid_inertance_kg_m4=1e9  # Stable default
+            )
+            
+            self.coolant_thermal = ThermalInertiaModel(
+                C_thermal_J_K=1.0e6,
+                h_A_passive_W_K=50.0,
+                T_initial_K=293.15,
+                max_cooling_kw=cooling_capacity_kw
+            )
+        else:
+            self.pump = None
+            self.coolant_thermal = None
         
     def initialize(self, dt: float, registry: Any) -> None:
         """Initialize component."""
         super().initialize(dt, registry)
         self.initialized = True
         
+    def _calculate_cooling_fallback(self) -> float:
+        """
+        Fallback cooling calculation using gas-specific Cp.
+        
+        Uses H2 Cp (14300 J/kg·K) or O2 Cp (918 J/kg·K) based on
+        dominant gas component in the stream.
+        
+        Returns:
+            Cooling load in Watts (positive = heat removed from fluid)
+        """
+        composition = self.inlet_stream.composition
+        
+        # Detect dominant gas
+        h2_fraction = composition.get('H2', 0.0)
+        o2_fraction = composition.get('O2', 0.0)
+        
+        if h2_fraction > o2_fraction:
+            Cp_avg = GasConstants.CP_H2_AVG  # 14300 J/(kg·K)
+            gas_type = 'H2'
+        else:
+            Cp_avg = GasConstants.CP_O2_AVG  # 918 J/(kg·K)
+            gas_type = 'O2'
+        
+        mass_flow_kg_s = self.inlet_stream.mass_flow_kg_h / 3600.0
+        delta_T = self.inlet_stream.temperature_k - self.target_temp_k
+        
+        # Q = m * Cp * ΔT (positive for cooling: T_in > T_target)
+        Q_dot_W = mass_flow_kg_s * Cp_avg * delta_T
+        
+        self.logger.warning(
+            f"Chiller {self.component_id} using Cp fallback for {gas_type}: "
+            f"Cp={Cp_avg:.0f} J/kg·K, ΔT={delta_T:.1f} K"
+        )
+        
+        return Q_dot_W
+        
     def step(self, t: float) -> None:
         """
         Execute one timestep of chiller operation.
+        
+        Uses enthalpy-based calculation as primary method, with gas-specific
+        Cp fallback if enthalpy calculation fails.
         
         Args:
             t: Current simulation time in hours
@@ -84,61 +147,88 @@ class Chiller(Component):
             self.cooling_load_kw = 0.0
             self.cooling_water_flow_kg_h = 0.0
             self.heat_rejected_kw = 0.0
+            self.electrical_power_kw = 0.0
             return
         
-        # Calculate required cooling
-        # Q = m * Cp * ΔT (simplified, using Cp_water ≈ 4.18 kJ/kg·K)
-        Cp = 4.18  # kJ/kg·K
         mass_flow_kg_s = self.inlet_stream.mass_flow_kg_h / 3600.0
-        temp_delta_k = max(0, self.inlet_stream.temperature_k - self.target_temp_k)
         
-        required_cooling_kw = mass_flow_kg_s * Cp * temp_delta_k
+        # Calculate outlet pressure with drop
+        outlet_pressure_pa = self.inlet_stream.pressure_pa - (self.pressure_drop_bar * 1e5)
         
-        # Apply capacity and efficiency limits
-        actual_cooling_kw = min(required_cooling_kw, self.cooling_capacity_kw) * self.efficiency
+        # Ensure outlet pressure doesn't go negative
+        outlet_pressure_pa = max(outlet_pressure_pa, 1e4)  # Min 0.1 bar
         
-        # Calculate outlet temperature
-        if mass_flow_kg_s > 0:
-            actual_temp_drop = actual_cooling_kw / (mass_flow_kg_s * Cp)
-            outlet_temp = self.inlet_stream.temperature_k - actual_temp_drop
+        # --- Primary: Enthalpy-based calculation ---
+        try:
+            h_in = self.inlet_stream.specific_enthalpy_j_kg
+            
+            # Create target stream at desired outlet conditions
+            target_stream = Stream(
+                mass_flow_kg_h=self.inlet_stream.mass_flow_kg_h,
+                temperature_k=self.target_temp_k,
+                pressure_pa=outlet_pressure_pa,
+                composition=self.inlet_stream.composition.copy()
+            )
+            h_target = target_stream.specific_enthalpy_j_kg
+            
+            # Q = mdot * (h_in - h_target) [W]
+            # Positive when cooling (h_in > h_target)
+            Q_dot_W = mass_flow_kg_s * (h_in - h_target)
+            
+        except Exception as e:
+            # --- Fallback: Gas-specific Cp calculation ---
+            self.logger.debug(f"Enthalpy calc failed, using fallback: {e}")
+            Q_dot_W = self._calculate_cooling_fallback()
+        
+        # Convert to kW
+        cooling_load_kw = Q_dot_W / 1000.0
+        
+        # --- COP-based electrical power ---
+        if self.cop > 0:
+            self.electrical_power_kw = abs(cooling_load_kw) / self.cop
         else:
-            outlet_temp = self.inlet_stream.temperature_k
+            self.electrical_power_kw = 0.0
         
-        # Update outlet stream
+        # --- Create outlet stream at exact target temperature ---
         self.outlet_stream = Stream(
             mass_flow_kg_h=self.inlet_stream.mass_flow_kg_h,
-            temperature_k=outlet_temp,
-            pressure_pa=self.inlet_stream.pressure_pa,
+            temperature_k=self.target_temp_k,
+            pressure_pa=outlet_pressure_pa,
             composition=self.inlet_stream.composition.copy()
         )
         
-        # Update state
-        # Dynamics Update
-        dt_seconds = self.dt * 3600.0
-        
-        # 1. Pump Control (Proportional to error)
-        temp_error = self.inlet_stream.temperature_k - self.target_temp_k
-        pump_speed = np.clip(temp_error / 30.0, 0, 1) if temp_error > 0 else 0.0
-        
-        # 2. Advance Pump
-        Q_cool_m3_h = self.pump.step(dt_s=dt_seconds, pump_speed_fraction=pump_speed)
-        
-        # 3. Advance Coolant Thermal
-        # Heat absorbed = actual cooling provided
-        Q_absorbed_W = actual_cooling_kw * 1000.0
-        T_coolant_K = self.coolant_thermal.step(
-            dt_s=dt_seconds,
-            heat_generated_W=Q_absorbed_W,
-            T_control_K=self.target_temp_k
-        )
-        
-        # Update state with dynamic values
-        self.cooling_load_kw = actual_cooling_kw
-        self.heat_rejected_kw = actual_cooling_kw / self.efficiency
+        # --- Update state ---
+        self.cooling_load_kw = cooling_load_kw
+        self.heat_rejected_kw = abs(cooling_load_kw) / self.efficiency
         
         # Estimate cooling water flow (ΔT_cooling_water ≈ 10K)
+        Cp_water = 4.18  # kJ/kg·K
         cooling_water_temp_rise = 10.0
-        self.cooling_water_flow_kg_h = (self.heat_rejected_kw / (Cp * cooling_water_temp_rise / 3600.0))
+        if self.heat_rejected_kw > 0:
+            self.cooling_water_flow_kg_h = (
+                self.heat_rejected_kw / (Cp_water * cooling_water_temp_rise / 3600.0)
+            )
+        else:
+            self.cooling_water_flow_kg_h = 0.0
+        
+        # --- Dynamics update (optional) ---
+        if self.enable_dynamics and self.pump is not None and self.coolant_thermal is not None:
+            dt_seconds = self.dt * 3600.0
+            
+            # Pump Control (Proportional to error)
+            temp_error = self.inlet_stream.temperature_k - self.target_temp_k
+            pump_speed = np.clip(temp_error / 30.0, 0, 1) if temp_error > 0 else 0.0
+            
+            # Advance Pump
+            Q_cool_m3_h = self.pump.step(dt_s=dt_seconds, pump_speed_fraction=pump_speed)
+            
+            # Advance Coolant Thermal
+            Q_absorbed_W = abs(cooling_load_kw) * 1000.0
+            T_coolant_K = self.coolant_thermal.step(
+                dt_s=dt_seconds,
+                heat_generated_W=Q_absorbed_W,
+                T_control_K=self.target_temp_k
+            )
     
     def get_output(self, port_name: str) -> Any:
         """Get output from specified port."""
@@ -153,6 +243,9 @@ class Chiller(Component):
                 temperature_k=298.15 + 10.0,  # Heated by ~10K
                 pressure_pa=101325.0
             )
+        elif port_name == "electricity_in":
+            # Return electrical power demand for this chiller
+            return self.electrical_power_kw
         return 0.0
     
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
@@ -163,6 +256,10 @@ class Chiller(Component):
         elif port_name == "cooling_water_in" and isinstance(value, Stream):
             # Cooling water is provided externally, just accept it
             return value.mass_flow_kg_h
+        elif port_name == "electricity_in":
+            # Accept electrical power allocation (orchestrator reserves this)
+            # Return the actual power demand
+            return self.electrical_power_kw
         return 0.0
     
     def extract_output(self, port_name: str, amount: float, resource_type: str = None) -> None:
@@ -174,6 +271,7 @@ class Chiller(Component):
         return {
             'fluid_in': {'type': 'input', 'resource_type': 'stream'},
             'cooling_water_in': {'type': 'input', 'resource_type': 'water'},
+            'electricity_in': {'type': 'input', 'resource_type': 'electricity'},
             'fluid_out': {'type': 'output', 'resource_type': 'stream'},
             'cooling_water_out': {'type': 'output', 'resource_type': 'water'},
             'heat_out': {'type': 'output', 'resource_type': 'heat'}
@@ -186,6 +284,10 @@ class Chiller(Component):
             'component_id': self.component_id,
             'cooling_load_kw': self.cooling_load_kw,
             'outlet_temp_k': self.outlet_stream.temperature_k,
+            'outlet_pressure_bar': self.outlet_stream.pressure_pa / 1e5,
             'heat_rejected_kw': self.heat_rejected_kw,
-            'cooling_water_flow_kg_h': self.cooling_water_flow_kg_h
+            'electrical_power_kw': self.electrical_power_kw,
+            'cooling_water_flow_kg_h': self.cooling_water_flow_kg_h,
+            'cop': self.cop,
+            'pressure_drop_bar': self.pressure_drop_bar
         }
