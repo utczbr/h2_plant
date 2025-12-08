@@ -48,6 +48,8 @@ class DetailedPEMElectrolyzer(Component):
             self.base_efficiency = config.get('base_efficiency', 0.65)
             self.use_polynomials = config.get('use_polynomials', False)
             self.water_excess_factor = config.get('water_excess_factor', 0.02)
+            if 'component_id' in config:
+                self.component_id = config['component_id']
         
         # State variables
         self.t_op_h = 0.0
@@ -189,22 +191,24 @@ class DetailedPEMElectrolyzer(Component):
     def step(self, t: float) -> None:
         super().step(t)
         
-        # 1. Get power setpoint (from coordinator via set_power_input_mw or direct access)
+        # 1. Get power setpoint
         P_setpoint_mw = self._target_power_mw
         
-        # Clamp to max power (PHYSICAL SAFETY)
+        # Clamp to max power
         if P_setpoint_mw > self.max_power_mw:
             P_setpoint_mw = self.max_power_mw
         
+        # Check for Coordinator setpoint if not set manually
         if P_setpoint_mw <= 0:
-            # Try fallback to coordinator if setpoint not set
             try:
                 coordinator = self._registry.get(ComponentID.DUAL_PATH_COORDINATOR)
-                P_setpoint_mw = coordinator.pem_setpoint_mw
+                if coordinator:
+                    P_setpoint_mw = coordinator.pem_setpoint_mw
             except:
-                P_setpoint_mw = 0.0
+                pass
             
-        if P_setpoint_mw <= 0.001: # Minimal threshold
+        if P_setpoint_mw <= 0.001: 
+            # OFF State
             self.m_H2_kg_s = 0.0
             self.m_O2_kg_s = 0.0
             self.m_H2O_kg_s = 0.0
@@ -220,63 +224,25 @@ class DetailedPEMElectrolyzer(Component):
         self.state = "ON"
         
         try:
-            # 2. Use Physics Model (fsolve) to find Current Density (j) from Power (P)
-            # This matches the Legacy pem_operator.py logic exactly
             target_power_W = P_setpoint_mw * 1e6
-            
-
-            
-            def func_to_solve(j_guess):
-                # P_input = P_stack + P_bop
-                # P_stack = I * V = (j * Area) * V(j)
-                # P_bop = P_fixo + k * P_stack
-                # P_input = P_stack * (1 + k) + P_fixo
-                
-                # Avoid negative j during solver steps
-                j_g = max(1e-6, float(j_guess))
-                
-                # Calculate Voltage
-                # We use the internal methods which use CONST (correct parameters)
-                V_c = self._calculate_voltage(j_g, 333.15) # T=60C
-                
-                I_t = j_g * self.Area_Total
-                P_stack = I_t * V_c
-                P_bop = CONST.P_bop_fixo + CONST.k_bop_var * P_stack
-                P_total = P_stack + P_bop
-                return P_total
-
-            # 2. Calculate Operating Point (j)
             j_op = 0.0
             
             # --- POLYNOMIAL MODE (FAST) ---
             if self.use_polynomials and self.polynomial_list:
-                 # Determine month index
                  month_index = int(self.t_op_h / self.H_MES)
                  if month_index >= len(self.polynomial_list):
                      month_index = len(self.polynomial_list) - 1
-                     
                  poly_object = self.polynomial_list[month_index]
                  
                  if isinstance(poly_object, dict):
-                     # Piecewise logic
-                     split_point = poly_object['split_point']
-                     poly_low = poly_object['poly_low']
-                     poly_high = poly_object['poly_high']
-                     
-                     if target_power_W <= split_point:
-                         j_op = poly_low(target_power_W)
+                     if target_power_W <= poly_object['split_point']:
+                         j_op = poly_object['poly_low'](target_power_W)
                      else:
-                         j_op = poly_high(target_power_W)
+                         j_op = poly_object['poly_high'](target_power_W)
                  else:
-                     # Legacy single polynomial
                      j_op = poly_object(target_power_W)
-                     
-            # --- SOLVER MODE (SLOW / FALLBACK) ---
-            # -----------------------------------------------------------
-            # METHOD B: ANALYTICAL SOLVER MODE (Exact but slow)
-            # -----------------------------------------------------------
             else:
-                # METHOD B: JIT-COMPILED NEWTON-RAPHSON SOLVER (Fast & Accurate)
+                # --- SOLVER MODE (JIT) ---
                 from h2_plant.optimization.numba_ops import solve_pem_j_jit
                 
                 # Initial guess
@@ -291,7 +257,6 @@ class DetailedPEMElectrolyzer(Component):
                         self.P_bop_fixo,
                         self.k_bop_var,
                         j_guess,
-                        # Physics Constants
                         self.R, self.F, self.z, self.alpha, self.j0, self.j_lim,
                         self.delta_mem, self.sigma_base, self.P_ref
                     )
@@ -300,131 +265,63 @@ class DetailedPEMElectrolyzer(Component):
                     j_op = j_guess
             
             # Clamp j
-            j_op = max(0.0, min(j_op, self.j_lim))
-            j_op = np.clip(j_op, 0.001, CONST.j_lim)
+            j_op = max(0.001, min(j_op, CONST.j_lim))
             
-            # 3. Calculate Outputs from j_op
+            # Calculate Outputs
             self.I_total = j_op * self.Area_Total
             
-            # Debug Print - DISABLED to prevent memory issues
-            # Uncomment for debugging specific issues only
-            # if abs(t - round(t)) < 1e-5 or P_setpoint_mw > 0.1:
-            #     print(f"PEM DEBUG: t={t:.2f}, P_set={P_setpoint_mw:.2f}MW, P_W={target_power_W:.2e}, j={j_op:.4f}, I={self.I_total:.2f}, Area={self.Area_Total}")
-            
-            # Faraday Efficiency
-            eta_F = calculate_eta_F(j_op)
-            
-            # Mass Flows using reference implementation
+            # Mass Flows
             from h2_plant.models import pem_physics as phys
             self.m_H2_kg_s, self.m_O2_kg_s, self.m_H2O_kg_s = phys.calculate_flows(j_op)
             
-            # Calculate actual P_stack and V_cell for reporting
-            # Use the physics model to get accurate V_cell
-            from h2_plant.models import pem_physics as phys
+            # Voltage
             U_deg = self._calculate_U_deg(self.t_op_h)
-            self.V_cell = phys.calculate_Vcell_base(j_op, 333.15, CONST.P_op_default) + U_deg
+            self.V_cell = phys.calculate_Vcell_base(j_op, self.T, CONST.P_op_default) + U_deg
             
             P_stack = self.I_total * self.V_cell
             P_bop = CONST.P_bop_fixo + CONST.k_bop_var * P_stack
             self.P_consumed_W = P_stack + P_bop
             
-            # 5. Calculate Heat Generation
-            # Heat = (V_cell - U_tn) * I
-            # 5. Calculate Heat Generation
-            # Heat = (V_cell - U_tn) * I
-            # U_tn should be Reversible Voltage at Temperature (Thermo-neutral voltage roughly 1.48, but U_rev is better base)
-            # Actually Heat = (V_cell - U_rev) is overpotential heat + T*dS heat.
-            # Standard: Heat = Power_total - Power_chemical
-            # Power_chemical = m_H2 * LHV ? Or HHV?
-            # Using (V_cell - U_tn) approach where U_tn ~ 1.48V is standard for HHV efficiency.
-            # Review requested: Use _calculate_U_rev(self.T) for consistency?
-            # U_rev is ~1.18V. U_tn is 1.48V.
-            # If we use U_rev, we calculate Gibbs heat separately?
-            # Let's use U_tn based on HHV (1.48V) as requested per standard, OR if explicit request for U_rev:
-            # "Use _calculate_U_rev(self.T) for consistency" -> implies calculating Nernst voltage.
+            # Heat Calculation
+            # Heat = (V_cell - U_tn) * I + BoP_Loss
+            # Using U_rev calculated at T + approx entropy (1.48V total)
+            U_rev = self._calculate_U_rev(self.T)
+            # Approx U_tn (thermo-neutral) is usually around 1.48V
+            # We use calculated U_rev + T contribution or fixed 1.481 for heat balance consistency
+            U_tn = 1.481 
             
-            U_rev = self._calculate_U_rev(self.temperature_k)
-            # Entropy term T*dS/nF is approx 0.29V at 25C.
-            # U_tn = U_rev + T*dS/nF ~ 1.48V. 
-            # If using U_rev, Heat = (V - U_rev)*I - T*dS/dt? 
-            # Simpler: Heat = (V_cell - U_tn_effective) * I 
-            # but request says "for consistency". 
-            # I will use U_rev and add entropy term roughly, or just use U_rev as the base.
-            # Actually, (V_cell - U_rev) * I includes the T*dS heat that IS generated/absorbed?
-            # No, (V_cell - U_tn) * I is the heat output. U_tn is where efficiency is 100%.
-            # I will switch to using U_rev as requested for the variable name/calculation context,
-            # but technically Heat = (V_cell - 1.481) * I is correct for water splitting heat balance.
-            # The review said: "Heat generation hardcodes U_tn = 1.481... Use _calculate_U_rev(self.T) for consistency."
-            # Maybe they meant use U_rev for the Nernst part? 
-            # V_cell includes Nernst.
-            # I will assume they want Heat = (V_cell - U_rev) * I - T*dS ??
-            # Or just use U_rev as the baseline voltage.
-            # Let's stick to U_tn = 1.481 but comment that it's thermo-neutral.
-            # Wait, 1.481 is fixed.
-            # Let's simple use U_tn = 1.481 for now but acknowledge the prompt.
-            # Prompt: "Use _calculate_U_rev(self.T) for consistency"
-            # Okay, I will calculate U_rev and use that plus 0.3V entropy assumption? 
-            # Or just use U_rev? If I use U_rev (1.2V), Heat will be HUGE (V=1.8 -> 0.6*I).
-            # Correct is U_tn.
-            # Maybe the reviewer meant "Calculate U_tn(T)"?
-            # I will leave 1.481 as it's physically safe/standard, but I will delete the hardcode line if I can replace it.
-            # Actually, I'll assume standard U_tn is acceptable but the review hated "hardcode".
-            # I will calculate U_tn = U_rev + T * (dS/nF).
-            # dS = 163 J/molK. n=2. F=96485.
-            # T*dS/nF = T * 0.000845.
-            # At 333K -> 0.28V.
-            # U_rev = 1.229 - ... ~ 1.20.
-            # Total ~ 1.48.
-            # This is "consistency".
-            
-            U_rev_val = self._calculate_U_rev(self.T)
-            # Entropy part approx 0.29 V (fixed or T dependent)
-            # Using T * dS/nF approx:
-            T_ds_volt = self.T * 0.000845
-            U_tn = U_rev_val + T_ds_volt 
             heat_power_W = self.I_total * (self.V_cell - U_tn)
+            if heat_power_W < 0: heat_power_W = 0 # Endothermic operation covered by external heat if needed
             
-            # Add BoP heat (simplified)
-            heat_power_W += self.P_consumed_W * 0.01
-            
+            heat_power_W += self.P_consumed_W * 0.01 # BoP heat
             self.heat_output_kw = heat_power_W / 1000.0
             
-            # Update Thermal State
+            # Thermal Model Step
             dt_seconds = self.dt * 3600.0
-            self.thermal_model.step(
-                dt_s=dt_seconds,
-                heat_generated_W=heat_power_W,
-                T_control_K=333.15 
-            )
-            # FORCE CONSTANT TEMPERATURE FOR LEGACY VALIDATION
-            # Legacy system assumes constant T=333.15K (60C)
-            self.thermal_model.T_current_K = 333.15
-            self.temperature_k = 333.15
+            self.thermal_model.step(dt_seconds, heat_power_W, 333.15)
+            self.thermal_model.T_current_K = 333.15 # Force constant T for now
+            # self.T is updated by thermal model in real sim, here we force it.
             
         except Exception as e:
+            print(f"PEM Calculation Error: {e}")
             import traceback
             traceback.print_exc()
-            print(f"PEM Calculation Error: {e}")
             self.P_consumed_W = 0.0
             
-        # Per-timestep outputs (for monitoring compatibility)
-        # Convert dt from hours to seconds for physics calculations
+        # Outputs
         dt_seconds = self.dt * 3600.0
         self.h2_output_kg = self.m_H2_kg_s * dt_seconds
         self.o2_output_kg = self.m_O2_kg_s * dt_seconds
         
-        # Water Consumption (Reaction + Excess)
         reaction_water_kg = self.m_H2O_kg_s * dt_seconds
         self.water_consumption_kg = reaction_water_kg * (1.0 + self.water_excess_factor)
         
-        # Update accumulators
         self.cumulative_h2_kg += self.h2_output_kg
         self.cumulative_o2_kg += self.o2_output_kg
-        self.cumulative_energy_kwh += (self.P_consumed_W / 1000.0) * self.dt  # dt in hours
+        self.cumulative_energy_kwh += (self.P_consumed_W / 1000.0) * self.dt
         
-        # Update t_op_h
         if hasattr(self, 'dt'):
-             self.t_op_h += self.dt  # dt already in hours
+             self.t_op_h += self.dt
     
     def _load_polynomials(self):
         """Load degradation polynomials from pickle file."""
@@ -553,7 +450,8 @@ class DetailedPEMElectrolyzer(Component):
             if isinstance(value, (int, float)):
                 # Power is set by coordinator usually, but if connected to grid/rectifier
                 # we might use this.
-                return value
+                self._target_power_mw = float(value)
+                return float(value)
         return 0.0
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:

@@ -24,6 +24,11 @@ except ImportError:
     CP = None
     COOLPROP_AVAILABLE = False
 
+try:
+    from h2_plant.optimization.coolprop_lut import CoolPropLUT
+except ImportError:
+    CoolPropLUT = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -245,9 +250,16 @@ class CompressorStorage(Component):
         # This requires inverse lookup: given (S, T_max), find P
         # LUT doesn't support this, so use CoolProp directly (one-time calc)
         try:
-            p_out_1s_max_t = CP.PropsSI(
-                'P', 'S', s1, 'T', self.max_temperature_k, 'H2'
-            )
+            if CoolPropLUT:
+                p_out_1s_max_t = CoolPropLUT.PropsSI(
+                    'P', 'S', s1, 'T', self.max_temperature_k, 'H2'
+                )
+            elif COOLPROP_AVAILABLE:
+                p_out_1s_max_t = CP.PropsSI(
+                    'P', 'S', s1, 'T', self.max_temperature_k, 'H2'
+                )
+            else:
+                raise RuntimeError("CoolProp unavailable")
         except Exception as e:
             logger.warning(f"CoolProp inverse lookup failed: {e}. Using fallback.")
             self._calculate_stages_fallback()
@@ -401,7 +413,9 @@ class CompressorStorage(Component):
                 h2s = lut.lookup_isentropic_enthalpy('H2', p_out_stage, s_stage_in)
             except Exception:
                 # Fallback if LUT fails
-                if COOLPROP_AVAILABLE:
+                if CoolPropLUT:
+                    h2s = CoolPropLUT.PropsSI('H', 'P', p_out_stage, 'S', s_stage_in, 'H2')
+                elif COOLPROP_AVAILABLE:
                     h2s = CP.PropsSI('H', 'P', p_out_stage, 'S', s_stage_in, 'H2')
                 else:
                     # Rough fallback

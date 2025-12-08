@@ -46,6 +46,7 @@ from h2_plant.components.electrolysis.soec_cluster_wrapper import SOECClusterWra
 
 # V3.0 Indexed component imports
 from h2_plant.components.thermal.chiller import Chiller
+from h2_plant.components.cooling.dry_cooler import DryCooler
 from h2_plant.components.separation.psa import PSA
 from h2_plant.components.power.rectifier import Rectifier
 
@@ -784,6 +785,14 @@ class PlantBuilder:
                 efficiency=0.95
             )
             self.registry.register(f"chiller_{i}", chiller, component_type='thermal')
+
+        # Build Dry Coolers
+        for i in range(getattr(cfg, 'dry_coolers', 1)):
+            dc = DryCooler(
+                component_id=f"dry_cooler_{i}",
+                fan_power_kw=10.0
+            )
+            self.registry.register(f"dry_cooler_{i}", dc, component_type='thermal')
             
         # Build Steam Generators (HX-4, HX-7)
         from h2_plant.components.thermal.steam_generator import SteamGenerator

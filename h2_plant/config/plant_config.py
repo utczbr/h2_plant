@@ -434,6 +434,7 @@ class WaterTreatmentConfig:
 class ThermalComponentsConfig:
     """Configuration for thermal management component arrays."""
     chillers: int = 11  # HX-1 through HX-11 in Process Flow
+    dry_coolers: int = 1 # Added Dry Cooler support
     heat_exchangers: int = 0
     steam_generators: int = 2  # HX-4, HX-7
 
@@ -450,6 +451,7 @@ class FluidComponentsConfig:
     """Configuration for fluid handling component arrays."""
     pumps: int = 3              # P-1, P-2, P-3
     compressors: int = 7        # C-1 through C-7
+    valves: int = 0             # Control valves
 
 
 @dataclass

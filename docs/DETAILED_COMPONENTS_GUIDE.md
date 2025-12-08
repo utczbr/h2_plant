@@ -18,9 +18,10 @@ The Hydrogen Plant GUI now supports **component-level design**, allowing you to 
   - Properties: `max_power_kw`, `cells_per_stack`, `parallel_stacks`
   - Ports: power_in, water_in → h2_out, o2_out, heat_out
 
-- **SOEC Stack** - Solid Oxide Electrolyzer Cell (high-temperature)
-  - Properties: `max_power_kw`
-  - Ports: power_in, steam_in → h2_out, heat_out
+- **SOEC Cluster** - Solid Oxide Electrolyzer Operator (Multi-module)
+  - Properties: `num_modules` (default 6), `max_power_nominal_mw` (**Per Module**), `optimal_limit` (e.g., 0.8)
+  - Capacity: Effective MW = `num_modules` * `max_power_nominal_mw` * `optimal_limit`
+  - Ports: power_in, steam_in → h2_out, water_out
 
 - **Rectifier/Transformer** - AC/DC power conversion
   - Properties: `max_power_kw`, `efficiency`, **`system` (PEM/SOEC)**
@@ -54,12 +55,35 @@ The Hydrogen Plant GUI now supports **component-level design**, allowing you to 
   - Properties: `gas_type`, **`system` (PEM/SOEC/ATR)**
   - Ports: mixed_in → gas_out, liquid_out
 
+- **Knock-Out Drum (KOD)** - Flash separation vessel
+  - Properties: `diameter_m`
+  - Physics: Rachford-Rice flash calculation for VLE
+  - Ports: gas_inlet → gas_outlet, liquid_drain
+
+- **Coalescer** - Aerosol mist removal
+  - Properties: `design_flow_kg_h`
+  - Ports: inlet → outlet, drain
+
+- **TSA Unit** - Thermal Swing Adsorption
+  - Properties: `bed_diameter_m`, `cycle_time_hours`, `regen_temp_k`
+  - Physics: Ergun pressure drop, dynamic gas heating energy
+  - Ports: wet_h2_in → dry_h2_out, water_out
+
+- **Deoxo Reactor** - Catalytic Deoxidizer (PFR)
+  - Properties: `component_id`
+  - Physics: Coupled Mass/Energy PFR with JIT solver
+  - Ports: inlet → outlet
+
 ### 4. Thermal Components
 **Category**: `h2_plant.thermal`
 
 - **Heat Exchanger** - Cooling/heating
   - Properties: `max_heat_removal_kw`, `target_outlet_temp_c`, **`system` (PEM/SOEC/ATR)**
   - Ports: hot_in, cold_in → hot_out, cold_out
+
+- **Chiller** - Active refrigeration / Cooling
+  - Properties: `cooling_capacity_kw`, `target_temp_k`
+  - Ports: fluid_in → fluid_out
 
 ### 5. Fluid Handling Components
 **Category**: `h2_plant.fluid`

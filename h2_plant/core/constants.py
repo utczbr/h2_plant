@@ -149,3 +149,62 @@ class CoalescerConstants:
 
     # Worst case sizing (for reference)
     C_LIQ_IN_WORST_CASE_MG_M3: Final[float] = 100.0
+
+class DeoxoConstants:
+    """
+    Constants for the Catalytic Deoxidizer (Deoxo) PFR.
+    Sources: dimensionando_deoxer.pdf, deoxo-dim.py, modleo_do_deoxo.pdf
+    """
+    # Reactor Geometry
+    L_REACTOR_M: Final[float] = 1.294
+    D_REACTOR_M: Final[float] = 0.324
+    AREA_REACTOR_M2: Final[float] = 0.0824  # pi * D^2 / 4
+    CATALYST_POROSITY: Final[float] = 0.4
+    PELLET_DIAMETER_M: Final[float] = 0.003
+    
+    # Kinetics (Arrhenius)
+    # k_eff = k0_vol * exp(-Ea / RT)
+    K0_VOL_S1: Final[float] = 1.0e10
+    EA_J_MOL: Final[float] = 55000.0
+    
+    # Thermodynamics
+    DELTA_H_RXN_J_MOL_O2: Final[float] = -242000.0  # Exothermic
+    CP_MIX_AVG_J_MOL_K: Final[float] = 29.0       # Simplified approximation
+    
+    # Thermal Control
+    U_A_W_M3_K: Final[float] = 5000.0  # Volumetric heat transfer coefficient
+    T_JACKET_K: Final[float] = 120.0 + 273.15  # 120°C
+    
+    # Operational Limits
+    MAX_ALLOWED_O2_OUT_MOLE_FRAC: Final[float] = 5.0e-6 # 5 ppm
+    CRITICAL_INLET_T_K: Final[float] = 4.0 + 273.15     # Worst case
+
+class DryCoolerConstants:
+    """
+    Physical parameters for Dry Cooler (Air-Cooled Heat Exchanger).
+    Designed for cooling PEM electrolysis outlet streams (H2 and O2).
+    Source: dry_cooler-1.pdf, drydim.py
+    """
+    # Areas (m²)
+    AREA_H2_M2: Final[float] = 219.0
+    AREA_O2_M2: Final[float] = 24251.05
+    
+    # Heat Transfer & Flow
+    U_W_M2_K: Final[float] = 35.0  # Overall Heat Transfer Coefficient
+    # Note: Text mentions 500 Pa, but Power/Flow relationship implies ~124 Pa
+    # (872 W * 0.6) / (5.175 / 1.225) = 123.9 Pa
+    DP_AIR_PA: Final[float] = 124.0  
+    DP_FLUID_BAR: Final[float] = 0.05 # Process-side pressure drop
+    
+    # Air Properties (Design Basis)
+    CP_AIR_J_KG_K: Final[float] = 1005.0
+    RHO_AIR_KG_M3: Final[float] = 1.225
+    T_A_IN_DESIGN_C: Final[float] = 20.0
+    
+    # Equipment efficiencies / Factors
+    ETA_FAN: Final[float] = 0.60
+    F_LMTD: Final[float] = 0.85
+    
+    # Reference Mass Flows (for validation/defaults)
+    MDOT_AIR_DESIGN_H2_KG_S: Final[float] = 5.175
+    MDOT_AIR_DESIGN_O2_KG_S: Final[float] = 573.0

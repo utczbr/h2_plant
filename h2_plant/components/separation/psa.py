@@ -70,7 +70,10 @@ class PSA(Component):
             return
         
         # Advance cycle position
-        dt_hours = 1.0  # Assuming 1-hour timestep
+        # dt is usually in hours in this simulation engine, but we should verify. 
+        # Base Component assumes dt in hours? component.py usually implies hour steps?
+        # If dt is in hours:
+        dt_hours = self.dt 
         cycle_fraction = (dt_hours * 60) / self.cycle_time_min
         self.cycle_position = (self.cycle_position + cycle_fraction) % 1.0
         
@@ -90,12 +93,27 @@ class PSA(Component):
                 product_composition[species] = (1 - self.purity_target) / max(1, len(composition) - 1)
         
         # Tail gas composition (enriched in impurities)
+        # Strict Mass Balance: TailMass_i = InletMass_i - ProductMass_i
         tail_gas_composition = {}
+        total_tail_mol_frac = 0.0
+        
         for species in composition:
-            if species == target_species:
-                tail_gas_composition[species] = max(0, (composition[species] * inlet_flow - product_composition[species] * product_flow) / tail_gas_flow)
+            inlet_mass_i = composition[species] * inlet_flow
+            product_mass_i = product_composition.get(species, 0.0) * product_flow
+            
+            tail_mass_i = max(0.0, inlet_mass_i - product_mass_i) # Avoid negative dust
+            
+            if tail_gas_flow > 1e-9:
+                tail_gas_composition[species] = tail_mass_i / tail_gas_flow
             else:
-                tail_gas_composition[species] = composition[species] * inlet_flow / tail_gas_flow
+                tail_gas_composition[species] = 0.0
+                
+            total_tail_mol_frac += tail_gas_composition[species]
+
+        # Normalize tail gas composition if needed
+        if total_tail_mol_frac > 0:
+            for s in tail_gas_composition:
+                tail_gas_composition[s] /= total_tail_mol_frac
         
         # Create outlet streams
         self.product_outlet = Stream(

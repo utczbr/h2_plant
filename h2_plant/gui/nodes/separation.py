@@ -28,6 +28,9 @@ class PSAUnitNode(ConfigurableNode):
         self.add_float_property(
             'operating_pressure_bar', default=30.0, min_val=1.0, unit='bar', tab='PSA Unit'
         )
+        self.add_enum_property(
+            'gas_type', options=['H2', 'O2'], default_index=0, tab='PSA Unit'
+        )
 
         # Custom Tab
         self.add_color_property('node_color', default=(200, 200, 200), tab='Custom')
@@ -130,6 +133,62 @@ class KnockOutDrumNode(ConfigurableNode):
         )
 
         self.add_color_property('node_color', default=(100, 150, 200), tab='Custom')
+        self.add_text_property('custom_label', default='', tab='Custom')
+        self.add_spacer('collapse_spacer', height=60)
+
+
+class DeoxoReactorNode(ConfigurableNode):
+    """Catalytic Deoxidizer for removing O2 from H2 streams."""
+    __identifier__ = 'h2_plant.purification.deoxo'
+    NODE_NAME = 'Deoxo Reactor'
+
+    def __init__(self):
+        super(DeoxoReactorNode, self).__init__()
+        self.enable_collapse()
+
+    def _init_ports(self):
+        self.add_input('inlet', flow_type='gas')
+        self.add_output('outlet', flow_type='gas')
+
+    def _init_properties(self):
+        self.add_text_property('component_id', default='Deoxo-1', tab='Properties')
+        self.add_color_property('node_color', default=(255, 100, 150), tab='Custom')
+        self.add_text_property('custom_label', default='', tab='Custom')
+        self.add_spacer('collapse_spacer', height=60)
+
+
+class TSAUnitNode(ConfigurableNode):
+    """Thermal Swing Adsorption Unit for drying gas streams."""
+    __identifier__ = 'h2_plant.purification.tsa'
+    NODE_NAME = 'TSA Unit'
+
+    def __init__(self):
+        super(TSAUnitNode, self).__init__()
+        self.enable_collapse()
+
+    def _init_ports(self):
+        self.add_input('wet_h2_in', flow_type='gas')
+        self.add_output('dry_h2_out', flow_type='gas')
+        self.add_output('water_out', flow_type='water')
+
+    def _init_properties(self):
+        self.add_text_property('component_id', default='TSA-1', tab='Properties')
+
+        # TSA Tab
+        self.add_float_property(
+            'bed_diameter_m', default=0.32, min_val=0.1, max_val=2.0, unit='m', tab='TSA Unit'
+        )
+        self.add_float_property(
+            'bed_length_m', default=0.8, min_val=0.1, max_val=5.0, unit='m', tab='TSA Unit'
+        )
+        self.add_float_property(
+            'cycle_time_hours', default=6.0, min_val=0.5, max_val=24.0, unit='h', tab='TSA Unit'
+        )
+        self.add_float_property(
+            'regen_temp_k', default=523.15, min_val=300.0, max_val=600.0, unit='K', tab='TSA Unit'
+        )
+        
+        self.add_color_property('node_color', default=(200, 150, 100), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
         self.add_spacer('collapse_spacer', height=60)
 

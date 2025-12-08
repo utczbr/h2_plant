@@ -30,8 +30,8 @@ from h2_plant.gui.core.graph_adapter import GraphToConfigAdapter, GraphNode, Gra
 # Node imports
 from h2_plant.gui.nodes.electrolysis import PEMStackNode, SOECStackNode, RectifierNode
 from h2_plant.gui.nodes.reforming import ATRReactorNode, WGSReactorNode, SteamGeneratorNode
-from h2_plant.gui.nodes.separation import PSAUnitNode, SeparationTankNode, CoalescerNode, KnockOutDrumNode
-from h2_plant.gui.nodes.thermal import HeatExchangerNode, ChillerNode
+from h2_plant.gui.nodes.separation import PSAUnitNode, SeparationTankNode, CoalescerNode, KnockOutDrumNode, DeoxoReactorNode, TSAUnitNode
+from h2_plant.gui.nodes.thermal import HeatExchangerNode, ChillerNode, DryCoolerNode
 from h2_plant.gui.nodes.fluid import ProcessCompressorNode, RecirculationPumpNode
 from h2_plant.gui.nodes.pumping import PumpNode 
 from h2_plant.gui.nodes.logistics import ConsumerNode
@@ -806,9 +806,9 @@ class PlantEditorWindow(QMainWindow):
             # Flow Control (NEW)
             MixerNode, WaterMixerNode,
             # Thermal (NEW)
-            ChillerNode,
+            ChillerNode, DryCoolerNode,
             # Separation (NEW)
-            CoalescerNode, KnockOutDrumNode,
+            CoalescerNode, KnockOutDrumNode, PSAUnitNode, DeoxoReactorNode, TSAUnitNode,
             # Logic
             DemandSchedulerNode, EnergyPriceNode,
             # Logistics
@@ -816,7 +816,7 @@ class PlantEditorWindow(QMainWindow):
             # Resources
             GridConnectionNode, WaterSupplyNode, # AmbientHeatNode, NaturalGasSupplyNode
             # Other (Disabled - Future Phase)
-            # ATRReactorNode, PSAUnitNode, SeparationTankNode,
+            # ATRReactorNode, SeparationTankNode,
             # BatteryNode, WaterPurifierNode, UltraPureWaterTankNode
         ]
         self.graph.register_nodes(self.node_classes)

@@ -50,6 +50,21 @@ class MultiComponentMixer(Component):
         self.cumulative_vented_moles = 0.0
         self.flash_convergence_failures = 0
         
+        
+        # Pre-compute Property Arrays for JIT
+        # Order: O2, CO2, CH4, H2O, H2, N2 (order of keys in self.moles_stored)
+        self.species_keys = list(self.moles_stored.keys())
+        n_species = len(self.species_keys)
+        
+        # Arrays
+        self._h_formations = np.zeros(n_species)
+        self._cp_coeffs = np.zeros((n_species, 5))
+        
+        for i, s in enumerate(self.species_keys):
+            data = GasConstants.SPECIES_DATA.get(s, GasConstants.SPECIES_DATA['N2']) # Fallback
+            self._h_formations[i] = data['h_formation']
+            self._cp_coeffs[i, :] = data['cp_coeffs']
+            
         self._lut_manager: Optional[LUTManager] = None
     
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
@@ -57,8 +72,6 @@ class MultiComponentMixer(Component):
         
         if registry.has('lut_manager'):
             self._lut_manager = registry.get('lut_manager')
-        else:
-            logger.warning("LUTManager not found - using simplified thermodynamics")
         
         if sum(self.moles_stored.values()) > 0:
             self._initialize_internal_energy()
@@ -131,45 +144,39 @@ class MultiComponentMixer(Component):
         total_moles = sum(self.moles_stored.values())
         if total_moles < 1e-12: return
 
-        u_target = self.total_internal_energy_J / total_moles
-        z = {k: v/total_moles for k, v in self.moles_stored.items()}
+        u_target_molar = self.total_internal_energy_J / total_moles
         
-        # VLE Check Placeholder
-        if self.enable_vle:
-            # Future: Implement Rachford-Rice iteration for vapor-liquid split
-            pass
+        # Prepare arrays for JIT
+        mole_fractions = np.zeros(len(self.species_keys))
+        for i, s in enumerate(self.species_keys):
+            mole_fractions[i] = self.moles_stored[s] / total_moles
+            
+        from h2_plant.optimization import numba_ops
 
-        def residual(T):
-            P = (total_moles * GasConstants.R_UNIVERSAL_J_PER_MOL_K * T) / self.volume_m3
-            u_calc = self._calc_internal_energy_vapor(T, P, z) # Simplified for now
-            return u_calc - u_target
+        # JIT Solver Call
+        self.temperature_k = numba_ops.solve_uv_flash(
+            target_u_molar=u_target_molar,
+            volume_m3=self.volume_m3,
+            total_moles=total_moles,
+            mole_fractions=mole_fractions,
+            h_formations=self._h_formations,
+            cp_coeffs_matrix=self._cp_coeffs,
+            T_guess=self.temperature_k
+        )
         
-        # Dynamic Bounds with Fallback
-        T_low = max(1.0, self.temperature_k * 0.1)
-        T_high = min(6000.0, self.temperature_k * 10.0)
-        
-        try:
-            T_solution = brentq(residual, T_low, T_high, xtol=1e-3, maxiter=100)
-            self.temperature_k = T_solution
-            self.pressure_pa = (total_moles * GasConstants.R_UNIVERSAL_J_PER_MOL_K * T_solution) / self.volume_m3
-        except ValueError:
-            # Fallback: linear extrapolation or keep previous
-            logger.warning(f"Mixer UV-flash failed (bounds {T_low:.1f}-{T_high:.1f}K). Holding T={self.temperature_k:.1f}K")
-            self.flash_convergence_failures += 1
+        # Update P
+        self.pressure_pa = (total_moles * GasConstants.R_UNIVERSAL_J_PER_MOL_K * self.temperature_k) / self.volume_m3
 
     def _calc_internal_energy_vapor(
         self, T: float, P: float, composition: Dict[str, float]
     ) -> float:
-        """
-        Calculate specific internal energy for all-vapor mixture.
-        
-        U = H - RT (ideal gas)
-        """
+        """Legacy helper kept for initialization"""
         h_mix = self._calculate_molar_enthalpy(T, P, composition, phase='vapor')
         u_mix = h_mix - GasConstants.R_UNIVERSAL_J_PER_MOL_K * T
         return u_mix
 
     def _calculate_molar_enthalpy(self, T: float, P: float, comp: Dict[str, float], phase: str = 'vapor') -> float:
+        """Legacy helper kept for backward compatibility/initialization"""
         h_mix = 0.0
         for species, mole_frac in comp.items():
             if mole_frac > 1e-12:
@@ -177,11 +184,6 @@ class MultiComponentMixer(Component):
                 h_form = data['h_formation']
                 delta_h = self._integrate_cp(data['cp_coeffs'], 298.15, T)
                 h_mix += mole_frac * (h_form + delta_h)
-        
-        # Non-ideal mixing correction (Excess Enthalpy)
-        # Placeholder for future Peng-Robinson EOS integration
-        # h_mix += self._calculate_excess_enthalpy(T, P, comp)
-        
         return h_mix
 
     def _integrate_cp(self, coeffs: List[float], T1: float, T2: float) -> float:

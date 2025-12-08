@@ -89,13 +89,13 @@ The system is organized into **six distinct layers**, plus a set of **Advanced C
 
 ### Layer 3: Component Implementations
 **Purpose:** Standardized simulation entities.
-- **Production:** `DetailedPEMElectrolyzer`, `DetailedSOECElectrolyzer`, `ATRProductionSource`.
-  - *Note:* Relies on physics models from the `models/` package.
-- **Storage:** `TankArray`, `SourceIsolatedTanks`, `OxygenBuffer`, `BatteryStorage`.
-- **Compression:** `FillingCompressor`, `OutgoingCompressor`.
-- **Mixing:** `OxygenMixer`, `MultiComponentMixer`.
+- **Production:** `DetailedPEMElectrolyzer`, `SOECOperator`, `ATRProductionSource`.
+- **Storage:** `TankArray`, `SourceIsolatedTanks`, `OxygenBuffer`, `BatteryStorage`, `H2StorageTankEnhanced`.
+- **Compression:** `FillingCompressor`, `OutgoingCompressor`, `CompressorStorage`.
+- **Separation:** `KnockOutDrum`, `Coalescer`, `OxygenMixer`, `MultiComponentMixer`.
+- **Thermal:** `Chiller`, `HeatExchanger`.
 - **External:** `ExternalOxygenSource`, `ExternalHeatSource`.
-- **Water:** `WaterQualityTestBlock`, `WaterTreatmentBlock`, `UltrapureWaterStorageTank`, `WaterPump`.
+- **Water:** `WaterQualityTestBlock`, `WaterTreatmentBlock`, `UltrapureWaterStorageTank`, `WaterPumpThermodynamic`.
 - **Utility:** `DemandScheduler`, `EnergyPriceTracker`.
 
 ### Layer 4: Pathway Orchestration

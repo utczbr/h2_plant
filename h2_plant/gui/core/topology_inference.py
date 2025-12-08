@@ -128,22 +128,32 @@ class TopologyInferenceEngine:
         # Thermal
         "HeatExchangerNode": SystemType.THERMAL,
         "SteamGeneratorNode": SystemType.THERMAL,
+        "ChillerNode": SystemType.THERMAL,
+        "DryCoolerNode": SystemType.THERMAL,
         
         # Separation
         "PSAUnitNode": SystemType.SEPARATION,
         "WGSReactorNode": SystemType.SEPARATION,
+        "CoalescerNode": SystemType.SEPARATION,
+        "KnockOutDrumNode": SystemType.SEPARATION,
+        "DeoxoReactorNode": SystemType.SEPARATION,
+        "TSAUnitNode": SystemType.SEPARATION,
         
         # Logic & Control
         "DemandSchedulerNode": SystemType.LOGIC,
         "EnergyPriceNode": SystemType.LOGIC,
+        "ArbitrageNode": SystemType.LOGIC,
         
         # Utilities
         "BatteryNode": SystemType.UTILITIES,
         "GridConnectionNode": SystemType.EXTERNAL,
         "WaterSupplyNode": SystemType.EXTERNAL,
+        "MixerNode": SystemType.UTILITIES,
+        "WaterMixerNode": SystemType.UTILITIES,
         
         # Fluid
         "RecirculationPumpNode": SystemType.COMPRESSION,
+        "PumpNode": SystemType.COMPRESSION,
         
         # Logistics
         "ConsumerNode": SystemType.LOGIC,

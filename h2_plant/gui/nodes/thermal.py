@@ -69,3 +69,40 @@ class ChillerNode(ConfigurableNode):
         self.add_color_property('node_color', default=(100, 200, 255), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
         self.add_spacer('collapse_spacer', height=60)
+
+
+class DryCoolerNode(ConfigurableNode):
+    """Dry Cooler node for ambient air cooling."""
+    __identifier__ = 'h2_plant.thermal.dry_cooler'
+    NODE_NAME = 'Dry Cooler'
+
+    def __init__(self):
+        super(DryCoolerNode, self).__init__()
+        self.enable_collapse()
+
+    def _init_ports(self):
+        self.add_input('fluid_in', flow_type='gas')
+        self.add_output('fluid_out', flow_type='gas')
+        self.add_input('electricity_in', flow_type='electricity')
+
+    def _init_properties(self):
+        self.add_text_property('component_id', default='DC-1', tab='Properties')
+
+        # Dry Cooler Tab
+        self.add_float_property(
+            'fan_power_kw', default=10.0, min_val=0.1, unit='kW', tab='Dry Cooler'
+        )
+        self.add_float_property(
+            'delta_t_air_c', default=5.0, min_val=1.0, max_val=20.0, unit='°C', tab='Dry Cooler'
+        )
+        self.add_float_property(
+            'approach_temp_c', default=5.0, min_val=1.0, max_val=20.0, unit='°C', tab='Dry Cooler'
+        )
+        self.add_float_property(
+            'pressure_drop_bar', default=0.05, min_val=0.0, max_val=1.0, unit='bar', tab='Dry Cooler'
+        )
+
+        self.add_color_property('node_color', default=(255, 165, 0), tab='Custom') # Orange
+        self.add_text_property('custom_label', default='', tab='Custom')
+        self.add_spacer('collapse_spacer', height=60)
+

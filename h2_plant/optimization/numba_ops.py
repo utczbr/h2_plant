@@ -264,6 +264,13 @@ def solve_rachford_rice_single_condensable(
 ) -> float:
     """
     Analytical solution for Rachford-Rice with single condensable component.
+    Assuming gas is insoluble in liquid (x_gas = 0 -> x_cond = 1).
+    
+    Balance: F*z = V*y + L*x
+             F*z = V*(K*x) + L*x  (with x=1)
+             F*z = V*K + (F-V)
+             F(z-1) = V(K-1)
+             V/F = (z-1)/(K-1)
     """
     if K_value >= 1.0:
         return 1.0
@@ -271,7 +278,8 @@ def solve_rachford_rice_single_condensable(
     if z_condensable < 1e-12:
         return 1.0
     
-    beta = (z_condensable - 1.0) / (z_condensable * (K_value - 1.0))
+    # Correct formula: beta = (z - 1) / (K - 1)
+    beta = (z_condensable - 1.0) / (K_value - 1.0)
     
     if beta < 0.0:
         beta = 0.0
@@ -651,3 +659,218 @@ def bilinear_interp_jit(
     )
     
     return val
+
+@njit
+def solve_deoxo_pfr_step(
+    L_total: float,
+    steps: int, # Ignored now in favor of reliability, or used as min_steps? 
+    T_in: float,
+    P_in_pa: float,
+    molar_flow_total: float,
+    y_o2_in: float,
+    k0: float,
+    Ea: float,
+    R: float,
+    delta_H: float,
+    U_a: float,
+    T_jacket: float,
+    Area: float,
+    Cp_mix: float
+) -> Tuple[float, float, float]:
+    """
+    Solves PFR mass and energy balance for Deoxo reactor using Adaptive Explicit RK4.
+    """
+    L_curr = 0.0
+    dL = L_total / 100.0 # Initial guess
+    
+    # State: [X, T]
+    X = 0.0
+    T = T_in
+    T_max = T_in
+    
+    F_o2_in = molar_flow_total * y_o2_in
+    if F_o2_in <= 1e-12:
+        return 0.0, T_in, T_in
+
+    # Adaptive Loop
+    # Limit max iterations to prevent hanging
+    max_iter = 10000 
+    
+    for _ in range(max_iter):
+        if L_curr >= L_total:
+            break
+            
+        # 1. Estimate Gradients at current state
+        # (Simplified Euler check for Step Sizing)
+        def get_grads_local(x_c, t_c):
+            if x_c >= 1.0:
+                dt_val = (Area / (molar_flow_total * Cp_mix)) * (-U_a * (t_c - T_jacket))
+                return 0.0, dt_val
+            
+            k_eff = k0 * np.exp(-Ea / (R * t_c))
+            y_loc = max(0.0, y_o2_in * (1.0 - x_c))
+            C_o2 = (P_in_pa * y_loc) / (R * t_c)
+            r = k_eff * C_o2
+            
+            dx = (Area / F_o2_in) * r
+            
+            gen = -delta_H * r
+            rem = U_a * (t_c - T_jacket)
+            dt = (Area / (molar_flow_total * Cp_mix)) * (gen - rem)
+            return dx, dt
+
+        dx_est, dt_est = get_grads_local(X, T)
+        
+        # 2. Determine Step Size
+        # Limit dX per step to 0.005 (0.5% conversion) for stability
+        # Limit dL to remaining length
+        
+        if dx_est > 1e-9:
+            dL_target = 0.005 / dx_est
+        else:
+            dL_target = L_total * 0.1
+            
+        # Also limit dT per step (e.g. 5 K)
+        if abs(dt_est) > 1e-9:
+            dL_temp = 5.0 / abs(dt_est)
+            dL_target = min(dL_target, dL_temp)
+            
+        # Clamp dL
+        dL = min(dL_target, L_total - L_curr)
+        dL = max(dL, 1e-6) # Min step
+        
+        # 3. Perform RK4 Step with chosen dL
+        k1_X, k1_T = get_grads_local(X, T)
+        k2_X, k2_T = get_grads_local(X + 0.5*dL*k1_X, T + 0.5*dL*k1_T)
+        k3_X, k3_T = get_grads_local(X + 0.5*dL*k2_X, T + 0.5*dL*k2_T)
+        k4_X, k4_T = get_grads_local(X + dL*k3_X, T + dL*k3_T)
+        
+        X_next = X + (dL / 6.0) * (k1_X + 2*k2_X + 2*k3_X + k4_X)
+        T_next = T + (dL / 6.0) * (k1_T + 2*k2_T + 2*k3_T + k4_T)
+        
+        # 4. Update
+        X = min(1.0, X_next)
+        T = T_next
+        if T > T_max: T_max = T
+        L_curr += dL
+        
+    return X, T, T_max # Return final state
+
+@njit
+def calculate_mixture_cp(
+    temperature: float,
+    mole_fractions: np.ndarray,
+    cp_coeffs_matrix: np.ndarray,
+    T_ref: float = 298.15
+) -> float:
+    """
+    Calculate mixture molar Heat Capacity (Cp) at constant pressure.
+    Cp = sum(yi * Cui(T))
+    """
+    cp_mix = 0.0
+    
+    for i in range(len(mole_fractions)):
+        if mole_fractions[i] < 1e-12:
+            continue
+            
+        A, B, C, D, E = cp_coeffs_matrix[i, 0], cp_coeffs_matrix[i, 1], cp_coeffs_matrix[i, 2], cp_coeffs_matrix[i, 3], cp_coeffs_matrix[i, 4]
+        
+        # Cp = A + B*T + C*T^2 + D*T^3 + E/(T^2)
+        cp_species = (
+            A + 
+            B * temperature + 
+            C * temperature**2 + 
+            D * temperature**3 + 
+            (E / (temperature**2) if temperature > 0 else 0.0)
+        )
+        
+        cp_mix += mole_fractions[i] * cp_species
+        
+    return cp_mix
+
+
+@njit
+def solve_uv_flash(
+    target_u_molar: float,
+    volume_m3: float,
+    total_moles: float,
+    mole_fractions: np.ndarray,
+    h_formations: np.ndarray,
+    cp_coeffs_matrix: np.ndarray,
+    T_guess: float,
+    R_gas: float = GasConstants.R_UNIVERSAL_J_PER_MOL_K,
+    tol: float = 1e-4,
+    max_iter: int = 50
+) -> float:
+    """
+    Solve for Temperature given Internal Energy (U) and Volume (V) for an ideal gas mixture.
+    
+    Target: U(T) - U_target = 0
+    where U(T) = H(T) - PV = H(T) - RT (molar basis for ideal gas)
+    
+    Residual f(T) = H(T) - R*T - U_target
+    Derivative f'(T) = Cp(T) - R
+    
+    Uses Newton-Raphson method.
+    """
+    if total_moles <= 0 or volume_m3 <= 0:
+        return T_guess
+        
+    T = T_guess
+    
+    for _ in range(max_iter):
+        # Calculate H(T)
+        h_mix = calculate_mixture_enthalpy(T, mole_fractions, h_formations, cp_coeffs_matrix)
+        
+        # f(T) = H(T) - RT - U_target
+        u_calc = h_mix - R_gas * T
+        f = u_calc - target_u_molar
+        
+        if abs(f) < tol:
+            return T
+            
+        # Derivative: f'(T) = Cp(T) - R
+        # (Since dH/dT = Cp, and d(RT)/dT = R)
+        cp_mix = calculate_mixture_cp(T, mole_fractions, cp_coeffs_matrix)
+        df = cp_mix - R_gas
+        
+        if df == 0.0:
+            break
+            
+        # Newton Step
+        T_new = T - f / df
+        
+        # Clamp T to physical bounds
+        if T_new < 10.0: T_new = 10.0
+        if T_new > 5000.0: T_new = 5000.0
+        
+        if abs(T_new - T) < tol:
+            return T_new
+            
+        T = T_new
+        
+    return T
+
+
+@njit
+def dry_cooler_ntu_effectiveness(ntu: float, r: float) -> float:
+    """
+    Calculate effectiveness for unmixed-mixed crossflow heat exchanger.
+    Source: drydim.py
+    
+    Formula: E = (1 - exp(-NTU(1-R))) / (1 - R * exp(-NTU(1-R)))
+    If R=1: E = NTU / (1 + NTU) (Counterflow approximation used in reference)
+    """
+    if ntu <= 0: return 0.0
+    
+    if abs(r - 1.0) < 1e-6:
+        return ntu / (1.0 + ntu)
+        
+    # Prevent overflow
+    arg = -ntu * (1.0 - r)
+    if arg < -50.0: # exp(-50) is neglible
+         exp_term = 0.0
+    else:
+         exp_term = np.exp(arg)
+         
+    return (1.0 - exp_term) / (1.0 - r * exp_term)

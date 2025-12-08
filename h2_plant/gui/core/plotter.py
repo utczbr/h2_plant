@@ -1218,6 +1218,62 @@ def create_kod_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figur
     return fig
 
 
+def create_dry_cooler_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create Dry Cooler performance chart.
+    Shows heat duty, fan power, and temperatures.
+    """
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    ax1 = fig.add_subplot(111)
+    
+    minutes = df['minute']
+    
+    # Try to get Dry Cooler data (assuming dry_cooler_0 for now or sum)
+    # Search for keys starting with 'dry_cooler_'
+    
+    heat_duty_cols = [c for c in df.columns if 'dry_cooler' in c and 'heat_duty_kw' in c]
+    fan_power_cols = [c for c in df.columns if 'dry_cooler' in c and 'fan_power_kw' in c]
+    temp_out_cols = [c for c in df.columns if 'dry_cooler' in c and 'outlet_temp_c' in c]
+    
+    data_source = "Simulation"
+    
+    if not heat_duty_cols:
+        # Fallback for demo/empty
+        ax1.text(0.5, 0.5, 'No Dry Cooler data available', 
+                 ha='center', va='center', transform=ax1.transAxes)
+        return fig
+        
+    # Aggregate or use first
+    if len(heat_duty_cols) > 1:
+        total_heat_duty = df[heat_duty_cols].sum(axis=1)
+        total_fan_power = df[fan_power_cols].sum(axis=1) if fan_power_cols else 0
+        avg_temp_out = df[temp_out_cols].mean(axis=1) if temp_out_cols else 0
+        data_source = f"Aggregate ({len(heat_duty_cols)} units)"
+    else:
+        total_heat_duty = df[heat_duty_cols[0]]
+        total_fan_power = df[fan_power_cols[0]] if fan_power_cols else 0
+        avg_temp_out = df[temp_out_cols[0]] if temp_out_cols else 0
+        data_source = heat_duty_cols[0].split('_heat_duty')[0]
+        
+    ax1.plot(minutes, total_heat_duty, label='Heat Rejection (kW)', color='orange')
+    ax1.plot(minutes, total_fan_power, label='Fan Power (kW)', color='blue', linestyle='--')
+    
+    ax2 = ax1.twinx()
+    ax2.plot(minutes, avg_temp_out, label='Outlet Temp (°C)', color='red', linestyle=':')
+    ax2.set_ylabel('Temperature (°C)')
+    
+    ax1.set_xlabel('Time (Minutes)')
+    ax1.set_ylabel('Power (kW)')
+    ax1.set_title(f'Dry Cooler Performance ({data_source})', fontsize=12)
+    
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper left', fontsize=8)
+    ax1.grid(True, alpha=0.3)
+    
+    return fig
+
+
 # ==============================================================================
 # GRAPH REGISTRY - Extensible configuration for all available graphs
 # ==============================================================================
@@ -1323,6 +1379,11 @@ GRAPH_REGISTRY: Dict[str, Dict[str, Any]] = {
         'name': 'Knock-Out Drum',
         'func': create_kod_separation_figure,
         'description': 'Gas density, velocity, and liquid drainage'
+    },
+    'dry_cooler_performance': {
+        'name': 'Dry Cooler Performance',
+        'func': create_dry_cooler_figure,
+        'description': 'Heat rejection, fan power, and outlet temperature'
     },
     # --- NEW LEGACY CHARTS ---
     'temporal_averages': {

@@ -150,6 +150,13 @@ class GraphToConfigAdapter:
                 "timestep_hours": 1.0,
                 "duration_hours": 8760,
                 "checkpoint_interval_hours": 168,
+                "max_pow_kwh": 0.0 # Placeholder
+            },
+            "thermal_components": {
+                "chillers": 0,
+                "dry_coolers": 0,
+                "heat_exchangers": 0,
+                "steam_generators": 0
             }
         }
         
@@ -198,6 +205,15 @@ class GraphToConfigAdapter:
                 config[section][subsection[0]] = node_config
             else:
                 config[section].update(node_config)
+        
+                config[section].update(node_config)
+                
+        # Count thermal components (since they are configured by count in v3.0)
+        thermal = config["thermal_components"]
+        thermal["chillers"] = sum(1 for n in self.nodes.values() if "ChillerNode" in n.type)
+        thermal["dry_coolers"] = sum(1 for n in self.nodes.values() if "DryCoolerNode" in n.type)
+        thermal["heat_exchangers"] = sum(1 for n in self.nodes.values() if "HeatExchangerNode" in n.type)
+        thermal["steam_generators"] = sum(1 for n in self.nodes.values() if "SteamGeneratorNode" in n.type)
         
         # Infer complex topology settings (e.g., isolated storage)
         self._infer_topology_settings(config)
@@ -579,6 +595,14 @@ class GraphToConfigAdapter:
             "wind": "DataSource",
             "grid": "DataSource",
             "water_supply": "DataSource",
+            
+            # Thermal
+            "ChillerNode": "Chiller",
+            "DryCoolerNode": "DryCooler",
+            "HeatExchangerNode": "HeatExchanger",
+            "chiller": "Chiller",
+            "dry_cooler": "DryCooler",
+            "hx": "HeatExchanger",
         }
         return MAPPING.get(gui_type, "PassiveComponent")
         

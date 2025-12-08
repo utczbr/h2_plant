@@ -36,17 +36,16 @@ class Coalescer(Component):
         **kwargs
     ):
         """
-        Initialize Coalescer.
-        
-        Args:
-            d_shell: Vessel diameter [m] (default 0.32)
-            l_elem: Element length [m] (default 1.00)
-            gas_type: 'H2' or 'O2' for viscosity calibration
         """
-        super().__init__(config=kwargs)
+        super().__init__(kwargs)
         self.d_shell = d_shell
         self.l_elem = l_elem
-        self.gas_type = gas_type.upper()
+        self.gas_type = gas_type
+        if 'component_id' in kwargs:
+            self.component_id = kwargs['component_id']
+        
+        # Initial State
+        self.pressure_drop_bar = 0.0
         
         # Validation
         if self.d_shell <= 0:

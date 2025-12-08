@@ -1,6 +1,6 @@
-
 from typing import Dict, Any
 from h2_plant.core.component import Component
+from h2_plant.core.stream import Stream
 
 class PSAUnit(Component):
     def __init__(self, component_id: str, gas_type: str):
@@ -9,12 +9,19 @@ class PSAUnit(Component):
         self.gas_type = gas_type
         self.feed_gas_kg_h = 0.0
         self.product_gas_kg_h = 0.0
+        self.input_stream = None
 
     def step(self, t: float) -> None:
         super().step(t)
         self.product_gas_kg_h = self.feed_gas_kg_h * 0.9 # 90% recovery
 
     def get_state(self) -> Dict[str, Any]:
+        return {
+            **super().get_state(),
+            "feed_gas_kg_h": self.feed_gas_kg_h,
+            "product_gas_kg_h": self.product_gas_kg_h
+        }
+
     def get_output(self, port_name: str) -> Any:
         """Get output from specific port."""
         if port_name == 'h2_out':
