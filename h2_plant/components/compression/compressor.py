@@ -157,8 +157,12 @@ class CompressorStorage(Component):
             max_transfer = self.max_flow_kg_h * self.dt
             self.actual_mass_transferred_kg = min(self.transfer_mass_kg, max_transfer)
             
-            # 2. Calculate compression physics
-            self._calculate_compression_physics()
+            # 2. Check for trivial/no compression
+            if self.outlet_pressure_bar <= self.inlet_pressure_bar:
+                self._calculate_trivial_pass_through()
+            else:
+                # 3. Calculate compression physics
+                self._calculate_compression_physics()
             
             # 3. Total energy for this step
             self.energy_consumed_kwh = (
@@ -263,6 +267,13 @@ class CompressorStorage(Component):
         # Actual stage pressure ratio for equal distribution
         self.stage_pressure_ratio = r_total ** (1.0 / self.num_stages)
     
+    def _calculate_trivial_pass_through(self) -> None:
+        """Handle case where outlet pressure <= inlet pressure (no compression)."""
+        self.compression_work_kwh = 0.0
+        self.chilling_work_kwh = 0.0
+        self.specific_energy_kwh_kg = 0.0
+        self.heat_removed_kwh = 0.0
+
     def _calculate_stages_fallback(self) -> None:
         """Fallback stage calculation if CoolProp unavailable."""
         p_in_pa = self.inlet_pressure_bar * self.BAR_TO_PA
@@ -318,15 +329,20 @@ class CompressorStorage(Component):
                 t_current = t_out_actual  # Final stage temperature
         
         # Convert to kWh/kg
-        self.specific_energy_kwh_kg = w_compression_total / (3.6e6)  # J/kg -> kWh/kg
+        compress_kwh_kg = w_compression_total * self.J_TO_KWH
         
         # Chilling energy
         q_chiller_j_kg = q_removed_total / self.chiller_cop
-        self.chilling_energy_kwh_kg = q_chiller_j_kg / (3.6e6)
+        self.chilling_energy_kwh_kg = q_chiller_j_kg * self.J_TO_KWH
         
-        # Calculate actual energy for this step
-        self.energy_consumed_kwh = self.specific_energy_kwh_kg * self.transfer_mass_kg
-        self.chilling_energy_kwh = self.chilling_energy_kwh_kg * self.transfer_mass_kg
+        # Specific energy includes both (matching main physics method)
+        self.specific_energy_kwh_kg = compress_kwh_kg + self.chilling_energy_kwh_kg
+        
+        # Calculate actual energy for this step using actual mass
+        self.compression_work_kwh = compress_kwh_kg * self.actual_mass_transferred_kg
+        self.chilling_work_kwh = self.chilling_energy_kwh_kg * self.actual_mass_transferred_kg
+        
+        # Note: energy_consumed_kwh is calculated in step() from work components
 
     def _calculate_compression_physics(self) -> None:
         """

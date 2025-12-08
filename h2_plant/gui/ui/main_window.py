@@ -30,7 +30,7 @@ from h2_plant.gui.core.graph_adapter import GraphToConfigAdapter, GraphNode, Gra
 # Node imports
 from h2_plant.gui.nodes.electrolysis import PEMStackNode, SOECStackNode, RectifierNode
 from h2_plant.gui.nodes.reforming import ATRReactorNode, WGSReactorNode, SteamGeneratorNode
-from h2_plant.gui.nodes.separation import PSAUnitNode, SeparationTankNode, CoalescerNode
+from h2_plant.gui.nodes.separation import PSAUnitNode, SeparationTankNode, CoalescerNode, KnockOutDrumNode
 from h2_plant.gui.nodes.thermal import HeatExchangerNode, ChillerNode
 from h2_plant.gui.nodes.fluid import ProcessCompressorNode, RecirculationPumpNode
 from h2_plant.gui.nodes.pumping import PumpNode 
@@ -110,7 +110,7 @@ GRAPH_HIERARCHY = {
     "Resource Consumption": ["water_consumption", "cumulative_energy"],
     "Efficiency": ["efficiency_curve"],
     "Physics & Degradation": ["polarization", "degradation", "compressor_ts", "module_power"],
-    "Thermal & Separation": ["chiller_cooling", "coalescer_separation"],
+    "Thermal & Separation": ["chiller_cooling", "coalescer_separation", "kod_separation"],
 }
 
 
@@ -808,7 +808,7 @@ class PlantEditorWindow(QMainWindow):
             # Thermal (NEW)
             ChillerNode,
             # Separation (NEW)
-            CoalescerNode,
+            CoalescerNode, KnockOutDrumNode,
             # Logic
             DemandSchedulerNode, EnergyPriceNode,
             # Logistics

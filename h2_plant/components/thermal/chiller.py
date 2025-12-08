@@ -65,6 +65,7 @@ class Chiller(Component):
         
         # State variables
         self.inlet_stream: Stream = Stream(0.0)
+        self.cooling_water_inlet: Optional[Stream] = None
         self.outlet_stream: Stream = Stream(0.0)
         self.cooling_load_kw: float = 0.0
         self.cooling_water_flow_kg_h: float = 0.0
@@ -91,7 +92,6 @@ class Chiller(Component):
     def initialize(self, dt: float, registry: Any) -> None:
         """Initialize component."""
         super().initialize(dt, registry)
-        self.initialized = True
         
     def _calculate_cooling_fallback(self) -> float:
         """
@@ -180,6 +180,25 @@ class Chiller(Component):
             self.logger.debug(f"Enthalpy calc failed, using fallback: {e}")
             Q_dot_W = self._calculate_cooling_fallback()
         
+        # Apply Cooling Capacity Cap
+        max_Q_W = self.cooling_capacity_kw * 1000.0 * self.efficiency
+        final_temp_k = self.target_temp_k
+        
+        if abs(Q_dot_W) > max_Q_W:
+            Q_dot_W = np.sign(Q_dot_W) * max_Q_W
+            self.logger.warning(
+                f"Chiller {self.component_id}: Capacity exceeded. "
+                f"Capped at {self.cooling_capacity_kw} kW (Eff={self.efficiency})"
+            )
+            # Recalculate outlet temperature based on limited Q
+            # h_out = h_in - Q / m
+            # Approximate T_out using Cp logic if strict H-T lookup is hard to inline here
+            # Or use simplified dT = Q / (m * Cp)
+            comp = self.inlet_stream.composition
+            Cp_est = 14300.0 if comp.get('H2', 0) > 0.5 else 918.0
+            delta_T_real = Q_dot_W / (mass_flow_kg_s * Cp_est)
+            final_temp_k = self.inlet_stream.temperature_k - delta_T_real
+
         # Convert to kW
         cooling_load_kw = Q_dot_W / 1000.0
         
@@ -189,25 +208,28 @@ class Chiller(Component):
         else:
             self.electrical_power_kw = 0.0
         
-        # --- Create outlet stream at exact target temperature ---
+        # --- Create outlet stream ---
         self.outlet_stream = Stream(
             mass_flow_kg_h=self.inlet_stream.mass_flow_kg_h,
-            temperature_k=self.target_temp_k,
+            temperature_k=final_temp_k,
             pressure_pa=outlet_pressure_pa,
             composition=self.inlet_stream.composition.copy()
         )
         
         # --- Update state ---
         self.cooling_load_kw = cooling_load_kw
-        self.heat_rejected_kw = abs(cooling_load_kw) / self.efficiency
+        # Heat rejected includes extracted heat + electrical work (imperfect COP)
+        # Typically Q_rejected = Q_cooling + W_compressor
+        self.heat_rejected_kw = abs(cooling_load_kw) + self.electrical_power_kw
         
         # Estimate cooling water flow (ΔT_cooling_water ≈ 10K)
         Cp_water = 4.18  # kJ/kg·K
         cooling_water_temp_rise = 10.0
         if self.heat_rejected_kw > 0:
+            # Formula: m_dot_h = (Q_kW / (Cp * dT)) * 3600
             self.cooling_water_flow_kg_h = (
-                self.heat_rejected_kw / (Cp_water * cooling_water_temp_rise / 3600.0)
-            )
+                self.heat_rejected_kw / (Cp_water * cooling_water_temp_rise)
+            ) * 3600.0
         else:
             self.cooling_water_flow_kg_h = 0.0
         
@@ -238,11 +260,21 @@ class Chiller(Component):
             return self.heat_rejected_kw
         elif port_name == "cooling_water_out":
             # Return heated cooling water stream
-            return Stream(
-                mass_flow_kg_h=self.cooling_water_flow_kg_h,
-                temperature_k=298.15 + 10.0,  # Heated by ~10K
-                pressure_pa=101325.0
-            )
+            if self.cooling_water_inlet:
+                # Use actual inlet conditions + heat
+                return Stream(
+                    mass_flow_kg_h=self.cooling_water_flow_kg_h,
+                    temperature_k=self.cooling_water_inlet.temperature_k + 10.0,
+                    pressure_pa=self.cooling_water_inlet.pressure_pa,
+                    composition=self.cooling_water_inlet.composition
+                )
+            else:
+                # Fallback purely for sizing (phantom stream warning)
+                return Stream(
+                    mass_flow_kg_h=self.cooling_water_flow_kg_h,
+                    temperature_k=298.15 + 10.0,
+                    pressure_pa=101325.0
+                )
         elif port_name == "electricity_in":
             # Return electrical power demand for this chiller
             return self.electrical_power_kw
@@ -254,7 +286,8 @@ class Chiller(Component):
             self.inlet_stream = value
             return value.mass_flow_kg_h
         elif port_name == "cooling_water_in" and isinstance(value, Stream):
-            # Cooling water is provided externally, just accept it
+            # Cooling water is provided externally
+            self.cooling_water_inlet = value
             return value.mass_flow_kg_h
         elif port_name == "electricity_in":
             # Accept electrical power allocation (orchestrator reserves this)

@@ -94,3 +94,42 @@ class CoalescerNode(ConfigurableNode):
         self.add_color_property('node_color', default=(150, 200, 150), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
         self.add_spacer('collapse_spacer', height=60)
+
+
+class KnockOutDrumNode(ConfigurableNode):
+    """
+    Knock-Out Drum node for liquid water removal from gas streams.
+    
+    A vertical separator vessel that removes liquid water droplets
+    from H2 or O2 streams using gravity separation.
+    """
+    __identifier__ = 'h2_plant.separation.knock_out_drum'
+    NODE_NAME = 'Knock-Out Drum'
+
+    def __init__(self):
+        super(KnockOutDrumNode, self).__init__()
+        self.enable_collapse()
+
+    def _init_ports(self):
+        self.add_input('gas_inlet', flow_type='gas')
+        self.add_output('gas_outlet', flow_type='gas')
+        self.add_output('liquid_drain', flow_type='water')
+
+    def _init_properties(self):
+        self.add_text_property('component_id', default='KOD-1', tab='Properties')
+
+        # Knock-Out Drum Tab
+        self.add_float_property(
+            'diameter_m', default=1.0, min_val=0.1, max_val=5.0, unit='m', tab='KOD'
+        )
+        self.add_float_property(
+            'delta_p_bar', default=0.05, min_val=0.0, max_val=1.0, unit='bar', tab='KOD'
+        )
+        self.add_enum_property(
+            'gas_species', options=['H2', 'O2'], default_index=0, tab='KOD'
+        )
+
+        self.add_color_property('node_color', default=(100, 150, 200), tab='Custom')
+        self.add_text_property('custom_label', default='', tab='Custom')
+        self.add_spacer('collapse_spacer', height=60)
+

@@ -34,6 +34,7 @@ COLORS = {
     'pump': '#795548',    # Brown
     'chiller': '#00BCD4',  # Cyan
     'coalescer': '#8BC34A',  # Light Green
+    'kod': '#42A5F5',        # Light Blue (Knock-Out Drum)
 }
 
 # ==============================================================================
@@ -1137,6 +1138,86 @@ def create_coalescer_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) ->
     return fig
 
 
+def create_kod_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create Knock-Out Drum separation performance chart.
+    Shows gas density, velocity status, and liquid drainage over time.
+    """
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    ax1 = fig.add_subplot(111)
+    
+    minutes = df['minute']
+    
+    # Try to get KOD data from simulation
+    rho_g = df.get('kod_rho_g', None)
+    v_real = df.get('kod_v_real', None)
+    v_max = df.get('kod_v_max', None)
+    liquid_drain = df.get('kod_liquid_drain_kg_h', None)
+    
+    if rho_g is None:
+        # Estimate from H2 production (fallback for demo)
+        H2_total = df['H2_soec'] + df['H2_pem']
+        # Estimate gas density (typical for H2 at 40 bar)
+        rho_g = np.clip(2.0 + H2_total * 0.01, 2.0, 4.0)
+        # Estimate velocities
+        v_real = np.clip(H2_total * 0.1, 0.1, 1.5)
+        v_max = 1.5  # Typical V_max for H2
+        # Estimate liquid drainage
+        liquid_drain = H2_total * 0.005 * 60  # kg/h
+        data_source = "Estimated"
+    else:
+        data_source = "Simulation Data"
+    
+    color1 = COLORS['kod']
+    
+    # Primary axis: Gas density
+    ax1.set_xlabel('Time (Minutes)')
+    ax1.set_ylabel('Gas Density (kg/m³)', color=color1)
+    line1 = ax1.plot(minutes, rho_g, color=color1, linewidth=2, label='ρ_g (kg/m³)')
+    ax1.tick_params(axis='y', labelcolor=color1)
+    ax1.fill_between(minutes, 0, rho_g, color=color1, alpha=0.1)
+    
+    # Secondary axis: Velocities
+    ax2 = ax1.twinx()
+    color2 = 'green'
+    color3 = 'red'
+    ax2.set_ylabel('Velocity (m/s)', color='black')
+    
+    line2 = ax2.plot(minutes, v_real, color=color2, linewidth=1.5, 
+                     linestyle='-', label='V_real')
+    if isinstance(v_max, (int, float)):
+        ax2.axhline(y=v_max, color=color3, linestyle='--', linewidth=1.5, 
+                    label=f'V_max = {v_max:.2f} m/s')
+        line3 = [ax2.lines[-1]]
+    else:
+        line3 = ax2.plot(minutes, v_max, color=color3, linewidth=1.5, 
+                         linestyle='--', label='V_max')
+    
+    ax2.tick_params(axis='y', labelcolor='black')
+    
+    # Combined legend
+    lines = line1 + line2 + line3
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, loc='upper right', fontsize=8)
+    
+    # Statistics
+    avg_rho = rho_g.mean() if hasattr(rho_g, 'mean') else np.mean(rho_g)
+    avg_v = v_real.mean() if hasattr(v_real, 'mean') else np.mean(v_real)
+    
+    # Check sizing status
+    if isinstance(v_max, (int, float)):
+        max_v_real = v_real.max() if hasattr(v_real, 'max') else np.max(v_real)
+        status = "OK" if max_v_real < v_max else "UNDERSIZED"
+    else:
+        status = "OK"
+    
+    ax1.set_title(f'Knock-Out Drum Performance ({data_source})\n'
+                  f'Avg ρ_g: {avg_rho:.2f} kg/m³ | Avg V: {avg_v:.3f} m/s | Status: {status}', 
+                  fontsize=12)
+    ax1.grid(True, alpha=0.3)
+    return fig
+
+
 # ==============================================================================
 # GRAPH REGISTRY - Extensible configuration for all available graphs
 # ==============================================================================
@@ -1237,6 +1318,11 @@ GRAPH_REGISTRY: Dict[str, Dict[str, Any]] = {
         'name': 'Coalescer Separation',
         'func': create_coalescer_separation_figure,
         'description': 'Pressure drop and liquid removal'
+    },
+    'kod_separation': {
+        'name': 'Knock-Out Drum',
+        'func': create_kod_separation_figure,
+        'description': 'Gas density, velocity, and liquid drainage'
     },
     # --- NEW LEGACY CHARTS ---
     'temporal_averages': {

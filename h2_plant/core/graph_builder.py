@@ -77,6 +77,10 @@ class PlantGraphBuilder:
             from h2_plant.components.separation.coalescer import Coalescer
             return Coalescer(**node.params)
 
+        elif node.type == "KnockOutDrum":
+            from h2_plant.components.separation.knock_out_drum import KnockOutDrum
+            return KnockOutDrum(**node.params)
+
         else:
             logger.warning(f"Unknown component type: {node.type}")
             return PassiveComponent()

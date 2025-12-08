@@ -11,7 +11,6 @@ Supports:
 - Temperature rise from pump work
 """
 
-import CoolProp.CoolProp as CP
 from typing import Dict, Any, Optional
 import logging
 
@@ -22,11 +21,18 @@ from h2_plant.core.constants import StandardConditions, ConversionFactors
 
 logger = logging.getLogger(__name__)
 
-# CoolProp availability
+# CoolProp availability check with proper guards
 try:
-    CP.PropsSI('H', 'P', 101325, 'T', 298.15, 'Water')
-    COOLPROP_AVAILABLE = True
-except:
+    import CoolProp.CoolProp as CP
+    try:
+        CP.PropsSI('H', 'P', 101325, 'T', 298.15, 'Water')
+        COOLPROP_AVAILABLE = True
+    except Exception:
+        COOLPROP_AVAILABLE = False
+        logger.warning("CoolProp detected but failed functional check.")
+except ImportError:
+    CP = None
+    COOLPROP_AVAILABLE = False
     logger.warning("CoolProp not available - WaterPumpThermodynamic will use simplified model")
 
 try:
@@ -123,11 +129,11 @@ class WaterPumpThermodynamic(Component):
                 "CoolProp not available, will use simplified incompressible model"
             )
         
+        p_target_str = f"{self.target_pressure_pa/1e5:.1f} bar" if self.target_pressure_pa else "not set"
         logger.info(
             f"WaterPumpThermodynamic '{self.component_id}': "
             f"η_is={self.eta_is:.2f}, η_m={self.eta_m:.2f}, "
-            f"P_target={self.target_pressure_pa/1e5:.1f} bar" if self.target_pressure_pa 
-            else "P_target=not set"
+            f"P_target={p_target_str}"
         )
 
     def step(self, t: float) -> None:
@@ -374,6 +380,9 @@ class WaterPumpThermodynamic(Component):
             # Special port for reverse mode testing
             self.outlet_stream = value
             return value.mass_flow_kg_h
+        elif port_name == 'electricity_in':
+            # Accept power input (for demand validation or monitoring)
+            return float(value) if isinstance(value, (int, float)) else 0.0
         return 0.0
 
     def get_output(self, port_name: str) -> Any:

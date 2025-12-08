@@ -130,7 +130,7 @@ class WaterMixer(Component):
             logger.warning(f"WaterMixer: Invalid pressure {value.pressure_pa}Pa rejected")
             return 0.0
         
-        if len(self.inlet_streams) < self.max_inlet_streams:
+        if port_name in self.inlet_streams or len(self.inlet_streams) < self.max_inlet_streams:
             self.inlet_streams[port_name] = value
             return value.mass_flow_kg_h
         else:
@@ -216,9 +216,26 @@ class WaterMixer(Component):
                         h_i_kJ_kg = h_i_J_kg / 1000.0
                     except (ValueError, RuntimeError):
                         # Fallback if LUT fails/bounds
-                         h_i_kJ_kg = CoolPropLUT.PropsSI('H', 'T', T_i_K, 'P', P_i_Pa, self.fluid_type) / 1000.0
+                         if CoolPropLUT:
+                             h_i_kJ_kg = CoolPropLUT.PropsSI('H', 'T', T_i_K, 'P', P_i_Pa, self.fluid_type) / 1000.0
+                         elif CP:
+                             h_i_kJ_kg = CP.PropsSI('H', 'T', T_i_K, 'P', P_i_Pa, self.fluid_type) / 1000.0
+                         else:
+                             raise RuntimeError("No CoolProp backend available")
                 else:
-                    h_i_kJ_kg = CoolPropLUT.PropsSI('H', 'T', T_i_K, 'P', P_i_Pa, self.fluid_type) / 1000.0
+                    if CoolPropLUT:
+                        h_i_kJ_kg = CoolPropLUT.PropsSI('H', 'T', T_i_K, 'P', P_i_Pa, self.fluid_type) / 1000.0
+                    elif CP:
+                         h_i_kJ_kg = CP.PropsSI('H', 'T', T_i_K, 'P', P_i_Pa, self.fluid_type) / 1000.0
+                    else:
+                         raise RuntimeError("No CoolProp backend available")
+
+                # Validate enthalpy (check for 0.0 return on error from wrapper)
+                if abs(h_i_kJ_kg) < 1e-6:
+                     # It's possible for enthalpy to be near 0 depending on reference state,
+                     # but typically for water at >0C it is significant.
+                     # CoolPropLUT wrapper returns 0.0 on error.
+                     logger.warning(f"WaterMixer: Enthalpy calculation returned 0.0 for T={T_i_K}K, P={P_i_Pa}Pa")
                 
                 # Mass balance: sum of mass flow rates
                 total_mass_in += m_dot_i
@@ -256,7 +273,12 @@ class WaterMixer(Component):
         
         try:
             # Get temperature from enthalpy and pressure using Cached CoolProp (Inverse lookup not supported by LUTManager)
-            T_out_K = CoolPropLUT.PropsSI('T', 'H', h_out_J_kg, 'P', P_out_Pa, self.fluid_type)
+            if CoolPropLUT:
+                T_out_K = CoolPropLUT.PropsSI('T', 'H', h_out_J_kg, 'P', P_out_Pa, self.fluid_type)
+            elif CP:
+                T_out_K = CP.PropsSI('T', 'H', h_out_J_kg, 'P', P_out_Pa, self.fluid_type)
+            else:
+                raise RuntimeError("No CoolProp backend available")
             
             # --- Entropy Verification ---
             # s_out = CP.PropsSI('S', 'H', h_out_J_kg, 'P', P_out_Pa, self.fluid_type)
@@ -266,7 +288,7 @@ class WaterMixer(Component):
 
             # --- Phase Detection ---
             # 0 = liquid (typically)
-            phase_idx = CoolPropLUT.PropsSI('Phase', 'H', h_out_J_kg, 'P', P_out_Pa, self.fluid_type)
+            # phase_idx = CoolPropLUT.PropsSI('Phase', 'H', h_out_J_kg, 'P', P_out_Pa, self.fluid_type)
             # Note: Phase index varies by backend. Using text check might be safer or just logging.
             # But effectively if T_out calculated, we are good.
             

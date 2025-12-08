@@ -129,6 +129,10 @@ class SOECOperator(Component):
         self.accumulated_wear = np.zeros(self.num_modules, dtype=float)
         self.cycle_counts = np.zeros(self.num_modules, dtype=int)
         self.previous_real_states = np.copy(self.real_states)
+        
+        # Internal setpoint tracking (updated via receive_input)
+        self._power_setpoint_mw = 0.0
+        self.available_water_kg_h = float('inf') # Default infinite if not supplied
 
     def _update_virtual_map(self):
         """Rotates the virtual map."""
@@ -169,38 +173,65 @@ class SOECOperator(Component):
         diff = reference_power - current_total
         self.difference_history.append(diff)
 
-    def step(self, reference_power_mw: float = None, t: float = None) -> Tuple[float, float, float]:
+    def step(self, t: float = 0.0) -> Tuple[float, float, float]:
         """
-        Executes one simulation step (1 minute).
+        Executes one simulation step.
         
         Args:
-            reference_power_mw: Target power setpoint.
-            t: Simulation time (optional, for Component compatibility)
-            
-        Returns:
-            Tuple(actual_power_mw, h2_produced_kg, steam_consumed_kg)
+            t: Simulation time
         """
-        # Compatibility handling
-        if reference_power_mw is None:
-            # If called as step(t), we need a stored setpoint.
-            # For now, assume 0.0 or raise error if not set?
-            # Or just default to 0.0
-            reference_power_mw = 0.0
-
-        # 0. Safety Clamp
+        super().step(t)
+        
+        # 1. Determine Power Setpoint
+        # Use internal setpoint from ports
+        reference_power_mw = self._power_setpoint_mw
+            
+        # 2. Constraints & Clamping
         system_max_capacity = self.num_modules * self.effective_max_module_power
+        
+        # Clamp negative power (Safety)
+        reference_power_mw = max(0.0, reference_power_mw)
+        
+        # Clamp to system capacity
         clamped_reference = min(reference_power_mw, system_max_capacity)
         
-        # 1. Rotation Logic
-        if self.rotation_enabled and self.current_minute > 0 and self.current_minute % 60 == 0:
+        # Calculate max power limited by available steam
+        # h2_prod_rate = 1000 / efficiency
+        # max_h2 = available_water / steam_input_ratio
+        # max_energy_mwh = max_h2 / h2_prod_rate
+        # max_power_mw = max_energy_mwh / dt
+        
+        if self.dt > 0 and self.available_water_kg_h < float('inf'):
+            h2_prod_rate_kg_mwh = 1000.0 / self.current_efficiency_kwh_kg
+            max_h2_from_steam = self.available_water_kg_h * self.dt / self.steam_input_ratio
+            max_energy_mwh = max_h2_from_steam / h2_prod_rate_kg_mwh
+            max_power_water_mw = max_energy_mwh / self.dt
+            
+            # Apply water limit
+            clamped_reference = min(clamped_reference, max_power_water_mw)
+
+        # 3. Rotation Logic (Correct Time Base)
+        # Calculate elapsed minutes based on dt
+        minutes_passed = self.dt * 60.0
+        
+        # We only run one rotation check per step, but we update the counter correctly
+        # Ideally we'd loop if dt > 1 minute, but for coarser/finer steps:
+        # Check if we crossed a 60-minute boundary
+        
+        prev_minute = self.current_minute
+        self.current_minute += minutes_passed
+        
+        # If we crossed a multiple of 60 since last check
+        # (int(prev/60) < int(curr/60))
+        if self.rotation_enabled and (int(prev_minute / 60) < int(self.current_minute / 60)):
             self._update_virtual_map()
             
-        # 2. Execute Simulation Step
+        # 4. Execute Simulation Step
         self._simulate_step(clamped_reference)
         
         current_total_power = self._get_total_power(self.real_powers)
         
-        # 3. Wear Tracking
+        # 5. Wear Tracking
         self.accumulated_wear += self.real_powers
         
         for i in range(self.num_modules):
@@ -211,13 +242,8 @@ class SOECOperator(Component):
                 
         self.previous_real_states = np.copy(self.real_states)
         
-        # 4. Production Calculation
-        # Use self.dt (in hours) for energy calculation
-        if hasattr(self, 'dt'):
-            energy_consumed_mwh = current_total_power * self.dt
-        else:
-            # Fallback for legacy calls without initialize()
-            energy_consumed_mwh = current_total_power / 60.0
+        # 6. Production Calculation
+        energy_consumed_mwh = current_total_power * self.dt
             
         h2_prod_rate_kg_mwh = 1000.0 / self.current_efficiency_kwh_kg
         
@@ -225,18 +251,16 @@ class SOECOperator(Component):
         self.total_h2_produced += h2_produced_kg
         self.last_step_h2_kg = h2_produced_kg # Store for get_output
         
-        # Steam Input (Total Flow)
+        # Steam Input
         steam_input_kg = h2_produced_kg * self.steam_input_ratio
-        self.total_steam_consumed += steam_input_kg # Tracking total input
+        self.total_steam_consumed += steam_input_kg
         
-        # Water Output (Unreacted Steam)
-        # Reaction consumes 9.0 kg H2O per kg H2
+        # Water Output
         reaction_steam_kg = h2_produced_kg * 9.0
         self.last_water_output_kg = max(0.0, steam_input_kg - reaction_steam_kg)
         
-        # 5. Update Step
+        # Update Step
         self.previous_total_power = current_total_power
-        self.current_minute += 1
         
         return current_total_power, h2_produced_kg, steam_input_kg
 
@@ -253,8 +277,7 @@ class SOECOperator(Component):
         """
         if port_name == 'power_in':
             if isinstance(value, (int, float)):
-                # Could set setpoint here, or strictly power available
-                # For now just accept it
+                self._power_setpoint_mw = float(value)
                 return float(value)
         elif port_name in ('water_in', 'steam_in'):
             if hasattr(value, 'mass_flow_kg_h'):

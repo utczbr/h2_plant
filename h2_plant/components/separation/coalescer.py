@@ -48,6 +48,12 @@ class Coalescer(Component):
         self.l_elem = l_elem
         self.gas_type = gas_type.upper()
         
+        # Validation
+        if self.d_shell <= 0:
+            raise ValueError(f"d_shell must be positive, got {self.d_shell}")
+        if self.l_elem <= 0:
+            raise ValueError(f"l_elem must be positive, got {self.l_elem}")
+        
         # Pre-calculate geometric constant
         self.area_shell = (math.pi / 4) * (self.d_shell ** 2)
         
@@ -102,6 +108,11 @@ class Coalescer(Component):
         # Density from stream (ideal gas)
         rho_mix = in_stream.density_kg_m3
         if rho_mix <= 0:
+            self.output_stream = Stream(0.0)
+            self.drain_stream = Stream(0.0)
+            self.current_delta_p_bar = 0.0
+            self.current_power_loss_w = 0.0
+            self._step_liq_removed = 0.0
             return 0.0
 
         # 2. Calculate Hydrodynamics (CoalescerModel.py:86-99)
