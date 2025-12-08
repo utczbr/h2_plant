@@ -18,3 +18,5 @@ test_reports/
 vendor/
 *.png
 *.zip
+
+# .h2_plant/ removed to allow tracking of LFS cache files

@@ -60,7 +60,8 @@ class LUTConfig:
     interpolation: Literal['linear', 'cubic'] = 'linear'
     
     # Cache directory
-    cache_dir: Path = Path.home() / '.h2_plant' / 'lut_cache'
+    # Updated to be project-relative: <project_root>/.h2_plant/lut_cache
+    cache_dir: Path = Path(__file__).resolve().parents[2] / '.h2_plant' / 'lut_cache'
 
 
 class LUTManager(Component):

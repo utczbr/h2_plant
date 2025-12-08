@@ -24,7 +24,9 @@ class DataProcessor:
     
     def __init__(self, output_dir: str = None):
         self.output_dir = Path(output_dir) if output_dir else Path(__file__).parent
-        self.weather_file = Path("/home/stuart/Documentos/Planta Hidrogenio/Energy_by_Wind/weather_data_2023-2024.csv")
+        # Determine project root (3 levels up from this file: h2_plant/data/data_processor.py -> h2_plant/data -> h2_plant -> root)
+        project_root = Path(__file__).resolve().parents[2]
+        self.weather_file = project_root / "tools/wind_analysis/weather_data_2023-2024.csv"
         self.api_key = '21161037-2eab-4624-9c2c-04408915773a'
         
         # Turbine Configuration (Vestas V117/3600)
