@@ -91,12 +91,14 @@ class Orchestrator:
         soec = None
         pem = None
         
-        for comp in self.components.values():
+        for comp_id, comp in self.components.items():
+            class_name = comp.__class__.__name__
+            
             # Check for SOEC
-            if hasattr(comp, 'soec_state') or comp.__class__.__name__ == 'SOECOperator':
+            if hasattr(comp, 'soec_state') or class_name == 'SOECOperator':
                 soec = comp
             # Check for PEM
-            if hasattr(comp, 'V_cell') or comp.__class__.__name__ == 'DetailedPEMElectrolyzer':
+            if hasattr(comp, 'V_cell') or class_name == 'DetailedPEMElectrolyzer':
                 pem = comp
 
         # 2. Initialize Strategy based on Topology
@@ -115,10 +117,8 @@ class Orchestrator:
         soec_capacity = 0.0
         if soec:
              # Calculate total capacity: num_modules * max_power * limit
-             # We need to access the spec from context
              spec = self.context.physics.soec_cluster
-             # Assuming 6 modules as per legacy default if not in spec
-             num_modules = 6 
+             num_modules = 6  # Legacy default
              soec_capacity = num_modules * spec.max_power_nominal_mw * spec.optimal_limit
             
         pem_max = 0.0
@@ -173,7 +173,10 @@ class Orchestrator:
             P_soec_actual = 0.0
             h2_soec = 0.0
             if soec:
-                P_soec_actual, h2_soec, steam_soec = soec.step(result.P_soec)
+                # Set power setpoint FIRST via receive_input (fixes power dispatch)
+                soec.receive_input('power_in', result.P_soec, 'electricity')
+                # Now step with TIME (not power!)
+                P_soec_actual, h2_soec, steam_soec = soec.step(t_hours)
                 self.simulation_state['P_soec_prev'] = P_soec_actual
                 
                 # --- PROCESS FLOW: SOEC Downstream ---

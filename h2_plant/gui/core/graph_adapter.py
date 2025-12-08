@@ -92,6 +92,7 @@ class GraphToConfigAdapter:
         "OxygenSourceNode": ("external_inputs", "oxygen_source"),
         "HeatSourceNode": ("external_inputs", "heat_source"),
         "MixerNode": ("oxygen_management", "mixer"),
+        "ArbitrageNode": ("pathway",),  # Map directly to pathway section
     }
     
     def __init__(self):
@@ -183,7 +184,7 @@ class GraphToConfigAdapter:
             # If the key is not found, try to map known subclasses
             lookup_type = node_type_short
             if lookup_type == "PEMStackNode": lookup_type = "ElectrolyzerNode"
-            if lookup_type == "SOECStackNode": lookup_type = "ElectrolyzerNode" # Or separate config?
+            # SOECStackNode should NOT be aliased to ElectrolyzerNode - it has its own mapping in NODE_TYPE_MAPPING
             if lookup_type == "RectifierNode": lookup_type = "PowerElectronicsNode" # Not in mapping yet
             
             section, *subsection = self.NODE_TYPE_MAPPING.get(lookup_type, (None,))
@@ -351,7 +352,9 @@ class GraphToConfigAdapter:
             'consumer': cons_wl, 'ConsumerNode': cons_wl,
             'pump': pump_wl, 'PumpNode': pump_wl,
             'water_mixer': wmix_wl, 'WaterMixerNode': wmix_wl,
-            'mixer': mix_wl, 'MixerNode': mix_wl
+            'mixer': mix_wl, 'MixerNode': mix_wl,
+            'arbitrage': ['h2_price_eur_kg', 'ppa_price_eur_mwh', 'allocation_strategy', 'component_id'],
+            'ArbitrageNode': ['h2_price_eur_kg', 'ppa_price_eur_mwh', 'allocation_strategy', 'component_id']
         }
         
         # Get mapping and whitelist for this node type
@@ -405,9 +408,9 @@ class GraphToConfigAdapter:
         
         # Custom handlers
         # Map specific types to generic config flags if needed
-        is_electrolyzer = node_type_suffix in ['pem', 'soec']
+        is_electrolyzer = node_type_suffix in ['PEMStackNode', 'SOECStackNode', 'ElectrolyzerNode']
         
-        if is_electrolyzer or node_type_suffix in ["atr", "battery", "oxygen", "heat"]:
+        if is_electrolyzer or node_type_suffix in ["ATRSourceNode", "ATRReactorNode", "BatteryNode", "OxygenSourceNode", "HeatSourceNode"]:
             config["enabled"] = True
             
         if node.type == "WaterTreatmentNode": # Check suffix if used
@@ -446,7 +449,7 @@ class GraphToConfigAdapter:
         
         # Check: At least one production source
         has_production = any(
-            n.type in ["ElectrolyzerNode", "ATRSourceNode"] 
+            n.type.split('.')[-1] in ["ElectrolyzerNode", "ATRSourceNode", "PEMStackNode", "SOECStackNode"] 
             for n in self.nodes.values()
         )
         if not has_production:

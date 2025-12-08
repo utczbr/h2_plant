@@ -18,14 +18,16 @@ from h2_plant.core.exceptions import ConfigurationError
 
 # Component imports
 # from h2_plant.components.production.electrolyzer_source import ElectrolyzerProductionSource
-from h2_plant.components.production.atr_source import ATRProductionSource
-from h2_plant.components.storage.tank_array import TankArray
+from h2_plant.components.reforming.atr_reactor import ATRReactor
+# from h2_plant.components.production.atr_source import ATRProductionSource
+# from h2_plant.components.storage.tank_array import TankArray
 from h2_plant.components.storage.source_isolated_tanks import (
     SourceIsolatedTanks, SourceTag
 )
 from h2_plant.components.storage.oxygen_buffer import OxygenBuffer
-from h2_plant.components.compression.filling_compressor import FillingCompressor
-from h2_plant.components.compression.outgoing_compressor import OutgoingCompressor
+# from h2_plant.components.compression.filling_compressor import FillingCompressor
+# from h2_plant.components.compression.outgoing_compressor import OutgoingCompressor
+from h2_plant.components.compression.compressor import CompressorStorage
 from h2_plant.components.utility.demand_scheduler import DemandScheduler
 from h2_plant.components.utility.energy_price_tracker import EnergyPriceTracker
 from h2_plant.optimization.lut_manager import LUTManager
@@ -37,11 +39,11 @@ from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhance
 from h2_plant.components.water.quality_test import WaterQualityTestBlock
 from h2_plant.components.water.treatment import WaterTreatmentBlock
 from h2_plant.components.water.storage import UltrapureWaterStorageTank
-from h2_plant.components.water.pump import WaterPump
+from h2_plant.components.water.water_pump import WaterPumpThermodynamic as WaterPump
 
 # PEM/SOEC component imports
-from h2_plant.components.production.pem_electrolyzer_detailed import DetailedPEMElectrolyzer
-from h2_plant.components.electrolysis.soec_cluster_wrapper import SOECClusterWrapper
+from h2_plant.components.electrolysis.pem_electrolyzer import DetailedPEMElectrolyzer
+from h2_plant.components.electrolysis.soec_operator import SOECOperator as SOECClusterWrapper # Alias for compatibility
 # from h2_plant.components.pathways.dual_path_coordinator import DualPathCoordinator
 
 # V3.0 Indexed component imports
@@ -195,13 +197,15 @@ class PlantBuilder:
         # SOEC support
         if hasattr(prod_cfg, 'soec') and prod_cfg.soec and prod_cfg.soec.enabled:
             print(f"DEBUG: Building SOEC Cluster with {getattr(prod_cfg.soec, 'num_modules', 6)} modules")
-            soec_cluster = SOECClusterWrapper(
-                max_power_mw=prod_cfg.soec.max_power_mw,
-                num_modules=getattr(prod_cfg.soec, 'num_modules', 6),
-                t_op_h_initial=0.0
-            )
+            soec_config = {
+                'max_power_nominal_mw': prod_cfg.soec.max_power_nominal_mw,
+                'num_modules': getattr(prod_cfg.soec, 'num_modules', 6),
+                't_op_h_initial': 0.0,
+                'component_id': 'soec_cluster'
+            }
+            soec_cluster = SOECClusterWrapper(soec_config)
             self.registry.register(ComponentID.SOEC_CLUSTER, soec_cluster, component_type='production')
-            logger.debug(f"Registered SOEC cluster: {prod_cfg.soec.max_power_mw} MW ({getattr(prod_cfg.soec, 'num_modules', 6)} modules)")
+            logger.debug(f"Registered SOEC cluster: {prod_cfg.soec.max_power_nominal_mw} MW ({getattr(prod_cfg.soec, 'num_modules', 6)} modules)")
         else:
             print(f"DEBUG: SOEC config missing or disabled: {getattr(prod_cfg, 'soec', 'Missing')}")
         
@@ -341,13 +345,26 @@ class PlantBuilder:
         """Build compression components from configuration."""
         comp_cfg = self.config.compression
         
-        filling_comp = FillingCompressor(**comp_cfg.filling_compressor.__dict__)
+        # Use CompressorStorage for both filling and outgoing
+        fc_cfg = comp_cfg.filling_compressor
+        filling_comp = CompressorStorage(
+            max_flow_kg_h=fc_cfg.max_flow_kg_h,
+            inlet_pressure_bar=fc_cfg.inlet_pressure_bar,
+            outlet_pressure_bar=fc_cfg.outlet_pressure_bar,
+            isentropic_efficiency=fc_cfg.efficiency
+        )
         self.registry.register(ComponentID.FILLING_COMPRESSOR, filling_comp, component_type='compression')
         
-        outgoing_comp = OutgoingCompressor(**comp_cfg.outgoing_compressor.__dict__)
+        oc_cfg = comp_cfg.outgoing_compressor
+        outgoing_comp = CompressorStorage(
+            max_flow_kg_h=oc_cfg.max_flow_kg_h,
+            inlet_pressure_bar=oc_cfg.inlet_pressure_bar,
+            outlet_pressure_bar=oc_cfg.outlet_pressure_bar,
+            isentropic_efficiency=oc_cfg.efficiency
+        )
         self.registry.register(ComponentID.OUTGOING_COMPRESSOR, outgoing_comp, component_type='compression')
         
-        logger.debug("Registered compression components")
+        logger.debug("Registered compression components (CompressorStorage)")
     
     def _build_utilities(self) -> None:
         """Build utility components from configuration."""
@@ -477,14 +494,23 @@ class PlantBuilder:
             self.registry.register("ultrapure_water_storage_0", storage, component_type='water')
             
         if wt_cfg.pumps.pump_a.enabled:
-            pa_params = {k: v for k, v in wt_cfg.pumps.pump_a.__dict__.items() if k != 'enabled'}
-            pump_a = WaterPump(pump_id='pump_a', **pa_params)
-            self.registry.register(ComponentID.WATER_PUMP_A, pump_a, component_type='water')
-
+            # Filter params for WaterPumpThermodynamic
+            # It expects eta_is, eta_m, target_pressure_pa.
+            # We can assume default efficiency if not in config, or map 'efficiency' to 'eta_is'.
+            # Ignoring 'power_kw' as it's not in __init__.
+            
+            pump_a = WaterPump(
+                pump_id='pump_a',
+                target_pressure_pa=500000.0 # Default 5 bar? Or derived from config?
+            )
+            self.registry.register('pump_a', pump_a, component_type='water')
+            
         if wt_cfg.pumps.pump_b.enabled:
-            pb_params = {k: v for k, v in wt_cfg.pumps.pump_b.__dict__.items() if k != 'enabled'}
-            pump_b = WaterPump(pump_id='pump_b', **pb_params)
-            self.registry.register(ComponentID.WATER_PUMP_B, pump_b, component_type='water')
+            pump_b = WaterPump(
+                pump_id='pump_b',
+                target_pressure_pa=500000.0
+            )
+            self.registry.register('pump_b', pump_b, component_type='water')
         
         logger.debug("Registered water treatment components")
 
@@ -588,14 +614,16 @@ class PlantBuilder:
                 efficient_threshold=optimal_limit
             )
         else:
-            logger.info("Building SOEC cluster using reference implementation wrapper")
-            soec = SOECClusterWrapper(
-                num_modules=num_modules,
-                max_nominal_power_mw=max_power_nom,
-                optimal_limit=optimal_limit,
-                rotation_enabled=rotation,
-                real_off_modules=off_modules
-            )
+            logger.info("Building SOEC cluster using reference implementation wrapper (SOECOperator)")
+            soec_config = {
+                'num_modules': num_modules,
+                'max_power_nominal_mw': max_power_nom,
+                'optimal_limit': optimal_limit,
+                'rotation_enabled': rotation,
+                'real_off_modules': off_modules,
+                'component_id': 'soec_cluster'
+            }
+            soec = SOECClusterWrapper(soec_config)
         
         self.registry.register(ComponentID.SOEC_CLUSTER, soec, component_type='soec_production')
         # Alias for indexed topology
@@ -717,7 +745,11 @@ class PlantBuilder:
         elif soec_cfg:
             has_soec = soec_cfg.enabled
         else:
-            has_soec = False
+            # Fallback to legacy production.soec (GUI adapter path)
+            has_soec = (self.config.production and 
+                       hasattr(self.config.production, 'soec') and
+                       self.config.production.soec and 
+                       self.config.production.soec.enabled)
         
         if not (has_pem or has_soec):
             logger.debug("Dual-path coordinator not needed (no PEM/SOEC)")
@@ -739,9 +771,15 @@ class PlantBuilder:
             pathway_ids.append(ComponentID.PEM_ELECTROLYZER_DETAILED.value)
             
         # Create coordinator
+        # Extract economic parameters from pathway config (configured by ArbitrageNode)
+        h2_price = getattr(self.config.pathway, 'h2_price_eur_kg', 9.60)
+        ppa_price = getattr(self.config.pathway, 'ppa_price_eur_mwh', 50.0)
+
         coordinator = DualPathCoordinator(
             pathway_ids=pathway_ids,
-            allocation_strategy=self.config.pathway.allocation_strategy
+            allocation_strategy=self.config.pathway.allocation_strategy,
+            h2_price_kg=h2_price,
+            ppa_price_eur_mwh=ppa_price
         )
         
         # Set arbitrage threshold if available (it's not in init but used in logic)
@@ -866,8 +904,8 @@ class PlantBuilder:
             
         cfg = self.config.fluid_components
         
-        from h2_plant.components.water.pump import WaterPump
-        from h2_plant.components.compression.filling_compressor import FillingCompressor
+        from h2_plant.components.water.water_pump import WaterPumpThermodynamic as WaterPump
+        from h2_plant.components.compression.compressor import CompressorStorage
         
         # Pumps (P-1, P-2, P-3)
         for i in range(cfg.pumps):
@@ -880,9 +918,9 @@ class PlantBuilder:
             self.registry.register(f"pump_{i}", pump, component_type='fluid')
             
         # Compressors (C-1 through C-7)
-        # Using FillingCompressor as generic compressor for now
+        # Using CompressorStorage as generic compressor for now
         for i in range(cfg.compressors):
-            comp = FillingCompressor(
+            comp = CompressorStorage(
                 max_flow_kg_h=100.0,
                 inlet_pressure_bar=1.0,  # Placeholder
                 outlet_pressure_bar=30.0 # Placeholder

@@ -47,7 +47,9 @@ class DualPathCoordinator(Component):
         self,
         pathway_ids: List[str],
         allocation_strategy: AllocationStrategy = AllocationStrategy.COST_OPTIMAL,
-        demand_scheduler_id: str = 'demand_scheduler'
+        demand_scheduler_id: str = 'demand_scheduler',
+        h2_price_kg: float = 9.6,
+        ppa_price_eur_mwh: float = 50.0
     ):
         super().__init__()
 
@@ -66,8 +68,8 @@ class DualPathCoordinator(Component):
         self.SOEC_MAX_CAPACITY = 11.52  # MW (6 * 1.92)
         self.MAX_PEM_POWER = 5.0  # MW
         self.MIN_PEM_POWER = 0.25  # MW (Legacy Alignment)
-        self.PPA_PRICE = 50.0  # EUR/MWh
-        self.H2_PRICE_KG = 9.6  # EUR/kg
+        self.PPA_PRICE = ppa_price_eur_mwh  # EUR/MWh
+        self.H2_PRICE_KG = h2_price_kg  # EUR/kg
         self.SOEC_KWH_KG = 37.5  # kWh/kg
         self.ARBITRAGE_THRESHOLD = 306.0  # EUR/MWh (calculated)
 

@@ -13,7 +13,41 @@ import logging
 from h2_plant.core.component import Component
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.enums import TankState
-from h2_plant.components.storage.tank_array import TankArray
+from h2_plant.core.enums import TankState
+# from h2_plant.components.storage.tank_array import TankArray
+
+class TankArray:
+    """Simple TankArray implementation to replace missing component."""
+    def __init__(self, n_tanks: int, capacity_kg: float, pressure_bar: float):
+        self.n_tanks = n_tanks
+        self.capacity_kg = capacity_kg
+        self.pressure_bar = pressure_bar
+        self.current_mass = 0.0
+        self.max_mass = n_tanks * capacity_kg
+        
+    def initialize(self, dt: float, registry: Any) -> None:
+        pass
+        
+    def step(self, t: float) -> None:
+        pass
+        
+    def fill(self, mass_kg: float) -> tuple[float, float]:
+        space = self.max_mass - self.current_mass
+        stored = min(mass_kg, space)
+        self.current_mass += stored
+        overflow = mass_kg - stored
+        return stored, overflow
+        
+    def discharge(self, mass_kg: float) -> float:
+        discharged = min(mass_kg, self.current_mass)
+        self.current_mass -= discharged
+        return discharged
+        
+    def get_total_mass(self) -> float:
+        return self.current_mass
+        
+    def get_available_capacity(self) -> float:
+        return self.max_mass - self.current_mass
 
 logger = logging.getLogger(__name__)
 

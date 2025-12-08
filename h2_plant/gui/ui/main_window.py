@@ -56,6 +56,7 @@ class AllNodesListWidget(QListWidget):
         self.graph = graph
         self.setDragEnabled(True) 
         self.setSelectionMode(QListWidget.SingleSelection)
+        self.setDragDropMode(QListWidget.DragOnly)
         self.setAcceptDrops(False)
 
     def startDrag(self, supportedActions):
@@ -69,27 +70,20 @@ class AllNodesListWidget(QListWidget):
             
         mimeData = QMimeData()
         
-        # NodeGraphQt expects the full node type: {__identifier__}.{NODE_NAME}
-        # For example: "h2_plant.electrolysis.pem.PEM"
         node_identifier = node_class.__identifier__
-        node_name = node_class.NODE_NAME
-        full_node_type = f"{node_identifier}.{node_name}"
+        node_class_name = node_class.__name__
+        full_node_type = f"{node_identifier}.{node_class_name}"
         
-        # 1. Set standard text (generic fallback)
-        mimeData.setText(full_node_type)
+        # NodeGraphQt requires a specific URN format: "nodegraphqt::node:{identifier}"
+        # and MIME type: "nodegraphqt/nodes"
+        # The identifier part MUST match the factory key, which is full_node_type
+        node_urn = f"nodegraphqt::node:{full_node_type}"
         
-        # 2. Set JSON data using NodeGraphQt's native format
-        # NodeGraphQt expects: {'nodes': [{'type': 'full.node.type'}]}
-        drag_data = {'nodes': [{'type': full_node_type}]}
-        try:
-            json_data = json.dumps(drag_data).encode('utf-8')
-            mimeData.setData('application/x-nodegraphqt', json_data)
-        except Exception as e:
-            print(f"Error encoding drag data: {e}")
+        mimeData.setData("nodegraphqt/nodes", node_urn.encode('utf-8'))
         
         drag = QDrag(self)
         drag.setMimeData(mimeData)
-        drag.exec_(supportedActions)
+        drag.exec_(Qt.CopyAction)
 
 
 from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem

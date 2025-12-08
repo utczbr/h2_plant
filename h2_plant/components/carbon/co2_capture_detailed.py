@@ -11,7 +11,33 @@ from typing import Dict, Any
 from h2_plant.core.component import Component
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.composite_component import CompositeComponent
-from h2_plant.components.production.soec_electrolyzer_detailed import ProcessCompressor
+# from h2_plant.components.production.soec_electrolyzer_detailed import ProcessCompressor
+
+class ProcessCompressor(Component):
+    """Simple compressor for CO2 process."""
+    def __init__(self, comp_id: str, max_flow_kg_h: float):
+        super().__init__()
+        self.comp_id = comp_id
+        self.max_flow_kg_h = max_flow_kg_h
+        self.input_flow_kg_h = 0.0
+        self.output_flow_kg_h = 0.0
+        self.power_kw = 0.0
+        
+    def step(self, t: float) -> None:
+        super().step(t)
+        # Simple flow pass-through limited by max capacity
+        self.output_flow_kg_h = min(self.input_flow_kg_h, self.max_flow_kg_h)
+        
+        # Approximate power: 0.1 kWh/kg for moderate compression
+        self.power_kw = self.output_flow_kg_h * 0.1
+        
+    def get_state(self) -> Dict[str, Any]:
+        return {
+            **super().get_state(),
+            'input_flow_kg_h': self.input_flow_kg_h,
+            'output_flow_kg_h': self.output_flow_kg_h,
+            'power_kw': self.power_kw
+        }
 from h2_plant.components.water.water_treatment_detailed import WaterTank # Reuse simple tank logic
 
 class CO2CaptureUnit(Component):

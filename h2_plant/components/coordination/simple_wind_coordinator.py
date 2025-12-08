@@ -59,7 +59,8 @@ class SimpleWindCoordinator(Component):
             pem_setpoint = min(remaining_power, pem_max)
             
         # Set the targets
-        self.electrolyzer._target_power_mw = pem_setpoint
+        if self.electrolyzer:
+            self.electrolyzer._target_power_mw = pem_setpoint
         if self.soec:
             self.soec._target_power_mw = soec_setpoint
         
