@@ -5,16 +5,16 @@ Detailed architecture of the Tank/Storage component for hydrogen storage.
 ## Component Overview
 
 ```mermaid
-classDiagram
-    class Tank {
-        -float capacity_kg
-        -float initial_level_kg
-        -float min_level_ratio
-        -float max_pressure_bar
-        -float current_level_kg
-        -float pressure_bar
+    class TankArray {
+        -int n_tanks
+        -float capacity_kg (per tank)
+        -float[] masses
+        -float[] pressures
+        -int[] states
         +initialize(dt, registry)
-        +step(t, flow_in_kg_h, flow_out_kg_h)
+        +step(t)
+        +fill(mass_kg)
+        +discharge(mass_kg)
         +get_state()
     }
     
@@ -25,7 +25,7 @@ classDiagram
         +get_state()
     }
     
-    Tank --|> Component
+    TankArray --|> Component
 ```
 
 ## Mass Balance Model
@@ -33,21 +33,21 @@ classDiagram
 ```mermaid
 flowchart LR
     subgraph Inputs
-        FlowIn["flow_in_kg_h<br/>(H₂ inflow)"]
+        H2In["h2_in<br/>(H₂ inflow)"]
     end
     
-    subgraph Tank["Tank Storage"]
-        Level["current_level_kg<br/>Mass Balance"]
-        Pressure["pressure_bar<br/>P = (m/m_max) × P_max"]
+    subgraph Tank["TankArray (Vectorized)"]
+        Level["masses[]<br/>Mass Balance"]
+        Pressure["pressures[]<br/>P = f(m, V, T)"]
     end
     
     subgraph Outputs
-        FlowOut["flow_out_kg_h<br/>(H₂ delivery)"]
+        H2Out["h2_out<br/>(H₂ delivery)"]
     end
     
-    FlowIn --> Level
+    H2In --> Level
     Level --> Pressure
-    Level --> FlowOut
+    Level --> H2Out
 ```
 
 ## Step Execution Flow
@@ -95,15 +95,15 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant Comp as Compressor
-    participant Tank
+    participant Tank as TankArray
     participant Demand as Demand Scheduler
     
-    Comp->>Tank: step(flow_in=X kg/h)
-    Tank-->>Tank: Update level
-    Tank-->>Tank: Update pressure
+    Comp->>Tank: receive_input("h2_in", Stream)
+    Tank-->>Tank: fill(mass) [Vectorized]
     
-    Demand->>Tank: step(flow_out=Y kg/h)
-    Tank-->>Tank: Reduce level
+    Tank->>Tank: step(t)
+    Tank-->>Tank: update_pressures() [Numba]
     
-    Note over Tank: Level = max(0, min(capacity, level + Δm))
+    Demand->>Tank: get_output("h2_out")
+    Tank-->>Demand: Returns buffered new mass
 ```

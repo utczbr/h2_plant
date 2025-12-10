@@ -121,7 +121,7 @@ flowchart LR
     power_in --> PEM
     water_in --> PEM
     PEM --> h2_out
-    PEM --> o2_out
+    PEM --> oxygen_out
     PEM --> heat_out
 ```
 

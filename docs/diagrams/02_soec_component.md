@@ -108,7 +108,7 @@ flowchart LR
     power_in --> SOEC
     steam_in --> SOEC
     SOEC --> h2_out
-    SOEC --> water_out
+    SOEC --> steam_out
 ```
 
 ## Key Parameters

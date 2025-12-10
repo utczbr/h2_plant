@@ -88,7 +88,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     subgraph Inputs
-        gas_in["gas_in<br/>(H₂ Stream)"]
+        h2_in["h2_in<br/>(H₂ Stream)"]
         power_in["power_in<br/>(Electricity)"]
     end
     
@@ -99,13 +99,13 @@ flowchart LR
     end
     
     subgraph Outputs
-        gas_out["gas_out<br/>(Compressed H₂ Stream)"]
+        h2_out["h2_out<br/>(Compressed H₂ Stream)"]
         heat_out["heat_out<br/>(Rejected Heat)"]
     end
     
-    gas_in --> Compressor
+    h2_in --> Compressor
     power_in --> Compressor
-    Compressor --> gas_out
+    Compressor --> h2_out
     Compressor --> heat_out
 ```
 

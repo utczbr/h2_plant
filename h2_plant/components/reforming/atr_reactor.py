@@ -14,6 +14,7 @@ from h2_plant.core.stream import Stream
 @numba.njit(fastmath=True, cache=True)
 def linear_interp_scalar(x_eval, x_data, y_data):
     n = len(x_data)
+    if n < 2: return y_data[0] if n > 0 else 0.0
     if x_eval <= x_data[0]: return y_data[0]
     elif x_eval >= x_data[n-1]: return y_data[n-1]
 
@@ -31,6 +32,7 @@ def linear_interp_scalar(x_eval, x_data, y_data):
 @numba.njit(fastmath=True, cache=True)
 def cubic_interp_scalar(x_eval, x_data, y_data):
     n = len(x_data)
+    if n < 2: return y_data[0] if n > 0 else 0.0
     if x_eval <= x_data[0]: return y_data[0]
     elif x_eval >= x_data[n-1]: return y_data[n-1]
 
@@ -111,6 +113,7 @@ class ATRReactor(Component):
         self.heat_duty_kw = 0.0
         self.biogas_input_kmol_h = 0.0
         self.steam_input_kmol_h = 0.0
+        self.water_input_kmol_h = 0.0
         
         # Output buffers for flow network (tracks new production per timestep)
         self._h2_output_buffer_kmol = 0.0
@@ -158,10 +161,15 @@ class ATRReactor(Component):
             self.heat_duty_kw = outputs['total_heat_duty']
             self.biogas_input_kmol_h = outputs['biogas_required']
             self.steam_input_kmol_h = outputs['steam_required']
+            self.water_input_kmol_h = outputs['water_required']
             
             # Accumulate in output buffers for this timestep
             self._h2_output_buffer_kmol += self.h2_production_kmol_h * self.dt
-            self._heat_output_buffer_kw += self.heat_duty_kw
+            # Heat is energy (kW * h -> kWh), but we buffer "accumulated rate * dt" effectively or energy?
+            # Existing convention for H2 (flow * dt = mass) implies we store extensive quantity.
+            # kW * h (if dt in h) = kWh. If dt in s, kJ. 
+            # Consistent with get_output dividing by dt to get rate back.
+            self._heat_output_buffer_kw += self.heat_duty_kw * self.dt
             # Offgas is simplified - assume some fraction of inputs
             self._offgas_output_buffer_kmol += 0.1 * self.h2_production_kmol_h * self.dt
         else:
@@ -175,7 +183,8 @@ class ATRReactor(Component):
             'component_id': self.component_id,
             'h2_production_kmol_h': self.h2_production_kmol_h,
             'heat_duty_kw': self.heat_duty_kw,
-            'biogas_input_kmol_h': self.biogas_input_kmol_h
+            'biogas_input_kmol_h': self.biogas_input_kmol_h,
+            'water_input_kmol_h': self.water_input_kmol_h
         }
     
     def get_output(self, port_name: str) -> Any:
@@ -200,7 +209,7 @@ class ATRReactor(Component):
                 phase='gas'
             )
         elif port_name == 'heat_out':
-            return self._heat_output_buffer_kw
+            return self._heat_output_buffer_kw / self.dt if self.dt > 0 else 0.0
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
     
