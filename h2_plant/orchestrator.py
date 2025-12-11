@@ -335,9 +335,20 @@ class Orchestrator:
         H2_pem_total = np.sum(hist.get('H2_pem_kg', []))
         H2_total = H2_soec_total + H2_pem_total
         
+        # Calculate Compressor Energy
+        E_compressor_total_mwh = 0.0
+        # Sum all keys ending in _power_kw
+        for key, val in hist.items():
+            if key.endswith('_power_kw'):
+                # val is list of kW. Convert to MW then * dt
+                # sum(val) (kW) * dt (h) = kWh. / 1000 = MWh
+                E_comp_mwh = np.sum(val) * dt / 1000.0
+                E_compressor_total_mwh += E_comp_mwh
+
         print(f"* Total Offered Energy: {E_total_offer:.2f} MWh")
         print(f"* Energy Supplied to SOEC: {E_soec:.2f} MWh")
         print(f"* Energy Supplied to PEM: {E_pem:.2f} MWh")
+        print(f"* Energy Consumed by Compressors: {E_compressor_total_mwh:.2f} MWh")
         print(f"* **Total System Hydrogen Production**: {H2_total:.2f} kg")
         print(f"  * SOEC Production: {H2_soec_total:.2f} kg")
         print(f"  * PEM Production: {H2_pem_total:.2f} kg")
