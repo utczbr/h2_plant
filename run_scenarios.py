@@ -10,11 +10,14 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
 from h2_plant.orchestrator import Orchestrator
 from h2_plant.reporting.report_generator import ReportGenerator
 
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 SCENARIOS = [
-    {"name": "1_PEM_Only", "topology": "scenarios/topologies/topology_pem_only.yaml"},
-    {"name": "2_SOEC_Only", "topology": "scenarios/topologies/topology_soec_only.yaml"},
-    {"name": "3_Hybrid_Simple", "topology": "scenarios/topologies/topology_hybrid_simple.yaml"},
-    {"name": "4_Hybrid_Cascade", "topology": "scenarios/topologies/topology_hybrid_cascade.yaml"},
+    {"name": "1_PEM_Only", "topology": os.path.join(BASE_DIR, "scenarios/topologies/topology_pem_only.yaml")},
+    {"name": "2_SOEC_Only", "topology": os.path.join(BASE_DIR, "scenarios/topologies/topology_soec_only.yaml")},
+    {"name": "3_Hybrid_Simple", "topology": os.path.join(BASE_DIR, "scenarios/topologies/topology_hybrid_simple.yaml")},
+    {"name": "4_Hybrid_Cascade", "topology": os.path.join(BASE_DIR, "scenarios/topologies/topology_hybrid_cascade.yaml")},
 ]
 
 def run_scenario(scenario):
@@ -24,16 +27,17 @@ def run_scenario(scenario):
     print(f"\n=== Running Scenario: {name} ===")
     
     # 1. Update Topology
-    target_topology = "scenarios/plant_topology.yaml"
+    # 1. Update Topology
+    target_topology = os.path.join(BASE_DIR, "scenarios/plant_topology.yaml")
     shutil.copy(topology_file, target_topology)
     print(f"Updated topology from {topology_file}")
     
     # 2. Run Simulation (1 Week = 168 Hours)
-    orch = Orchestrator('scenarios')
+    orch = Orchestrator(os.path.join(BASE_DIR, 'scenarios'))
     history = orch.run_simulation(hours=168)
     
     # 3. Save Results
-    output_dir = f"simulation_output/{name}"
+    output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")
     os.makedirs(output_dir, exist_ok=True)
     
     # Save History CSV
@@ -46,7 +50,9 @@ def run_scenario(scenario):
     print("Generating reports...")
     # Load visualization config (ensure it's enabled)
     import yaml
-    with open('scenarios/visualization_config.yaml', 'r') as f:
+    # Load visualization config (ensure it's enabled)
+    import yaml
+    with open(os.path.join(BASE_DIR, 'scenarios/visualization_config.yaml'), 'r') as f:
         viz_config = yaml.safe_load(f)
     
     # Disable some complex charts for simple scenarios if needed, but keeping all is fine
@@ -76,8 +82,10 @@ if __name__ == "__main__":
     results = []
     
     # Backup original topology
-    if os.path.exists("scenarios/plant_topology.yaml"):
-        shutil.copy("scenarios/plant_topology.yaml", "scenarios/plant_topology.yaml.bak")
+    # Backup original topology
+    original_topo = os.path.join(BASE_DIR, "scenarios/plant_topology.yaml")
+    if os.path.exists(original_topo):
+        shutil.copy(original_topo, original_topo + ".bak")
     
     try:
         for scenario in SCENARIOS:
@@ -91,9 +99,10 @@ if __name__ == "__main__":
                 
     finally:
         # Restore original topology
-        if os.path.exists("scenarios/plant_topology.yaml.bak"):
-            shutil.copy("scenarios/plant_topology.yaml.bak", "scenarios/plant_topology.yaml")
-            os.remove("scenarios/plant_topology.yaml.bak")
+        # Restore original topology
+        if os.path.exists(original_topo + ".bak"):
+            shutil.copy(original_topo + ".bak", original_topo)
+            os.remove(original_topo + ".bak")
             print("\nRestored original topology.")
 
     # Print Comparison Table
