@@ -21,7 +21,22 @@ This project simulates a modular dual-path hydrogen production plant (Arbitratio
     ```
 
 ## Running the Application
+## Troubleshooting
 
+### Linux Qt/XCB Error
+If you see an error like `qt.qpa.plugin: Could not load the Qt platform plugin "xcb"`, you are likely missing global system libraries.
+Run:
+```bash
+sudo apt-get install libxcb-cursor0 libxcb-xinerama0
+```
+
+### Headless Execution (Colab/Servers)
+If you are running in a headless environment (like Google Colab or a VM without a display), **do not run `main.py`**.
+Instead, use the scenario runner which works without a GUI:
+```bash
+python run_scenarios.py
+```
+Or ensure you have an X server (like `xvfb`) running if you must test the GUI components.
 To start the GUI simulation:
 
 ```bash
