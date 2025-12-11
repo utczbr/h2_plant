@@ -122,7 +122,12 @@ class CompressorStorage(Component):
         self.chilling_work_kwh = 0.0
         self.energy_consumed_kwh = 0.0
         self.heat_removed_kwh = 0.0
+        self.energy_consumed_kwh = 0.0
+        self.heat_removed_kwh = 0.0
         self.specific_energy_kwh_kg = 0.0
+        
+        # Power attribute for Orchestrator monitoring
+        self.power_kw = 0.0
         
         # State variables
         self.mode = CompressorMode.IDLE
@@ -176,12 +181,20 @@ class CompressorStorage(Component):
             
             # 4. Update cumulative statistics
             self.cumulative_energy_kwh += self.energy_consumed_kwh
+            self.cumulative_energy_kwh += self.energy_consumed_kwh
             self.cumulative_mass_kg += self.actual_mass_transferred_kg
+            
+            # Calculate instantaneous power (average over step)
+            if self.dt > 0:
+                self.power_kw = self.energy_consumed_kwh / self.dt  # kWh / h = kW
+            else:
+                self.power_kw = 0.0
             
             # Reset input for next step
             self.transfer_mass_kg = 0.0
         else:
             self.mode = CompressorMode.IDLE
+            self.power_kw = 0.0
 
     def get_state(self) -> Dict[str, Any]:
         """Return current state for checkpointing/monitoring."""
