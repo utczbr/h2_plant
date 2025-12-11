@@ -59,7 +59,15 @@ class PlantGraphBuilder:
             return SOECOperator(physics_spec)
             
         elif node.type == "Compressor":
-            return Compressor(**node.params)
+            # Inject defaults if params are missing
+            params = node.params.copy() if node.params else {}
+            if 'max_flow_kg_h' not in params:
+                params['max_flow_kg_h'] = 500.0  # Default value
+            if 'inlet_pressure_bar' not in params:
+                params['inlet_pressure_bar'] = 30.0
+            if 'outlet_pressure_bar' not in params:
+                params['outlet_pressure_bar'] = 200.0
+            return Compressor(**params)
             
         elif node.type == "Tank":
             return Tank(node.params)
