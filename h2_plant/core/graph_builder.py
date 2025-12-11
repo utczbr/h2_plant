@@ -10,6 +10,7 @@ from h2_plant.components.balance_of_plant.tank import Tank
 from h2_plant.components.compression.compressor import CompressorStorage as Compressor
 from h2_plant.components.balance_of_plant.pump import Pump
 from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer as Mixer
+from h2_plant.components.control.valve import ThrottlingValve as Valve
 
 # Passive Components (Placeholder implementations for now)
 class PassiveComponent(Component):
@@ -102,6 +103,9 @@ class PlantGraphBuilder:
                 regen_temp_k=float(node.params.get('regen_temp_k', 523.15))
                 # Add other optional params if needed
             )
+
+        elif node.type == "Valve":
+            return Valve(node.params)
 
         else:
             logger.warning(f"Unknown component type: {node.type}")

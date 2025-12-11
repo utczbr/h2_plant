@@ -197,7 +197,7 @@ class StandaloneGenerator:
         p_grid = np.linspace(self.config.pressure_min, self.config.pressure_max, self.config.pressure_points)
         t_grid = np.linspace(self.config.temperature_min, self.config.temperature_max, self.config.temperature_points)
         
-        P_mesh, T_mesh = np.meshgrid(p_grid, t_grid)
+        P_mesh, T_mesh = np.meshgrid(p_grid, t_grid, indexing='ij')
         P_flat = P_mesh.flatten()
         T_flat = T_mesh.flatten()
         
@@ -213,7 +213,7 @@ class StandaloneGenerator:
         p_grid = np.linspace(self.config.pressure_min, self.config.pressure_max, self.config.pressure_points)
         s_grid = np.linspace(self.config.entropy_min, self.config.entropy_max, self.config.entropy_points)
         
-        P_s_mesh, S_mesh = np.meshgrid(p_grid, s_grid)
+        P_s_mesh, S_mesh = np.meshgrid(p_grid, s_grid, indexing='ij')
         P_s_flat = P_s_mesh.flatten()
         S_flat = S_mesh.flatten()
         

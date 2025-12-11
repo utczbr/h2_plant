@@ -114,7 +114,7 @@ def aggregate_components_to_systems(nodes: List) -> Dict[str, Any]:
         'name': 'GUI-Generated Plant',
         'version': '2.0',
         'simulation': {
-            'timestep_hours': 1.0,
+            'timestep_hours': 1.0/60.0,
             'duration_hours': 8760,
             'checkpoint_interval_hours': 168
         },

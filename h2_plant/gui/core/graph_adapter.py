@@ -93,6 +93,7 @@ class GraphToConfigAdapter:
         "HeatSourceNode": ("external_inputs", "heat_source"),
         "MixerNode": ("oxygen_management", "mixer"),
         "ArbitrageNode": ("pathway",),  # Map directly to pathway section
+        "ValveNode": ("control",),
     }
     
     def __init__(self):
@@ -148,7 +149,7 @@ class GraphToConfigAdapter:
                 "allocation_strategy": "COST_OPTIMAL"
             },
             "simulation": {
-                "timestep_hours": 1.0,
+                "timestep_hours": 1.0/60.0,
                 "duration_hours": 8760,
                 "checkpoint_interval_hours": 168,
                 "max_pow_kwh": 0.0 # Placeholder
@@ -328,7 +329,10 @@ class GraphToConfigAdapter:
             'PumpNode': {'design_flow_kg_h': 'capacity_kg_h', 'isentropic_efficiency': 'eta_is', 'mechanical_efficiency': 'eta_m'},
             
             'water_mixer': {},  # No renaming needed - WaterMixer maps to MultiComponentMixer
-            'WaterMixerNode': {}
+            'WaterMixerNode': {},
+            
+            'valve': {'outlet_pressure_bar': 'P_out_pa', 'fluid_type': 'fluid'},
+            'ValveNode': {'outlet_pressure_bar': 'P_out_pa', 'fluid_type': 'fluid'}
         }
         
         # Property whitelists: Only these properties are passed to backend
@@ -354,7 +358,9 @@ class GraphToConfigAdapter:
             'water_mixer': wmix_wl, 'WaterMixerNode': wmix_wl,
             'mixer': mix_wl, 'MixerNode': mix_wl,
             'arbitrage': ['h2_price_eur_kg', 'ppa_price_eur_mwh', 'allocation_strategy', 'component_id'],
-            'ArbitrageNode': ['h2_price_eur_kg', 'ppa_price_eur_mwh', 'allocation_strategy', 'component_id']
+            'ArbitrageNode': ['h2_price_eur_kg', 'ppa_price_eur_mwh', 'allocation_strategy', 'component_id'],
+            'valve': ['outlet_pressure_bar', 'fluid_type', 'component_id'],
+            'ValveNode': ['outlet_pressure_bar', 'fluid_type', 'component_id']
         }
         
         # Get mapping and whitelist for this node type
@@ -403,7 +409,11 @@ class GraphToConfigAdapter:
                  # Convert percentage to decimal for efficiencies
                  if isinstance(v, (int, float)) and v > 1:
                      v = v / 100.0
-                    
+            
+            elif backend_key == 'P_out_pa' and k == 'outlet_pressure_bar':
+                # Convert bar to Pa
+                v = float(v) * 1e5
+                     
             config[backend_key] = v
         
         # Custom handlers
@@ -606,6 +616,8 @@ class GraphToConfigAdapter:
             "chiller": "Chiller",
             "dry_cooler": "DryCooler",
             "hx": "HeatExchanger",
+            "ValveNode": "Valve",
+            "valve": "Valve"
         }
         return MAPPING.get(gui_type, "PassiveComponent")
         

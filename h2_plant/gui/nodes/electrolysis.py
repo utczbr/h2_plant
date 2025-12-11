@@ -103,4 +103,4 @@ class SOECStackNode(ConfigurableNode):
 
         self.add_color_property('node_color', default=(255, 200, 100), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=60)
+        self.add_spacer('collapse_spacer', height=80)

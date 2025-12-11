@@ -8,7 +8,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, QPushButton,
     QWidget, QListWidget, QListWidgetItem, QApplication, QTabWidget,
     QProgressDialog, QCheckBox, QDialogButtonBox, QScrollArea, QGridLayout, 
-    QGroupBox, QHBoxLayout, QSplitter, QSizePolicy, QFrame, QProgressBar
+    QGroupBox, QHBoxLayout, QSplitter, QSizePolicy, QFrame, QProgressBar,
+    QRadioButton, QSpinBox, QButtonGroup
 )
 from PySide6.QtCore import Qt, QTimer, QMimeData, QThread, Signal, QSettings, QRunnable, QThreadPool, QObject, Slot
 from PySide6.QtGui import QColor, QShortcut, QKeySequence, QDrag, QAction
@@ -46,6 +47,7 @@ from h2_plant.gui.themes.theme_manager import ThemeManager
 from h2_plant.gui.nodes.energy_source import WindEnergySourceNode
 from h2_plant.gui.nodes.economics import ArbitrageNode
 from h2_plant.gui.nodes.mixing import MixerNode, WaterMixerNode
+from h2_plant.gui.nodes.valve_node import ValveNode
 
 
 class AllNodesListWidget(QListWidget):
@@ -388,26 +390,15 @@ class SimulationReportWidget(QWidget):
         button_layout.addWidget(refresh_btn)
         sidebar_layout.addLayout(button_layout)
         
-        # Zoom controls
+        # Zoom label (zoom via scroll or keyboard only)
         zoom_layout = QHBoxLayout()
-        zoom_out_btn = QPushButton("−")
-        zoom_out_btn.setFixedWidth(30)
-        zoom_out_btn.setToolTip("Zoom Out")
-        zoom_out_btn.clicked.connect(self._zoom_out)
+        zoom_layout.addWidget(QLabel("Zoom:"))
         
         self._zoom_label = QLabel("100%")
         self._zoom_label.setAlignment(Qt.AlignCenter)
-        self._zoom_label.setFixedWidth(50)
+        self._zoom_label.setToolTip("Use CTRL+wheel or +/- keys to zoom")
         
-        zoom_in_btn = QPushButton("+")
-        zoom_in_btn.setFixedWidth(30)
-        zoom_in_btn.setToolTip("Zoom In")
-        zoom_in_btn.clicked.connect(self._zoom_in)
-        
-        zoom_layout.addWidget(QLabel("Zoom:"))
-        zoom_layout.addWidget(zoom_out_btn)
         zoom_layout.addWidget(self._zoom_label)
-        zoom_layout.addWidget(zoom_in_btn)
         zoom_layout.addStretch()
         sidebar_layout.addLayout(zoom_layout)
         
@@ -432,6 +423,9 @@ class SimulationReportWidget(QWidget):
         self.graphs_layout.setContentsMargins(8, 8, 8, 8)
         
         self.scroll_area.setWidget(self.graphs_container)
+        
+        # Install event filter to intercept wheel events on scroll area
+        self.scroll_area.viewport().installEventFilter(self)
         
         self.no_data_label = QLabel("No graphs available. Run simulation first.")
         self.no_data_label.setAlignment(Qt.AlignCenter)
@@ -727,6 +721,44 @@ class SimulationReportWidget(QWidget):
         zoom_percent = int(self.ZOOM_LEVELS[self._zoom_index] * 100)
         self._zoom_label.setText(f"{zoom_percent}%")
     
+    def eventFilter(self, obj, event):
+        """Filter events to prevent scrolling when CTRL is held."""
+        from PySide6.QtCore import QEvent
+        
+        if obj == self.scroll_area.viewport() and event.type() == QEvent.Wheel:
+            if event.modifiers() == Qt.ControlModifier:
+                # Handle zoom directly and block scrolling
+                if event.angleDelta().y() > 0:
+                    self._zoom_in()
+                elif event.angleDelta().y() < 0:
+                    self._zoom_out()
+                return True  # Block the event from reaching the scroll area
+        
+        return super().eventFilter(obj, event)
+    
+    def wheelEvent(self, event):
+        """Handle mouse wheel for zooming."""
+        if event.modifiers() == Qt.ControlModifier:
+            # Zoom with CTRL + mouse wheel (forward = zoom in, backward = zoom out)
+            if event.angleDelta().y() > 0:
+                self._zoom_in()
+            elif event.angleDelta().y() < 0:
+                self._zoom_out()
+            event.accept()
+        else:
+            super().wheelEvent(event)
+    
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts for zooming."""
+        if event.key() == Qt.Key_Plus or event.key() == Qt.Key_Equal:
+            self._zoom_in()
+            event.accept()
+        elif event.key() == Qt.Key_Minus or event.key() == Qt.Key_Underscore:
+            self._zoom_out()
+            event.accept()
+        else:
+            super().keyPressEvent(event)
+    
     def cleanup(self):
         """Clean up temp directory."""
         import shutil
@@ -734,6 +766,86 @@ class SimulationReportWidget(QWidget):
             shutil.rmtree(self._temp_dir)
         except:
             pass
+
+
+
+class SimulationConfigDialog(QDialog):
+    """Dialog to configure simulation parameters before running."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Simulation Configuration")
+        self.setModal(True)
+        self.setMinimumWidth(300)
+        
+        self.selected_hours = 8760  # Default to 1 year
+        
+        self.setup_ui()
+        
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        # Duration Selection
+        group = QGroupBox("Simulation Duration")
+        group_layout = QVBoxLayout(group)
+        
+        self.btn_group = QButtonGroup(self)
+        
+        self.radio_day = QRadioButton("Day (24 hours)")
+        self.radio_week = QRadioButton("Week (168 hours)")
+        self.radio_month = QRadioButton("Month (720 hours)")
+        self.radio_year = QRadioButton("Year (8760 hours)")
+        self.radio_custom = QRadioButton("Custom")
+        
+        self.btn_group.addButton(self.radio_day, 24)
+        self.btn_group.addButton(self.radio_week, 168)
+        self.btn_group.addButton(self.radio_month, 720)
+        self.btn_group.addButton(self.radio_year, 8760)
+        self.btn_group.addButton(self.radio_custom, 0)
+        
+        self.radio_year.setChecked(True)
+        
+        group_layout.addWidget(self.radio_day)
+        group_layout.addWidget(self.radio_week)
+        group_layout.addWidget(self.radio_month)
+        group_layout.addWidget(self.radio_year)
+        group_layout.addWidget(self.radio_custom)
+        
+        # Custom input
+        custom_layout = QHBoxLayout()
+        custom_layout.setContentsMargins(20, 0, 0, 0)
+        
+        self.custom_spin = QSpinBox()
+        self.custom_spin.setRange(1, 100000)
+        self.custom_spin.setValue(24)
+        self.custom_spin.setSuffix(" hours")
+        self.custom_spin.setEnabled(False)
+        
+        custom_layout.addWidget(QLabel("Duration:"))
+        custom_layout.addWidget(self.custom_spin)
+        group_layout.addLayout(custom_layout)
+        
+        layout.addWidget(group)
+        
+        # Connect signals
+        self.radio_custom.toggled.connect(self._toggle_custom)
+        
+        # Buttons
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        
+        # Change OK button text to "Run"
+        buttons.button(QDialogButtonBox.Ok).setText("Run Simulation")
+        
+        layout.addWidget(buttons)
+        
+    def _toggle_custom(self, checked):
+        self.custom_spin.setEnabled(checked)
+        
+    def get_duration_hours(self):
+        if self.radio_custom.isChecked():
+            return self.custom_spin.value()
+        return self.btn_group.checkedId()
 
 
 class PlantEditorWindow(QMainWindow):
@@ -798,7 +910,7 @@ class PlantEditorWindow(QMainWindow):
             # Economics (NEW)
             ArbitrageNode,
             # Flow Control (NEW)
-            MixerNode, WaterMixerNode,
+            ValveNode, MixerNode, WaterMixerNode,
             # Thermal (NEW)
             ChillerNode, DryCoolerNode,
             # Separation (NEW)
@@ -1115,6 +1227,13 @@ class PlantEditorWindow(QMainWindow):
     def run_simulation(self):
         """Run plant simulation using new backend architecture."""
         try:
+             # 0. Configure Simulation
+            dialog = SimulationConfigDialog(self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+            
+            duration_hours = dialog.get_duration_hours()
+
             # 1. Create Adapter
             adapter = GraphToConfigAdapter()
             
@@ -1159,6 +1278,8 @@ class PlantEditorWindow(QMainWindow):
             
             # 4. Generate Context
             context = adapter.to_simulation_context()
+            # Update duration from dialog
+            context.simulation.duration_hours = duration_hours
             
             # 5. Create Worker
             self.worker = SimulationWorker(context)

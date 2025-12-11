@@ -57,7 +57,7 @@ class EnergyPriceLoader:
             start_time = df_prices.index[0]
             end_time = start_time + pd.Timedelta(hours=duration_hours)
             
-            freq = f"{int(timestep_hours * 60)}min"
+            freq = f"{int(round(timestep_hours * 60))}min"
             idx = pd.date_range(start=start_time, end=end_time, freq=freq, inclusive='left')
             
             prices = df_prices[col_price].reindex(idx).ffill().bfill().values

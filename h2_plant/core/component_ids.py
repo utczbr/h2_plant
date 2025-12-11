@@ -57,5 +57,8 @@ class ComponentID(Enum):
     # Separation / Purification
     COALESCER = "coalescer"
 
+    # Control
+    VALVE = "valve"
+
     def __str__(self) -> str:
         return self.value

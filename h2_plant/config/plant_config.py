@@ -299,7 +299,7 @@ class EnergyPriceConfig:
 @dataclass
 class SimulationConfig:
     """Simulation parameters configuration."""
-    timestep_hours: float = 1.0
+    timestep_hours: float = 1.0 / 60.0
     duration_hours: int = 8760  # Full year by default
     start_hour: int = 0
     checkpoint_interval_hours: int = 168  # Weekly

@@ -61,6 +61,21 @@ class CollapseButton(QtWidgets.QGraphicsItem):
         # Update position every paint to stay in corner if node resizes
         self._update_pos()
 
+        # -------------------------------------------------------------------------
+        # FIX: Enforce collapsed state to override NodeGraphQt's LOD auto-show behavior
+        # -------------------------------------------------------------------------
+        # When zooming in, NodeGraphQt detects the LOD change and sets all widgets 
+        # to Visible=True. We must detect this and force them back to Hidden if 
+        # we are currently in a collapsed state.
+        if self._collapsed and self.parentItem() and hasattr(self.parentItem(), 'widgets'):
+            for widget_item in self.parentItem().widgets.values():
+                # We only want to hide standard widgets. Spacers (if used) 
+                # might be intended to be visible in collapsed state.
+                if not isinstance(widget_item, NodeSpacerWidget):
+                    if widget_item.isVisible():
+                        widget_item.setVisible(False)
+        # -------------------------------------------------------------------------
+
         path = QtGui.QPainterPath()
         center_x = 8
         center_y = 8

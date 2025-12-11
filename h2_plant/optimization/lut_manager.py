@@ -133,11 +133,11 @@ class LUTManager(Component):
                 except Exception as e:
                     logger.warning(f"Failed to load cache for {fluid}: {e}. Regenerating.")
                     self._luts[fluid] = self._generate_lut(fluid)
-                    self._save_to_cache(fluid, self._luts[fluid]) # Save newly generated LUT
+                    self._save_to_cache(fluid, cache_path) # Save newly generated LUT
             else:
                 logger.info(f"Cache not found for {fluid}. Generating new LUT...")
                 self._luts[fluid] = self._generate_lut(fluid)
-                self._save_to_cache(fluid, self._luts[fluid])
+                self._save_to_cache(fluid, cache_path)
         
         # self._initialized is set by super().initialize
         logger.info("LUT Manager initialization complete")

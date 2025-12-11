@@ -133,7 +133,7 @@ class Orchestrator:
         for step_idx in range(steps):
             # Time tracking
             t_hours = step_idx * self.context.simulation.timestep_hours
-            minute = int(t_hours * 60)
+            minute = int(round(t_hours * 60))
             
             P_offer = wind[step_idx]
             current_price = prices[step_idx]
