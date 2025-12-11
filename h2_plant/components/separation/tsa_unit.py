@@ -70,6 +70,7 @@ class TSAUnit(Component):
         # Performance Metrics (Last Step)
         self.last_pressure_drop_bar = 0.0
         self.last_regen_energy_kw = 0.0
+        self.electrical_power_kw = 0.0 # For Orchestrator BoP tracking
         
         # Inputs
         self.inlet_stream: Optional[Stream] = None
@@ -158,6 +159,7 @@ class TSAUnit(Component):
         # Average Power
         avg_power_w = total_energy_cycle_j / (self.cycle_time_hours * 3600.0)
         self.last_regen_energy_kw = avg_power_w / 1000.0
+        self.electrical_power_kw = self.last_regen_energy_kw
         
         # 5. Cycle Logic
         self.cycle_timer_h += self.dt
