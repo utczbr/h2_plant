@@ -327,12 +327,10 @@ class DetailedPEMElectrolyzer(Component):
         """Load degradation polynomials from pickle file."""
         try:
             # Assuming data file is in h2_plant/data relative to project root
-            # We need a robust way to find it. For now, try relative path.
-            # Or assume CWD is project root.
-            pkl_path = "h2_plant/data/degradation_polynomials.pkl"
-            if not os.path.exists(pkl_path):
-                 # Try absolute path based on known location
-                 pkl_path = "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/degradation_polynomials.pkl"
+            pkl_path = Path(__file__).parent.parent.parent / "data" / "degradation_polynomials.pkl"
+            if not pkl_path.exists():
+                 # Try current dir as fallback
+                 pkl_path = Path("degradation_polynomials.pkl")
             
             if os.path.exists(pkl_path):
                 with open(pkl_path, 'rb') as f:

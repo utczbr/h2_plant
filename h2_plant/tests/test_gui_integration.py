@@ -3,7 +3,9 @@ import os
 import logging
 
 # Add project root to path
-sys.path.append("/home/stuart/Documentos/Planta Hidrogenio")
+# Add project root to path
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 from h2_plant.gui.core.graph_adapter import GraphToConfigAdapter, GraphNode, FlowType, GraphEdge
 # Mock PySide6

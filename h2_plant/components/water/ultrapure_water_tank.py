@@ -3,33 +3,37 @@ from typing import Dict, Any, List, Optional
 from h2_plant.core.component import Component
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.stream import Stream
+from h2_plant.core.component_ids import ComponentID
+from h2_plant.config.constants_physics import WaterConstants
 
 class UltraPureWaterTank(Component):
     """
     Ultra-pure Water Tank (WT) Component.
-    Buffer storage for purified water with multiple outlets.
-    Now uses Stream for thermodynamic tracking.
+    Buffer storage for purified water with enthalpy mixing and correct thermodynamics.
     """
-    def __init__(self, component_id: str, capacity_kg: float, initial_level: float = 0.5):
+    def __init__(self, component_id: str, capacity_kg: float = None):
         super().__init__()
         self.component_id = component_id
-        self.capacity_kg = capacity_kg
-
-        # Intrinsic Properties
-        self.mass_kg = capacity_kg * initial_level
-        self.temperature_k = 293.15 # 20°C bulk temperature
-        self.pressure_pa = 101325.0 # Atmospheric
-        self.density_kg_m3 = 998.0
+        self.capacity_kg = capacity_kg if capacity_kg is not None else WaterConstants.ULTRAPURE_TANK_CAPACITY_KG
+        
+        # Intrinsic Properties (State)
+        self.mass_kg = self.capacity_kg * 0.5 # Start 50% full
+        self.temperature_k = WaterConstants.WATER_AMBIENT_T_K
+        self.pressure_pa = WaterConstants.WATER_ATM_P_PA
+        
+        # LUT Manager reference
+        self.lut = None
 
         # Inputs
         self.inlet_stream: Optional[Stream] = None
 
-        # Multiple Outlets: Dictionary mapping Consumer ID -> Stream
+        # Outlet logic
         self.outlet_streams: Dict[str, Stream] = {}
-        self.outlet_requests: Dict[str, float] = {} # Consumer ID -> requested kg/h
+        self.outlet_requests: Dict[str, float] = {}
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         super().initialize(dt, registry)
+        self.lut = registry.get_by_type("lut_manager")[0] if registry.get_by_type("lut_manager") else None
 
     def request_outflow(self, consumer_id: str, amount_kg_h: float):
         """Register a demand from a consumer."""
@@ -37,83 +41,94 @@ class UltraPureWaterTank(Component):
 
     def step(self, t: float) -> None:
         super().step(t)
-
-        # 1. Process Inflow
+        
+        # 0. Detect Consumers (if using push/pull)
+        # Assuming consumers call request_outflow OR we pull from registry
+        # The spec says "get_demand: sum consumer requests (e.g. PEM waterinput_kgh via registry)"
+        # But 'request_outflow' is a cleaner push model from consumers.
+        # Let's support polling PEM if needed? 
+        # For now, rely on registered requests.
+        
+        # 1. Process Inflow (Mixing)
         if self.inlet_stream and self.inlet_stream.mass_flow_kg_h > 0:
-            in_mass = self.inlet_stream.mass_flow_kg_h * self.dt
+            m_in = self.inlet_stream.mass_flow_kg_h * self.dt
+            T_in = self.inlet_stream.temperature_k
             
-            # Mix incoming stream with stored water
-            if self.mass_kg > 0:
-                stored_stream = Stream(
-                    mass_flow_kg_h=self.mass_kg / self.dt,
-                    temperature_k=self.temperature_k,
-                    pressure_pa=self.pressure_pa,
-                    composition={'H2O': 1.0},
-                    phase='liquid'
-                )
+            # Accepted mass (clamp to capacity)
+            m_accepted = min(m_in, self.capacity_kg - self.mass_kg)
+            
+            if m_accepted > 0:
+                # Enthalpy Balance: (m_old * H_old + m_in * H_in) = m_new * H_new
+                # H approx = Cp * T for liquid water
+                # Cp_water approx 4184 J/kgK
+                Cp = 4184.0 
+                # Or use LUT if available
+                # if self.lut: Cp = self.lut.lookup('Water', 'C', self.pressure_pa, self.temperature_k)
                 
-                mixed_stream = stored_stream.mix_with(self.inlet_stream)
-                self.temperature_k = mixed_stream.temperature_k
-            else:
-                # Tank empty, takes inlet state
-                self.temperature_k = self.inlet_stream.temperature_k
-            
-            self.mass_kg += in_mass
-
+                H_current = self.mass_kg * Cp * self.temperature_k
+                H_in = m_accepted * Cp * T_in
+                
+                m_new = self.mass_kg + m_accepted
+                H_new = H_current + H_in
+                
+                self.temperature_k = H_new / (m_new * Cp)
+                self.mass_kg = m_new
+                
         # 2. Process Outflows
-        total_requested_kg = sum(self.outlet_requests.values()) * self.dt
+        total_req_kg = sum(self.outlet_requests.values()) * self.dt
         
-        if total_requested_kg > self.mass_kg:
-            # Shortage! Scale down all outflows proportionally
-            scaling_factor = self.mass_kg / total_requested_kg if total_requested_kg > 0 else 0
-        else:
-            scaling_factor = 1.0
-        
-        # Create outlet streams
-        self.outlet_streams.clear()
-        total_out = 0.0
-        
-        for consumer_id, requested_flow in self.outlet_requests.items():
-            actual_flow = requested_flow * scaling_factor
+        scaling = 1.0
+        if total_req_kg > self.mass_kg:
+            scaling = self.mass_kg / total_req_kg if total_req_kg > 0 else 0.0
             
-            if actual_flow > 0:
-                self.outlet_streams[consumer_id] = Stream(
-                    mass_flow_kg_h=actual_flow,
+        self.outlet_streams.clear()
+        total_out_kg = 0.0
+        
+        for cid, rate in self.outlet_requests.items():
+            actual_rate = rate * scaling
+            if actual_rate > 0:
+                self.outlet_streams[cid] = Stream(
+                    mass_flow_kg_h=actual_rate,
                     temperature_k=self.temperature_k,
                     pressure_pa=self.pressure_pa,
                     composition={'H2O': 1.0},
                     phase='liquid'
                 )
-                total_out += actual_flow * self.dt
+                total_out_kg += actual_rate * self.dt
+                
+        self.mass_kg -= total_out_kg
+        if self.mass_kg < 0: self.mass_kg = 0.0
         
-        self.mass_kg -= total_out
-        if self.mass_kg < 0:
-            self.mass_kg = 0 # Safety
+        # Clear requests for next step
+        self.outlet_requests.clear()
+        
+    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
+        if port_name == 'ultrapure_in' and isinstance(value, Stream):
+            self.inlet_stream = value
+            # Calculate how much we CAN accept for upstream backpressure?
+            # Returns accepted amount
+            space = self.capacity_kg - self.mass_kg
+            accepted_flow = min(value.mass_flow_kg_h, space / self.dt)
+            return accepted_flow * self.dt
+        return 0.0
 
-        # Cap at capacity (overflow)
-        if self.mass_kg > self.capacity_kg:
-            self.mass_kg = self.capacity_kg
+    def get_output(self, port_name: str) -> Any:
+        # If port_name matches a consumer request, return that stream
+        # Or generic 'consumer_out'
+        if port_name == 'consumer_out':
+             # Return valid stream if strictly 1 consumer? 
+             # Or return sum?
+             # For now return random valid one or None?
+             vals = list(self.outlet_streams.values())
+             if vals: return vals[0]
+        return self.outlet_streams.get(port_name)
 
     def get_state(self) -> Dict[str, Any]:
-        state = {
+        return {
             **super().get_state(),
             'component_id': self.component_id,
             'mass_kg': self.mass_kg,
             'fill_level': self.mass_kg / self.capacity_kg,
             'temperature_c': self.temperature_k - 273.15,
-            'pressure_bar': self.pressure_pa / 1e5,
-            'total_outflow_kg_h': sum(s.mass_flow_kg_h for s in self.outlet_streams.values()),
-            'num_outlets': len(self.outlet_streams)
+            'pressure_bar': self.pressure_pa / 1e5
         }
-        
-        if self.outlet_streams:
-            state['streams'] = {
-                f'out_{cid}': {
-                    'mass_flow': stream.mass_flow_kg_h,
-                    'temperature': stream.temperature_k,
-                    'pressure': stream.pressure_pa
-                }
-                for cid, stream in self.outlet_streams.items()
-            }
-        
-        return state

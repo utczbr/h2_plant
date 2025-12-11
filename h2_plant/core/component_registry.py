@@ -59,7 +59,31 @@ class ComponentRegistry:
         self._components: Dict[str, Component] = {}
         self._components_by_type: Dict[str, List[Component]] = defaultdict(list)
         self._initialized: bool = False
+        self._factories: Dict[str, Type[Component]] = {}
+
+    def add_factories(self, **kwargs: Type[Component]) -> None:
+        """
+        Register component factories (classes) for dynamic instantiation.
+        
+        Args:
+            **kwargs: Map of factory_key -> ComponentClass
+            
+        Example:
+            registry.add_factories(WATER_PURIFIER=WaterPurifier, TANK=SimpleTank)
+        """
+        self._factories.update(kwargs)
+        logger.debug(f"Registered factories: {list(kwargs.keys())}")
     
+    def create_component(self, factory_key: str, component_id: str, **kwargs) -> Component:
+        """Create and register a component from a factory."""
+        if factory_key not in self._factories:
+             raise ValueError(f"Unknown factory: {factory_key}")
+             
+        cls = self._factories[factory_key]
+        instance = cls(component_id=component_id, **kwargs)
+        self.register(component_id, instance)
+        return instance
+
     def register(
         self, 
         component_id: Union[str, ComponentID], 

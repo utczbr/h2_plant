@@ -133,3 +133,21 @@ class HybridConstants:
     PH2_EQUIVALENT_EUR_MWh: float = 288.29
     PPPA_EUR_MWh: float = 50.0
     ARBITRAGE_LIMIT_EUR_MWh: float = 338.29
+
+@dataclass(frozen=True)
+class WaterConstants:
+    """Constants for Water Treatment System."""
+    WATER_AMBIENT_T_K: float = 293.15  # 20°C
+    WATER_ATM_P_PA: float = 101325.0   # 1 atm
+    
+    # Reverse Osmosis / Purification
+    WATER_RO_RECOVERY_RATIO: float = _get_val('water', 'ro_recovery_ratio', 0.75)
+    WATER_RO_SPEC_ENERGY_KWH_KG: float = _get_val('water', 'ro_spec_energy_kwh_kg', 0.004) # 4 kWh/m3
+    WATER_PURIFIER_MAX_FLOW_KGH: float = _get_val('water', 'purifier_max_flow_kgh', 5000.0)
+    WATER_PURIFIER_PRESSURE_DROP_PA: float = 5e4  # 0.5 bar drop
+    
+    # Storage Tank
+    ULTRAPURE_TANK_CAPACITY_KG: float = _get_val('water', 'tank_capacity_kg', 10000.0)
+    ULTRAPURE_TANK_OUTLET_MAX_KGH: float = 2000.0
+    ULTRAPURE_TANK_LOW_FILL_RATIO: float = 0.2  # Trigger refill
+

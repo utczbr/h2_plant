@@ -54,7 +54,8 @@ v_cell_values = v_cell_degraded_interpolator(hours)
 data = np.column_stack((hours, v_cell_values))
 
 # Save to .npy
-output_path = "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/lut_pem_degradation.npy"
+from pathlib import Path
+output_path = str(Path(__file__).parent / "lut_pem_degradation.npy")
 np.save(output_path, data)
 
 print(f"LUT saved to {output_path}")

@@ -5,7 +5,9 @@ import numpy as np
 from unittest.mock import MagicMock
 
 # Add project root to path
-sys.path.append('/home/stuart/Documentos/Planta Hidrogenio')
+# Add project root to path
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 from h2_plant.components.reforming.atr_reactor import ATRReactor, linear_interp_scalar, cubic_interp_scalar
 

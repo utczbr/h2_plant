@@ -874,3 +874,30 @@ def dry_cooler_ntu_effectiveness(ntu: float, r: float) -> float:
          exp_term = np.exp(arg)
          
     return (1.0 - exp_term) / (1.0 - r * exp_term)
+
+@njit
+def bilinear_interp_liquid(
+    grid_p: npt.NDArray[np.float64],
+    grid_t: npt.NDArray[np.float64],
+    data: npt.NDArray[np.float64],
+    p: float,
+    t: float
+) -> float:
+    """
+    Optimized bilinear interpolation for liquid water property lookups.
+    Includes bounds clamping for liquid phase (1-20 bar, 0-100 C).
+    """
+    # 1. Clamp to Liquid Water operational bounds
+    # (Prevents extrapolation errors during convergence)
+    p_safe = p
+    if p_safe < 1e5: p_safe = 1e5
+    if p_safe > 20e5: p_safe = 20e5
+    
+    t_safe = t
+    if t_safe < 273.15: t_safe = 273.15
+    if t_safe > 373.15: t_safe = 373.15
+    
+    # 2. Delegate to standard JIT interpolation
+    # (Assuming grid_p and grid_t cover this range)
+    return bilinear_interp_jit(grid_p, grid_t, data, p_safe, t_safe)
+

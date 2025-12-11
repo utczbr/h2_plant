@@ -7,7 +7,9 @@ All validation happens here before PlantBuilder is called.
 
 from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass
+from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 
 class FlowType(str, Enum):
     """Port connection types (prevent invalid connections)."""
@@ -141,8 +143,8 @@ class GraphToConfigAdapter:
             },
             "energy_price": {
                 "source": "file",
-                "price_file": "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/NL_Prices_2024_15min.csv",
-                "wind_data_file": "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/producao_horaria_2_turbinas.csv",
+                "price_file": str(Path(__file__).resolve().parent.parent.parent / "data" / "NL_Prices_2024_15min.csv"),
+                "wind_data_file": str(Path(__file__).resolve().parent.parent.parent / "data" / "producao_horaria_2_turbinas.csv"),
                 "data_resolution_minutes": 15
             },
             "pathway": {
@@ -551,8 +553,8 @@ class GraphToConfigAdapter:
         simulation = SimulationConfig(
             timestep_hours=1.0/60.0,
             duration_hours=8760,
-            energy_price_file="/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/NL_Prices_2024_15min.csv",
-            wind_data_file="/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/producao_horaria_2_turbinas.csv"
+            energy_price_file=str(Path(__file__).resolve().parent.parent.parent / "data" / "NL_Prices_2024_15min.csv"),
+            wind_data_file=str(Path(__file__).resolve().parent.parent.parent / "data" / "producao_horaria_2_turbinas.csv")
         )
         
         # 4. Build EconomicsConfig

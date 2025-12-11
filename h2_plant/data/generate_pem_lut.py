@@ -13,7 +13,8 @@ from h2_plant.config.constants_physics import PEMConstants as PEMConstantsConfig
 CONST = PEMConstantsConfig()
 
 # Load degradation LUT
-deg_path = "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/lut_pem_degradation.npy"
+from pathlib import Path
+deg_path = str(Path(__file__).parent / "lut_pem_degradation.npy")
 deg_data = np.load(deg_path)
 from scipy.interpolate import interp1d
 deg_interpolator = interp1d(deg_data[:, 0], deg_data[:, 1], kind='linear', fill_value="extrapolate")
@@ -70,7 +71,7 @@ for i, j in enumerate(j_grid):
         v_cell_lut[i, k] = calculate_Vcell(j, T, P_op, u_deg)
 
 # Save to .npz
-output_path = "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/data/lut_pem_vcell.npz"
+output_path = str(Path(__file__).parent / "lut_pem_vcell.npz")
 np.savez(output_path, v_cell=v_cell_lut, j_op=j_grid, t_op_h=t_grid)
 
 print(f"LUT saved to {output_path}")

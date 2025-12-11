@@ -50,6 +50,8 @@ class ComponentID(Enum):
     # Water System
     WATER_QUALITY_TEST = "water_quality_test"
     WATER_TREATMENT_BLOCK = "water_treatment_block"
+    WATER_PURIFIER = "water_purifier"
+    WATER_INTAKE_SOURCE = "water_intake_source"
     ULTRAPURE_WATER_STORAGE = "ultrapure_water_storage"
     WATER_PUMP_A = "water_pump_a"
     WATER_PUMP_B = "water_pump_b"

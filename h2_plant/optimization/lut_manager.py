@@ -54,7 +54,7 @@ class LUTConfig:
     properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C')
     
     # Gases to support
-    fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O')
+    fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O', 'Water')
     
     # Interpolation method
     interpolation: Literal['linear', 'cubic'] = 'linear'
