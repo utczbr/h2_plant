@@ -288,9 +288,13 @@ class Orchestrator:
                     self.simulation_state['history'].setdefault(f'{comp_id}_level_kg', []).append(comp.current_level_kg)
                     self.simulation_state['history'].setdefault(f'{comp_id}_pressure_bar', []).append(comp.pressure_bar)
                 
-                # Compressors
+                # Compressors and Pumps (power_kw)
                 if hasattr(comp, 'power_kw'):
                     self.simulation_state['history'].setdefault(f'{comp_id}_power_kw', []).append(comp.power_kw)
+                
+                # Chillers (electrical_power_kw)
+                if hasattr(comp, 'electrical_power_kw'):
+                    self.simulation_state['history'].setdefault(f'{comp_id}_power_kw', []).append(comp.electrical_power_kw)
             
             # Legacy keys for backward compatibility (map to specific known IDs if they exist)
             # Assuming "H2_Tank" and "H2_Compressor" are the main ones for now
@@ -348,7 +352,7 @@ class Orchestrator:
         print(f"* Total Offered Energy: {E_total_offer:.2f} MWh")
         print(f"* Energy Supplied to SOEC: {E_soec:.2f} MWh")
         print(f"* Energy Supplied to PEM: {E_pem:.2f} MWh")
-        print(f"* Energy Consumed by Compressors: {E_compressor_total_mwh:.2f} MWh")
+        print(f"* BoP Energy Consumption (Compressors, Pumps, Chillers): {E_compressor_total_mwh:.2f} MWh")
         print(f"* **Total System Hydrogen Production**: {H2_total:.2f} kg")
         print(f"  * SOEC Production: {H2_soec_total:.2f} kg")
         print(f"  * PEM Production: {H2_pem_total:.2f} kg")
