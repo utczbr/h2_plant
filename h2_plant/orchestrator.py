@@ -116,9 +116,9 @@ class Orchestrator:
         # Get Component Constraints from Context (Single Source of Truth)
         soec_capacity = 0.0
         if soec:
-             # Calculate total capacity: num_modules * max_power * limit
+             # --- Calculate total capacity from Config ---
              spec = self.context.physics.soec_cluster
-             num_modules = 6  # Legacy default
+             num_modules = spec.num_modules
              soec_capacity = num_modules * spec.max_power_nominal_mw * spec.optimal_limit
             
         pem_max = 0.0
@@ -152,7 +152,7 @@ class Orchestrator:
                 current_price=current_price,
                 soec_capacity_mw=soec_capacity,
                 pem_max_power_mw=pem_max,
-                soec_h2_kwh_kg=37.5, # TODO: Get from physics
+                soec_h2_kwh_kg=self.context.physics.soec_cluster.kwh_per_kg,
                 pem_h2_kwh_kg=self.context.physics.pem_system.kwh_per_kg
             )
             
@@ -210,11 +210,110 @@ class Orchestrator:
                 except Exception as e:
                     logger.warning(f"PEM Flow Error: {e}")
 
+                except Exception as e:
+                    logger.warning(f"PEM Flow Error: {e}")
+                    
+            # 2. Balance of Plant Sweep (BoP) - Resolve Buffer Components
+            # Iterate over all components. If it's a Buffer (Tank) with inventory, 
+            # propagate its output to downstream components via PUSH model.
+            for comp_id, comp in self.components.items():
+                is_legacy = hasattr(comp, 'current_level_kg')
+                is_unified = hasattr(comp, 'get_inventory_kg') and hasattr(comp, 'withdraw_kg')
+
+                if is_legacy or is_unified:
+                    try:
+                        # Determine Inventory
+                        available = 0.0
+                        if is_unified:
+                            available = comp.get_inventory_kg()
+                        elif is_legacy:
+                            available = comp.current_level_kg
+                        
+                        if available <= 0:
+                            continue
+
+                        # Determine Output Port
+                        # Try 'outlet' first, then 'h2_out'
+                        out_port = 'outlet'
+                        ports = comp.get_ports() if hasattr(comp, 'get_ports') else {}
+                        if 'outlet' not in ports and 'h2_out' in ports:
+                            out_port = 'h2_out'
+                            
+                        # Determine Max Outflow
+                        max_out = getattr(comp, 'max_outflow_kg_h', 1000.0)
+                        
+                        # Calculate Push Flow
+                        # Simple rule: push available mass up to max_out rate
+                        current_dt_hours = self.context.simulation.timestep_hours
+                        flow_kg_h = min(available / current_dt_hours, max_out)
+                        
+                        if flow_kg_h > 0:
+                            # 1. Propagate downstream FIRST (Push)
+                            # We construct a push stream
+                            from h2_plant.core.stream import Stream
+                            
+                            # Try to get pressure/temp from component if possible
+                            press = getattr(comp, 'pressure_pa', 
+                                          getattr(comp, 'pressure_bar', 1.0) * 1e5)
+                            # If pressure returns bar, handle it? 
+                            # TankArray uses pressure_pa, H2StorageTankEnhanced uses pressure_bar.
+                            # Let's standardize on Pa for Stream
+                            if hasattr(comp, 'pressure_bar'):
+                                press = comp.pressure_bar * 1e5
+                            
+                            temp = getattr(comp, 'temperature_k', 298.15)
+                            
+                            push_stream = Stream(
+                                mass_flow_kg_h=flow_kg_h,
+                                temperature_k=temp,
+                                pressure_pa=press,
+                                composition={'H2': 1.0}
+                            )
+                            
+                            # Propagate
+                            self._step_downstream(comp_id, out_port, push_stream, t_hours)
+                            
+                            # 2. Withdraw Mass Logic
+                            # Now that we've pushed, we deduct the mass.
+                            amount_to_withdraw = flow_kg_h * current_dt_hours
+                            
+                            if is_unified:
+                                withdrawn = comp.withdraw_kg(amount_to_withdraw)
+                                # overflow/underflow handling is inside withdraw_kg
+                            elif is_legacy:
+                                # Legacy direct manipulation
+                                comp.current_level_kg -= amount_to_withdraw
+                                comp.current_level_kg = max(0.0, comp.current_level_kg)
+                            
+                    except Exception as e:
+                        logger.warning(f"BoP Sweep Error {comp_id}: {e}")
+                        pass
+
             total_h2_produced = h2_soec + h2_pem
             
             # Correct P_sold based on actual consumption to ensure mass/energy balance
             # (Coordinator prediction might slightly differ from actual component physics)
-            P_total_consumed = P_soec_actual + P_pem_actual
+            
+            # 1. Sum Electrolyzer Power (MW)
+            P_electrolyzers_mw = P_soec_actual + P_pem_actual
+            
+            # 2. Sum BoP Power (kW -> MW)
+            P_bop_kw = 0.0
+            
+            # Helper to check for power attributes in active components
+            # (We iterate anyway for logging later, but we need the value now for P_sold)
+            for comp_id, comp in self.components.items():
+                # Compressors and Pumps
+                if hasattr(comp, 'power_kw'):
+                    P_bop_kw += comp.power_kw
+                # Chillers
+                if hasattr(comp, 'electrical_power_kw'):
+                    P_bop_kw += comp.electrical_power_kw
+            
+            P_bop_mw = P_bop_kw / 1000.0
+            
+            # 3. Calculate Final Consumption and Sold
+            P_total_consumed = P_electrolyzers_mw + P_bop_mw
             P_sold_corrected = max(0.0, P_offer - P_total_consumed)
             
             # Log

@@ -7,7 +7,7 @@ Refactored to follow the new collapsible pattern.
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class PEMStackNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.electrolysis.pem'
+    __identifier__ = 'nodes.Production'
     NODE_NAME = 'PEM'
 
     def __init__(self):
@@ -49,7 +49,7 @@ class PEMStackNode(ConfigurableNode):
         self.add_spacer('collapse_spacer', height=80)
 
 class RectifierNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.electrolysis.rectifier'
+    __identifier__ = 'nodes.Production'
     NODE_NAME = 'Rectifier'
 
     def __init__(self):
@@ -77,7 +77,7 @@ class RectifierNode(ConfigurableNode):
         self.add_spacer('collapse_spacer', height=60)
 
 class SOECStackNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.electrolysis.soec'
+    __identifier__ = 'nodes.Production'
     NODE_NAME = 'SOEC'
 
     def __init__(self):

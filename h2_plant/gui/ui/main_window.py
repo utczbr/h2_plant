@@ -37,7 +37,11 @@ from h2_plant.gui.nodes.fluid import ProcessCompressorNode, RecirculationPumpNod
 from h2_plant.gui.nodes.pumping import PumpNode 
 from h2_plant.gui.nodes.logistics import ConsumerNode
 from h2_plant.gui.nodes.resources import GridConnectionNode, WaterSupplyNode, AmbientHeatNode, NaturalGasSupplyNode
-from h2_plant.gui.nodes.storage import LPTankNode, HPTankNode, OxygenBufferNode
+from h2_plant.gui.nodes.storage import (
+    LPTankNode, HPTankNode, OxygenBufferNode,
+    LPTankArrayNode, LPEnhancedTankNode,
+    HPTankArrayNode, HPEnhancedTankNode
+)
 from h2_plant.gui.nodes.compression import FillingCompressorNode, OutgoingCompressorNode
 from h2_plant.gui.nodes.logic import DemandSchedulerNode, EnergyPriceNode
 from h2_plant.gui.nodes.utilities import BatteryNode
@@ -900,7 +904,10 @@ class PlantEditorWindow(QMainWindow):
             # Electrolysis
             PEMStackNode, SOECStackNode, # RectifierNode (Implicit),
             # Storage
+            # Storage
             LPTankNode, HPTankNode,
+            LPTankArrayNode, LPEnhancedTankNode,
+            HPTankArrayNode, HPEnhancedTankNode,
             # Compression
             FillingCompressorNode, OutgoingCompressorNode,
             # Fluid Machinery
@@ -955,6 +962,21 @@ class PlantEditorWindow(QMainWindow):
         
         # [FIX] Reverted to LeftDockWidgetArea (Standard layout)
         self.addDockWidget(Qt.LeftDockWidgetArea, self.palette_dock)
+        
+        # Configure palette styling for proper node text display
+        self.palette_dock.setMinimumWidth(220)  # Ensure sufficient width for node names
+        self.nodes_palette.setMinimumWidth(200)
+        
+        # Apply styling to ensure node items are properly sized
+        self.nodes_palette.setStyleSheet("""
+            QTreeView::item {
+                min-height: 24px;
+                padding: 2px 4px;
+            }
+            QTreeView {
+                font-size: 12px;
+            }
+        """)
         
         # Update palette
         self.nodes_palette.update()

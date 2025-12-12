@@ -122,7 +122,8 @@ class GasAccumulatorDynamics:
         V_tank_m3: float = 1.0,
         T_tank_k: float = 298.15,
         initial_pressure_pa: float = 4e6,  # 40 bar
-        R_gas_j_kg_k: float = 4124.0  # H2 gas constant
+        R_gas_j_kg_k: float = 4124.0,  # H2 gas constant
+        max_pressure_pa: float = None  # Configurable max pressure (default: 350 bar)
     ):
         """
         Initialize gas accumulator.
@@ -132,11 +133,15 @@ class GasAccumulatorDynamics:
             T_tank_k: Tank temperature (K)
             initial_pressure_pa: Starting pressure (Pa)
             R_gas_j_kg_k: Gas constant (J/kg·K)
+            max_pressure_pa: Maximum allowed pressure (Pa). Defaults to HIGH_PRESSURE_PA (350 bar).
         """
+        from h2_plant.core.constants import StorageConstants
+        
         self.V = V_tank_m3
         self.T = T_tank_k
         self.P = initial_pressure_pa
         self.R = R_gas_j_kg_k
+        self.max_pressure_pa = max_pressure_pa if max_pressure_pa is not None else StorageConstants.HIGH_PRESSURE_PA
         
         # Current mass in tank
         self.M_kg = (self.P * self.V) / (self.R * self.T)
@@ -175,8 +180,8 @@ class GasAccumulatorDynamics:
         # Forward Euler
         P_new_pa = self.P + dP_dt_pa_s * dt_s
         
-        # Physical bounds (e.g., max 350 bar for LP tank)
-        P_new_pa = max(0, min(P_new_pa, 350e5))  # Clamp to [0, 350 bar]
+        # Physical bounds: configurable max pressure
+        P_new_pa = max(0, min(P_new_pa, self.max_pressure_pa))  # Clamp to [0, max_pressure]
         
         # Update state
         self.P = P_new_pa

@@ -1,32 +1,60 @@
 nodes:
-  # PEM Electrolyzer
   - id: "PEM_1"
     type: "PEM"
     connections:
       - source_port: "h2_out"
-        target_name: "H2_Compressor"
+        target_name: "Compressor_1"
         target_port: "inlet"
         resource_type: "hydrogen"
 
-  # SOEC Electrolyzer
   - id: "SOEC_1"
     type: "SOEC"
     connections:
       - source_port: "h2_out"
-        target_name: "H2_Compressor"
+        target_name: "Compressor_1"
         target_port: "inlet"
         resource_type: "hydrogen"
 
-  # Compressor (Example Passive Component)
-  - id: "H2_Compressor"
+  - id: "Compressor_1"
     type: "Compressor"
+    params:
+      max_flow_kg_h: 3000.0
+      inlet_pressure_bar: 30.0
+      outlet_pressure_bar: 40.0 # To LP Tank
     connections:
       - source_port: "outlet"
-        target_name: "H2_Tank"
+        target_name: "LP_Tank"
         target_port: "inlet"
         resource_type: "hydrogen"
 
-  # Tank
-  - id: "H2_Tank"
+  - id: "LP_Tank"
     type: "Tank"
+    params:
+      capacity_kg: 4000.0 # 4 tanks * 1000kg
+      max_pressure_bar: 40.0
+      initial_level_kg: 0.0
+    connections:
+      - source_port: "outlet"
+        target_name: "Compressor_2"
+        target_port: "inlet"
+        resource_type: "hydrogen"
+
+  - id: "Compressor_2"
+    type: "Compressor"
+    params:
+      max_flow_kg_h: 3000.0
+      inlet_pressure_bar: 40.0 # From LP Tank
+      outlet_pressure_bar: 90.0 # To HP Tank
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_Tank"
+        target_port: "inlet"
+        resource_type: "hydrogen"
+
+  - id: "HP_Tank"
+    type: "Tank"
+    params:
+      capacity_kg: 4000.0 # 4 tanks * 1000kg
+      max_pressure_bar: 90.0
+      initial_level_kg: 0.0
     connections: []

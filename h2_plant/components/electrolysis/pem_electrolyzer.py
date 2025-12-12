@@ -41,6 +41,10 @@ class DetailedPEMElectrolyzer(Component):
             self.base_efficiency = config.base_efficiency
             self.use_polynomials = config.use_polynomials
             self.water_excess_factor = getattr(config, 'water_excess_factor', 0.02)
+            
+            # Output pressure: configurable with LP fallback (30 bar)
+            from h2_plant.core.constants import StorageConstants
+            self.out_pressure_pa = getattr(config, 'out_pressure_pa', StorageConstants.LOW_PRESSURE_PA)
         else:
             # Legacy Dict
             self.config = config
@@ -50,6 +54,10 @@ class DetailedPEMElectrolyzer(Component):
             self.water_excess_factor = config.get('water_excess_factor', 0.02)
             if 'component_id' in config:
                 self.component_id = config['component_id']
+            
+            # Output pressure: configurable with LP fallback (30 bar)
+            from h2_plant.core.constants import StorageConstants
+            self.out_pressure_pa = config.get('out_pressure_pa', StorageConstants.LOW_PRESSURE_PA)
         
         # State variables
         self.t_op_h = 0.0
@@ -120,6 +128,10 @@ class DetailedPEMElectrolyzer(Component):
         self.cumulative_h2_kg = 0.0
         self.cumulative_o2_kg = 0.0
         self.cumulative_energy_kwh = 0.0
+        
+        # Water limiting (Fix 4)
+        self.water_buffer_kg = 0.0  # Accumulated water from receive_input
+        self.available_water_kg_h = float('inf')  # Default infinite if not supplied
         
         # Initialize Degradation Model (Reference Alignment - Delta-based)
         # ==========================================================
@@ -412,7 +424,7 @@ class DetailedPEMElectrolyzer(Component):
             return Stream(
                 mass_flow_kg_h=m_total_out_kg_s * 3600.0,
                 temperature_k=353.15,  # Approx 80C
-                pressure_pa=30e5,      # 30 bar output
+                pressure_pa=self.out_pressure_pa,  # Configurable (default 30 bar)
                 composition={
                     'H2': self.m_H2_kg_s / m_total_out_kg_s if m_total_out_kg_s > 0 else 0.0,
                     'H2O': m_H2O_carryover_kg_s / m_total_out_kg_s if m_total_out_kg_s > 0 else 0.0
@@ -437,12 +449,10 @@ class DetailedPEMElectrolyzer(Component):
         """Receive input."""
         if port_name == 'water_in':
             if isinstance(value, Stream):
-                # We consume water based on reaction stoichiometry
-                # m_H2O_consumed = m_H2 * (MH2O/MH2)
-                # But we calculated m_H2O_kg_s in step() based on power.
-                # So we just accept whatever is given up to what we need?
-                # Or we just accept it all and assume it's stored/used?
-                # For now, accept all.
+                # Accumulate water into buffer for stoichiometric clamping
+                water_received_kg = value.mass_flow_kg_h * self.dt  # Convert rate to mass for timestep
+                self.water_buffer_kg += water_received_kg
+                self.available_water_kg_h = value.mass_flow_kg_h  # Track rate for step() limiting
                 return value.mass_flow_kg_h
         elif port_name == 'power_in':
             if isinstance(value, (int, float)):

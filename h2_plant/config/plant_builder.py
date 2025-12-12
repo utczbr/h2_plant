@@ -20,7 +20,7 @@ from h2_plant.core.exceptions import ConfigurationError
 # from h2_plant.components.production.electrolyzer_source import ElectrolyzerProductionSource
 from h2_plant.components.reforming.atr_reactor import ATRReactor
 # from h2_plant.components.production.atr_source import ATRProductionSource
-# from h2_plant.components.storage.tank_array import TankArray
+from h2_plant.components.storage.h2_tank import TankArray
 from h2_plant.components.storage.source_isolated_tanks import (
     SourceIsolatedTanks, SourceTag
 )
@@ -253,17 +253,28 @@ class PlantBuilder:
         T_STD = 298.15
         
         # LP Tanks (Buffer)
-        # Calculate total volume for the array
-        lp_total_mass = stor_cfg.lp_tanks.count * stor_cfg.lp_tanks.capacity_kg
-        lp_pressure_pa = stor_cfg.lp_tanks.pressure_bar * 1e5
-        lp_volume = (lp_total_mass * R_H2 * T_STD) / lp_pressure_pa
-        
-        lp_tanks = H2StorageTankEnhanced(
-            tank_id="lp_tanks",
-            volume_m3=lp_volume,
-            initial_pressure_bar=1.0, # Start empty/atmospheric
-            max_pressure_bar=stor_cfg.lp_tanks.pressure_bar
-        )
+        if getattr(stor_cfg.lp_tanks, 'model', 'enhanced') == 'array':
+            logger.info("Building LP Tanks as TankArray (Vectorized)")
+            lp_tanks = TankArray(
+                n_tanks=stor_cfg.lp_tanks.count,
+                capacity_kg=stor_cfg.lp_tanks.capacity_kg,
+                pressure_bar=stor_cfg.lp_tanks.pressure_bar,
+                temperature_k=stor_cfg.lp_tanks.temperature_k
+            )
+            lp_tanks.component_id = "lp_tanks" 
+        else:
+            logger.info("Building LP Tanks as H2StorageTankEnhanced (Dynamic)")
+            # Calculate total volume for the tank
+            lp_total_mass = stor_cfg.lp_tanks.count * stor_cfg.lp_tanks.capacity_kg
+            lp_pressure_pa = stor_cfg.lp_tanks.pressure_bar * 1e5
+            lp_volume = (lp_total_mass * R_H2 * T_STD) / lp_pressure_pa
+            
+            lp_tanks = H2StorageTankEnhanced(
+                tank_id="lp_tanks",
+                volume_m3=lp_volume,
+                initial_pressure_bar=1.0, # Start empty/atmospheric
+                max_pressure_bar=stor_cfg.lp_tanks.pressure_bar
+            )
         self.registry.register(ComponentID.LP_TANKS, lp_tanks, component_type='storage')
 
         # HP Storage Logic
@@ -325,18 +336,29 @@ class PlantBuilder:
             else:
                 raise ConfigurationError("isolated_config is missing for source_isolated storage.")
         else:
-            # Standard mixed storage
-            # Calculate total volume
-            hp_total_mass = stor_cfg.hp_tanks.count * stor_cfg.hp_tanks.capacity_kg
-            hp_pressure_pa = stor_cfg.hp_tanks.pressure_bar * 1e5
-            hp_volume = (hp_total_mass * R_H2 * T_STD) / hp_pressure_pa
-            
-            hp_tanks = H2StorageTankEnhanced(
-                tank_id="hp_tanks",
-                volume_m3=hp_volume,
-                initial_pressure_bar=1.0, # Start empty
-                max_pressure_bar=stor_cfg.hp_tanks.pressure_bar
-            )
+            if getattr(stor_cfg.hp_tanks, 'model', 'enhanced') == 'array':
+                logger.info("Building HP Tanks as TankArray (Vectorized)")
+                hp_tanks = TankArray(
+                    n_tanks=stor_cfg.hp_tanks.count,
+                    capacity_kg=stor_cfg.hp_tanks.capacity_kg,
+                    pressure_bar=stor_cfg.hp_tanks.pressure_bar,
+                    temperature_k=stor_cfg.hp_tanks.temperature_k
+                )
+                hp_tanks.component_id = "hp_tanks"
+            else:
+                logger.info("Building HP Tanks as H2StorageTankEnhanced (Dynamic)")
+                # Standard mixed storage
+                # Calculate total volume
+                hp_total_mass = stor_cfg.hp_tanks.count * stor_cfg.hp_tanks.capacity_kg
+                hp_pressure_pa = stor_cfg.hp_tanks.pressure_bar * 1e5
+                hp_volume = (hp_total_mass * R_H2 * T_STD) / hp_pressure_pa
+                
+                hp_tanks = H2StorageTankEnhanced(
+                    tank_id="hp_tanks",
+                    volume_m3=hp_volume,
+                    initial_pressure_bar=1.0, # Start empty
+                    max_pressure_bar=stor_cfg.hp_tanks.pressure_bar
+                )
             self.registry.register(ComponentID.HP_TANKS, hp_tanks, component_type='storage')
             
         logger.debug("Registered storage components (Enhanced)")

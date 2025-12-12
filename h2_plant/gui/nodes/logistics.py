@@ -5,7 +5,7 @@ Logistics component nodes (Consumer/Refueling Station).
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class ConsumerNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.logistics'
+    __identifier__ = 'nodes.Consumers'
     NODE_NAME = 'Refueling Station'
     
     def _init_ports(self):

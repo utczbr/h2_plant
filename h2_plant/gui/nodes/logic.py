@@ -5,7 +5,7 @@ Logic and control nodes (Demand, Price, etc.).
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class DemandSchedulerNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.logic'
+    __identifier__ = 'nodes.Logic'
     NODE_NAME = 'Demand Scheduler'
     
     def _init_ports(self):
@@ -22,7 +22,7 @@ class DemandSchedulerNode(ConfigurableNode):
         self.add_integer_input('night_start_hour', default=22, min_val=0, max_val=23)
 
 class EnergyPriceNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.logic'
+    __identifier__ = 'nodes.Logic'
     NODE_NAME = 'Energy Price'
     
     def _init_ports(self):

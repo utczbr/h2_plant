@@ -109,3 +109,28 @@ class H2StorageTankEnhanced(Component):
             'flow_in_kg_s': self.m_dot_in_kg_s,
             'flow_out_kg_s': self.m_dot_out_kg_s
         }
+
+    # --- Unified Storage Interface ---
+    
+    def get_inventory_kg(self) -> float:
+        """Returns total stored hydrogen mass (Unified Interface)."""
+        return self.mass_kg
+        
+    def withdraw_kg(self, amount: float) -> float:
+        """
+        Withdraws amount from storage immediately (Unified Interface).
+        NOTE: This bypasses the m_dot_out rate logic used in `step`. 
+        This is a bridge for the Orchestrator's push-sweep.
+        """
+        available = self.mass_kg
+        actual = min(amount, available)
+        self.mass_kg -= actual
+        
+        # Also sync the accumulator mass to keep physics consistent
+        self.accumulator.M_kg = self.mass_kg
+        # Update pressure instantly based on new mass (isochoric)
+        # P = mRT/V
+        self.accumulator.P = (self.accumulator.M_kg * self.accumulator.R * self.accumulator.T) / self.accumulator.V
+        self.pressure_bar = self.accumulator.P / 1e5
+        
+        return actual

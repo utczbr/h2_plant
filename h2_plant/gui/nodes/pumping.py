@@ -8,7 +8,7 @@ class PumpNode(ConfigurableNode):
     """
     Water Pump Node with rigorous pressure/efficiency inputs.
     """
-    __identifier__ = 'h2_plant.fluid.pump'
+    __identifier__ = 'nodes.Flow'
     NODE_NAME = 'Pump'
 
     def __init__(self):

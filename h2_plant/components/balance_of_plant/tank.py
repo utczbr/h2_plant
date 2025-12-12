@@ -35,6 +35,7 @@ class Tank(Component):
         Receive input stream from upstream component.
         Buffers the input for processing in step().
         """
+        # print(f"DEBUG: Tank {self.component_id} receive_input {port_name}")
         if port_name == 'inlet' or port_name == 'h2_in':
             if isinstance(value, Stream):
                 if value.mass_flow_kg_h > 0:

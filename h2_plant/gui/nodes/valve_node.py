@@ -1,7 +1,7 @@
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class ValveNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.control.valve'
+    __identifier__ = 'nodes.Flow'
     NODE_NAME = 'Throttling Valve'
 
     def __init__(self):

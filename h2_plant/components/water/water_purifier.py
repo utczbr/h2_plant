@@ -19,7 +19,11 @@ class WaterPurifier(Component):
         
         # State
         self.input_mass_kg = 0.0
-        self.power_consumed_kw = 0.0
+        
+        # Accumulation State
+        self._last_step_time = -1.0
+        self.timestep_power_kw = 0.0
+        self.timestep_energy_kwh = 0.0
         
         # Ports
         self.ultrapure_out_stream: Optional[Stream] = None
@@ -32,6 +36,12 @@ class WaterPurifier(Component):
         
     def step(self, t: float) -> None:
         super().step(t)
+        
+        # 0. Timestep Check
+        if t != self._last_step_time:
+            self.timestep_power_kw = 0.0
+            self.timestep_energy_kwh = 0.0
+            self._last_step_time = t
         
         # 1. Determine Production Demand
         # Check storage tank level to avoid overfilling
@@ -65,8 +75,15 @@ class WaterPurifier(Component):
             
             # 4. Energy Consumption
             # kWh = kg * kWh/kg
+            # 4. Energy Consumption
+            # kWh = kg * kWh/kg
             energy_kwh = pure_mass * WaterConstants.WATER_RO_SPEC_ENERGY_KWH_KG
-            self.power_consumed_kw = energy_kwh / self.dt # kW
+            batch_power_kw = energy_kwh / self.dt # kW
+            
+            self.timestep_power_kw += batch_power_kw
+            self.timestep_energy_kwh += energy_kwh
+            
+            self.power_consumed_kw = self.timestep_power_kw
             
             # 5. Thermodynamics (using LUT or defaults)
             if self.raw_water_in_stream:
@@ -98,8 +115,12 @@ class WaterPurifier(Component):
             # Consume input buffer
             self.input_mass_kg -= processed_mass
             
+            self.input_mass_kg -= processed_mass
+            
         else:
-            self.power_consumed_kw = 0.0
+            # No processing this batch
+            # Preserve accumulated power
+            self.power_consumed_kw = self.timestep_power_kw
             self.ultrapure_out_stream = None
             self.waste_out_stream = None
             # Input mass remains in buffer
@@ -125,6 +146,7 @@ class WaterPurifier(Component):
         return {
             **super().get_state(),
             'power_kw': self.power_consumed_kw,
+            'timestep_energy_kwh': self.timestep_energy_kwh,
             'input_buffer_kg': self.input_mass_kg,
             'ultrapure_flow_kgh': self.ultrapure_out_stream.mass_flow_kg_h if self.ultrapure_out_stream else 0.0
         }

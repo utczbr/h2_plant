@@ -9,7 +9,7 @@ class ArbitrageNode(ConfigurableNode):
     Arbitrage decision node for economic dispatch optimization.
     Determines when to produce H2 vs sell electricity based on prices.
     """
-    __identifier__ = 'h2_plant.economics.arbitrage'
+    __identifier__ = 'nodes.Logic'
     NODE_NAME = 'Arbitrage'
 
     def __init__(self):

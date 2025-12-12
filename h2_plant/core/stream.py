@@ -82,10 +82,20 @@ class Stream:
         Assumes ideal gas law for gases: rho = P / (R_specific * T)
         """
         if self.phase == 'liquid':
-            # Simplified liquid density (mostly water)
-            if 'H2O' in self.composition and self.composition['H2O'] > 0.9:
-                return 1000.0 # approx for water
-            return 1000.0 # fallback
+            # Attempt LUTManager lookup for accurate water density
+            try:
+                from h2_plant.core.component_registry import ComponentRegistry
+                registry = ComponentRegistry.get_instance() if hasattr(ComponentRegistry, 'get_instance') else None
+                if registry:
+                    lut_mgr = registry.get('LUT_MANAGER')
+                    if lut_mgr and 'H2O' in self.composition:
+                        # Lookup water density at T, P
+                        return lut_mgr.lookup('Water', 'D', self.pressure_pa, self.temperature_k)
+            except Exception:
+                pass  # Fallback to hardcoded value
+            
+            # Simplified liquid density (fallback)
+            return 1000.0  # approx for water
             
         # Gas phase
         # Calculate mixture specific gas constant

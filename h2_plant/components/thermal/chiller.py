@@ -88,6 +88,13 @@ class Chiller(Component):
         else:
             self.pump = None
             self.coolant_thermal = None
+            
+        # Accumulation State
+        self._input_buffer: list[Stream] = []
+        self._last_step_time = -1.0
+        self.timestep_cooling_load_kw = 0.0
+        self.timestep_electrical_power_kw = 0.0
+        self.timestep_heat_rejected_kw = 0.0
         
     def initialize(self, dt: float, registry: Any) -> None:
         """Initialize component."""
@@ -139,16 +146,36 @@ class Chiller(Component):
         Args:
             t: Current simulation time in hours
         """
+    def step(self, t: float) -> None:
+        """
+        Execute one timestep of chiller operation.
+        """
         super().step(t)
         
-        # If no inlet flow, idle state
-        if self.inlet_stream.mass_flow_kg_h <= 0:
-            self.outlet_stream = Stream(0.0)
-            self.cooling_load_kw = 0.0
-            self.cooling_water_flow_kg_h = 0.0
-            self.heat_rejected_kw = 0.0
-            self.electrical_power_kw = 0.0
+        # 0. Timestep Update and Reset
+        if t != self._last_step_time:
+            self.timestep_cooling_load_kw = 0.0
+            self.timestep_electrical_power_kw = 0.0
+            self.timestep_heat_rejected_kw = 0.0
+            self._last_step_time = t
+            
+        # 1. Aggregate Inputs
+        if not self._input_buffer:
+            # Preserve accumulated values for history logging (or zero if no activity ever)
+            # If no input this step call, we just return.
+            # But we must update "instantaneous" state to reflect current cumulative
+            self.cooling_load_kw = self.timestep_cooling_load_kw
+            self.electrical_power_kw = self.timestep_electrical_power_kw
+            self.heat_rejected_kw = self.timestep_heat_rejected_kw
             return
+
+        # Mix buffered streams
+        combined_stream = self._input_buffer[0]
+        for s in self._input_buffer[1:]:
+            combined_stream = combined_stream.mix_with(s)
+        self._input_buffer = [] # Clear buffer
+        
+        self.inlet_stream = combined_stream
         
         mass_flow_kg_s = self.inlet_stream.mass_flow_kg_h / 3600.0
         
@@ -217,10 +244,22 @@ class Chiller(Component):
         )
         
         # --- Update state ---
-        self.cooling_load_kw = cooling_load_kw
+        # --- Update state ---
+        self.timestep_cooling_load_kw += cooling_load_kw
         # Heat rejected includes extracted heat + electrical work (imperfect COP)
-        # Typically Q_rejected = Q_cooling + W_compressor
-        self.heat_rejected_kw = abs(cooling_load_kw) + self.electrical_power_kw
+        batch_heat_rejected = abs(cooling_load_kw) + self.electrical_power_kw
+        self.timestep_heat_rejected_kw += batch_heat_rejected
+        self.timestep_electrical_power_kw += self.electrical_power_kw
+        
+        # Update public properties to reflect accumulated timestep totals
+        self.cooling_load_kw = self.timestep_cooling_load_kw
+        self.heat_rejected_kw = self.timestep_heat_rejected_kw
+        # electrical_power_kw already updated above? No, self.electrical_power_kw was local batch.
+        # Check electrical_power_kw assignment above:
+        # self.electrical_power_kw = abs(cooling_load_kw) / self.cop
+        # This overwrote the class attribute with batch value.
+        # Now we map the class attribute to the accumulated total for reporting.
+        self.electrical_power_kw = self.timestep_electrical_power_kw
         
         # Estimate cooling water flow (ΔT_cooling_water ≈ 10K)
         Cp_water = 4.18  # kJ/kg·K
@@ -283,7 +322,8 @@ class Chiller(Component):
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """Receive input at specified port."""
         if port_name == "fluid_in" and isinstance(value, Stream):
-            self.inlet_stream = value
+            if value.mass_flow_kg_h > 0:
+                self._input_buffer.append(value)
             return value.mass_flow_kg_h
         elif port_name == "cooling_water_in" and isinstance(value, Stream):
             # Cooling water is provided externally
@@ -318,8 +358,10 @@ class Chiller(Component):
             'cooling_load_kw': self.cooling_load_kw,
             'outlet_temp_k': self.outlet_stream.temperature_k,
             'outlet_pressure_bar': self.outlet_stream.pressure_pa / 1e5,
+            'outlet_pressure_bar': self.outlet_stream.pressure_pa / 1e5,
             'heat_rejected_kw': self.heat_rejected_kw,
             'electrical_power_kw': self.electrical_power_kw,
+            'timestep_energy_kwh': self.electrical_power_kw * self.dt, # Approximate
             'cooling_water_flow_kg_h': self.cooling_water_flow_kg_h,
             'cop': self.cop,
             'pressure_drop_bar': self.pressure_drop_bar

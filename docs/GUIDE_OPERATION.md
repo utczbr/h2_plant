@@ -126,7 +126,12 @@ production:
     efficiency: 0.75
     reactor_temperature_k: 1200.0
     reactor_pressure_bar: 25.0
+    reactor_pressure_bar: 25.0
     startup_time_hours: 1.0
+
+  # Advanced Physics (Optional)
+  # Override default output pressure (Pa) if downstream requires specific backpressure
+    out_pressure_pa: 3000000  # 30 bar (default)
 ```
 
 **Validation Rules:**
@@ -163,6 +168,11 @@ storage:
       capacity_kg: 200.0
       pressure_bar: 350.0
     oxygen_buffer_capacity_kg: 500.0
+
+  # Advanced Flow Dynamics (Optional)
+  # 'availability' (default): returns stored mass/dt
+  # 'passthrough': returns mass added this step (legacy)
+  output_mode: "availability"
 ```
 
 #### 3. Compression Configuration

@@ -67,31 +67,6 @@ SOEC Electrolyzer,Compressor (C-2),Receiving from,Separation Tank (SP-3),Syngas,
 SOEC Electrolyzer,Compressor (C-2),Send to,PSA (D-3),Syngas,Compressed Syngas
 SOEC Electrolyzer,PSA (D-3),Receiving from,Compressor (C-2),Syngas,Compressed Syngas
 SOEC Electrolyzer,PSA (D-3),Send to,H2 Distribution Line,Hydrogen,Purified Hydrogen
-Autothermal Reforming,Compressor (C-3),Receiving from,Biogas Source,Biogas,Biogas Input
-Autothermal Reforming,Compressor (C-3),Send to,ATR Reactor (ATR),Biogas,Compressed Biogas
-Autothermal Reforming,Steam Gen. (HX-7),Receiving from,Utra-pure Water Tank (WT),Ultra Pure Water,Ultra Pure Water
-Autothermal Reforming,Steam Gen. (HX-7),Send to,ATR Reactor (ATR),Steam,Process Steam
-Autothermal Reforming,ATR Reactor (ATR),Receiving from,Compressor (C-3),Biogas,Compressed Biogas
-Autothermal Reforming,ATR Reactor (ATR),Receiving from,Steam Gen. (HX-7),Steam,Process Steam
-Autothermal Reforming,ATR Reactor (ATR),Send to,Heat Exchanger (HX-8),Syngas,Hot Syngas
-Autothermal Reforming,Heat Exchanger (HX-8),Receiving from,ATR Reactor (ATR),Syngas,Hot Syngas
-Autothermal Reforming,Heat Exchanger (HX-8),Send to,WGS High Temp (WGS-HT),Syngas,Cooled Syngas
-Autothermal Reforming,WGS High Temp (WGS-HT),Receiving from,Heat Exchanger (HX-8),Syngas,Cooled Syngas
-Autothermal Reforming,WGS High Temp (WGS-HT),Send to,Heat Exchanger (HX-9),Syngas,Shifted Syngas
-Autothermal Reforming,Heat Exchanger (HX-9),Receiving from,WGS High Temp (WGS-HT),Syngas,Shifted Syngas
-Autothermal Reforming,Heat Exchanger (HX-9),Send to,WGS Low Temp (WGS-LT),Syngas,Cooled Shifted Gas
-Autothermal Reforming,WGS Low Temp (WGS-LT),Receiving from,Heat Exchanger (HX-9),Syngas,Cooled Shifted Gas
-Autothermal Reforming,WGS Low Temp (WGS-LT),Send to,Heat Exchanger (HX-10),Syngas,Low Temp Shift Gas
-Autothermal Reforming,Heat Exchanger (HX-10),Receiving from,WGS Low Temp (WGS-LT),Syngas,Low Temp Shift Gas
-Autothermal Reforming,Heat Exchanger (HX-10),Send to,Separation Tank (ST-4),Syngas,Cooled Gas Mixture
-Autothermal Reforming,Separation Tank (ST-4),Receiving from,Heat Exchanger (HX-10),Syngas,Cooled Gas Mixture
-Autothermal Reforming,Separation Tank (ST-4),Send to,Compressor (C-4),Hydrogen Rich Gas,Dry Gas
-Autothermal Reforming,Separation Tank (ST-4),Send to,Utra-pure Water Tank (WT),Water,Recycled Water
-Autothermal Reforming,Compressor (C-4),Receiving from,Separation Tank (ST-4),Hydrogen Rich Gas,Dry Gas
-Autothermal Reforming,Compressor (C-4),Send to,PSA (D-4),Hydrogen Rich Gas,Compressed Gas
-Autothermal Reforming,PSA (D-4),Receiving from,Compressor (C-4),Hydrogen Rich Gas,Compressed Gas
-Autothermal Reforming,PSA (D-4),Send to,H2 Distribution Line,Hydrogen,Purified Hydrogen
-Autothermal Reforming,PSA (D-4),Send to,CO2 Capture (CO2C),CO2 / Tail Gas,Tail Gas
 Hydrogen Compressor and Storage,Compressor (C-6),Receiving from,Hydrogen Distribution Line,Hydrogen,H2 from PEM/SOEC/ATR
 Hydrogen Compressor and Storage,Compressor (C-6),Send to,Chiller (HX-11),Hydrogen,Compressed H2
 Hydrogen Compressor and Storage,Chiller (HX-11),Receiving from,Compressor (C-6),Hydrogen,Compressed H2
@@ -102,10 +77,3 @@ Hydrogen Compressor and Storage,Compressor (C-7),Receiving from,H2 Storage Low P
 Hydrogen Compressor and Storage,Compressor (C-7),Send to,H2 Storage High Pressure,Hydrogen,High Pressure H2
 Hydrogen Compressor and Storage,H2 Storage HP,Receiving from,Compressor (C-7),Hydrogen,High Pressure H2
 Hydrogen Compressor and Storage,H2 Storage HP,Send to,H2 Distribution Output,Hydrogen,Final H2 Product
-Carbon Dioxide Capture and Storage,CO2 Capture (CO2C),Receiving from,PSA (D-4),CO2 / Tail Gas,Tail Gas
-Carbon Dioxide Capture and Storage,CO2 Capture (CO2C),Send to,Compressor (C-5),CO2,Captured CO2
-Carbon Dioxide Capture and Storage,CO2 Capture (CO2C),Send to,Biogas Source,Methane/Gas,Recycled Gas
-Carbon Dioxide Capture and Storage,Compressor (C-5),Receiving from,CO2 Capture (CO2C),CO2,Captured CO2
-Carbon Dioxide Capture and Storage,Compressor (C-5),Send to,CO2 Storage (CO2S),CO2,Compressed CO2
-Carbon Dioxide Capture and Storage,CO2 Storage (CO2S),Receiving from,Compressor (C-5),CO2,Compressed CO2
-Carbon Dioxide Capture and Storage,CO2 Storage (CO2S),Send to,CO2 Distribution Output,CO2,Stored CO2

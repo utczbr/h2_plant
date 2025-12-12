@@ -133,6 +133,11 @@ class CompressorStorage(Component):
         self.mode = CompressorMode.IDLE
         self.cumulative_energy_kwh = 0.0
         self.cumulative_mass_kg = 0.0
+        
+        # Timestep Accumulation State
+        self._last_step_time = -1.0
+        self.timestep_power_kw = 0.0
+        self.timestep_energy_kwh = 0.0
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Initialize component and calculate stage configuration."""
@@ -152,7 +157,14 @@ class CompressorStorage(Component):
         """Execute timestep logic."""
         super().step(t)
         
-        # Reset step variables
+        # 0. Timestep Check (Accumulation Logic)
+        if t != self._last_step_time:
+            # New timestep: Reset accumulators
+            self.timestep_power_kw = 0.0
+            self.timestep_energy_kwh = 0.0
+            self._last_step_time = t
+            
+        # Reset step variables (local batch)
         self.actual_mass_transferred_kg = 0.0
         self.energy_consumed_kwh = 0.0
         self.compression_work_kwh = 0.0
@@ -181,16 +193,22 @@ class CompressorStorage(Component):
             
             # 4. Update cumulative statistics
             self.cumulative_energy_kwh += self.energy_consumed_kwh
-            self.cumulative_energy_kwh += self.energy_consumed_kwh
             self.cumulative_mass_kg += self.actual_mass_transferred_kg
             
-            # Calculate instantaneous power (average over step)
+            # Accumulated Power Calculation
+            # Calculate power for this batch
+            batch_power_kw = 0.0
             if self.dt > 0:
-                self.power_kw = self.energy_consumed_kwh / self.dt  # kWh / h = kW
-            else:
-                self.power_kw = 0.0
+                batch_power_kw = self.energy_consumed_kwh / self.dt
             
-            # Reset input for next step
+            # Accumulate
+            self.timestep_power_kw += batch_power_kw
+            self.timestep_energy_kwh += self.energy_consumed_kwh
+            
+            # Map to legacy self.power_kw for Orchestrator logging
+            self.power_kw = self.timestep_power_kw
+            
+            # Reset input for next step (consumed)
             self.transfer_mass_kg = 0.0
         else:
             self.mode = CompressorMode.IDLE
@@ -216,6 +234,7 @@ class CompressorStorage(Component):
             'specific_energy_kwh_kg': float(self.specific_energy_kwh_kg),
             'cumulative_energy_kwh': float(self.cumulative_energy_kwh),
             'cumulative_mass_kg': float(self.cumulative_mass_kg),
+            'timestep_energy_kwh': float(self.timestep_energy_kwh), # New historical field
             'cumulative_specific_kwh_kg': float(cumulative_specific),
             'inlet_pressure_bar': float(self.inlet_pressure_bar),
             'outlet_pressure_bar': float(self.outlet_pressure_bar),
@@ -472,7 +491,7 @@ class CompressorStorage(Component):
     
     def get_output(self, port_name: str) -> Any:
         """Get output from specific port."""
-        if port_name == 'h2_out':
+        if port_name == 'h2_out' or port_name == 'outlet':
             # Return compressed hydrogen stream
             return Stream(
                 mass_flow_kg_h=(self.actual_mass_transferred_kg / self.dt 
@@ -489,7 +508,7 @@ class CompressorStorage(Component):
     
     def receive_input(self, port_name: str, value: Any, resource_type: str) -> float:
         """Receive input into port."""
-        if port_name == 'h2_in':
+        if port_name == 'h2_in' or port_name == 'inlet':
             if isinstance(value, Stream):
                 available_mass = value.mass_flow_kg_h * self.dt
                 max_capacity = self.max_flow_kg_h * self.dt
@@ -518,6 +537,11 @@ class CompressorStorage(Component):
                 'units': 'MW'
             },
             'h2_out': {
+                'type': 'output',
+                'resource_type': 'hydrogen',
+                'units': 'kg/h'
+            },
+            'outlet': {
                 'type': 'output',
                 'resource_type': 'hydrogen',
                 'units': 'kg/h'

@@ -88,3 +88,29 @@ Called by `FlowNetwork` *after* a successful transfer to a downstream component.
 *   **Check Resource Types**: Verify `resource_type` in `receive_input` matches expectation.
 *   **Handle DT**: Always account for timestep `dt` when converting between rates (kg/h) and amounts (kg).
 *   **Mass Balance**: Verify that `Input + Generation = Output + Accumulation`.
+
+## Units and Standards
+
+To ensure physical accuracy across the simulation, the project follows a strict units convention:
+
+### 1. Internal Calculations (SI Units)
+All internal physics, thermodynamics, and flow calculations use **SI Units**:
+*   **Pressure**: Pascals (`Pa`)
+*   **Temperature**: Kelvin (`K`)
+*   **Mass**: Kilograms (`kg`)
+*   **Energy**: Joules (`J`) or Watt-hours (`Wh`) for electrical/thermal flows
+*   **Time**: Hours (`h`) - *Note: Flow rates are commonly `kg/h` per industry standard, requiring conversion for `dM/dt` (kg/s).*
+
+### 2. Configuration & GUI (Engineering Units)
+For user-facing configuration (YAML) and GUI displays, use **Engineering Units** for readability:
+*   **Pressure**: Bar (`bar`)
+    *   *Convention*: Config loaders convert `bar` -> `Pa` (x1e5) during initialization.
+*   **Temperature**: degrees Celsius (`°C`) or Kelvin (`K`) depending on context.
+*   **Power**: Megawatts (`MW`) or Kilowatts (`kW`).
+
+**Developer Tip**: When implementing `__init__`, always convert config parameters to SI immediately:
+```python
+# pattern
+self.pressure_pa = config.pressure_bar * 1e5
+```
+Exceptions: Some advanced physics parameters (like `out_pressure_pa`) may be exposed directly in SI to avoid ambiguity in sensitive calculations.

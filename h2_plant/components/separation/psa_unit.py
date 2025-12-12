@@ -9,10 +9,27 @@ class PSAUnit(Component):
         self.gas_type = gas_type
         self.feed_gas_kg_h = 0.0
         self.product_gas_kg_h = 0.0
+        self.product_gas_kg_h = 0.0
         self.input_stream = None
+        
+        # Accumulation
+        self._input_mass_buffer = 0.0
+        self._last_step_time = -1.0
 
     def step(self, t: float) -> None:
         super().step(t)
+        
+        # Timestep Logic
+        if t != self._last_step_time:
+            # New timestep, clear "processed" state if needed
+            self.feed_gas_kg_h = 0.0 # Clear previous rate
+            self._last_step_time = t
+            
+        # Consume Buffer
+        if self._input_mass_buffer > 0:
+             self.feed_gas_kg_h += self._input_mass_buffer
+             self._input_mass_buffer = 0.0
+             
         self.product_gas_kg_h = self.feed_gas_kg_h * 0.9 # 90% recovery
 
     def get_state(self) -> Dict[str, Any]:
@@ -57,9 +74,9 @@ class PSAUnit(Component):
         if port_name == 'h2_in':
             if isinstance(value, Stream):
                 self.input_stream = value
-                self.feed_gas_kg_h = value.mass_flow_kg_h
-                self.product_gas_kg_h = self.feed_gas_kg_h * 0.9 # 90% recovery
-                return self.feed_gas_kg_h
+                # Accumulate in buffer
+                self._input_mass_buffer += value.mass_flow_kg_h
+                return value.mass_flow_kg_h
         return 0.0
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:

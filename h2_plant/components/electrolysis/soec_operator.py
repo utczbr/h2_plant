@@ -51,6 +51,10 @@ class SOECOperator(Component):
             self.ramp_step_mw = config.ramp_step_mw
             self.steam_input_ratio = getattr(config, 'steam_input_ratio_kg_per_kg_h2', 10.5)
             
+            # Output pressure: configurable with LP fallback (30 bar)
+            from h2_plant.core.constants import StorageConstants
+            self.out_pressure_pa = getattr(config, 'out_pressure_pa', StorageConstants.LOW_PRESSURE_PA)
+            
             # Legacy compatibility
             self.config = config.dict()
             self.physics_config = {} 
@@ -71,6 +75,10 @@ class SOECOperator(Component):
             self.power_first_step_mw = soec_phys.get("power_first_step_mw", DEFAULT_POWER_FIRST_STEP_MW)
             self.ramp_step_mw = soec_phys.get("ramp_step_mw", DEFAULT_RAMP_STEP_MW)
             self.steam_input_ratio = soec_phys.get("steam_input_ratio_kg_per_kg_h2", 10.5)
+            
+            # Output pressure: configurable with LP fallback (30 bar)
+            from h2_plant.core.constants import StorageConstants
+            self.out_pressure_pa = config.get("out_pressure_pa", StorageConstants.LOW_PRESSURE_PA)
         
         # Initialize Interpolators (Using numpy.interp)
         # self.efficiency_interpolator = interp1d(DEG_YEARS, DEG_EFFICIENCY_KWH_KG, kind='linear', fill_value="extrapolate")
@@ -78,6 +86,10 @@ class SOECOperator(Component):
         
         # Initialize State
         self._initialize_state()
+
+        # For water input accumulation
+        self._input_water_buffer_kg_h: List[float] = []
+        self._last_step_time: float = 0.0
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Initialize component."""
@@ -182,6 +194,24 @@ class SOECOperator(Component):
         """
         super().step(t)
         
+        # Handle water input accumulation and reset for new timesteps
+        if t != self._last_step_time:
+            # New timestep logic
+            if self._input_water_buffer_kg_h:
+                # Explicit inputs received: Use them as the limit
+                self.available_water_kg_h = sum(self._input_water_buffer_kg_h)
+                self._input_water_buffer_kg_h.clear()
+            else:
+                # No inputs: Assume infinite water (Legacy/Simple Topologies)
+                # Unless we strictly want to enforce 0. 
+                # Given current topologies lack water sources, we default to inf.
+                self.available_water_kg_h = float('inf')
+                
+            self._last_step_time = t
+        # If t == self._last_step_time, it means step() is called multiple times for the same
+        # simulation time (e.g., by an iterative solver). In this case, we reuse the
+        # available_water_kg_h calculated in the first call for this 't'.
+        
         # 1. Determine Power Setpoint
         # Use internal setpoint from ports
         reference_power_mw = self._power_setpoint_mw
@@ -264,9 +294,7 @@ class SOECOperator(Component):
         
         return current_total_power, h2_produced_kg, steam_input_kg
 
-        return current_total_power, h2_produced_kg, steam_input_kg
-
-    def receive_input(self, port_name: str, value: Any, resource_type: str) -> float:
+    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """
         Receive input stream/resource.
         
@@ -280,9 +308,9 @@ class SOECOperator(Component):
                 self._power_setpoint_mw = float(value)
                 return float(value)
         elif port_name in ('water_in', 'steam_in'):
-            if hasattr(value, 'mass_flow_kg_h'):
-                # Store available steam/water flow for the step
-                self.available_water_kg_h = value.mass_flow_kg_h
+            if isinstance(value, Stream):
+                # Accumulate water inputs into a buffer
+                self._input_water_buffer_kg_h.append(value.mass_flow_kg_h)
                 return value.mass_flow_kg_h
         return 0.0
 
@@ -303,7 +331,7 @@ class SOECOperator(Component):
             return Stream(
                 mass_flow_kg_h=h2_kg * (1.0/self.dt) if self.dt > 0 else 0.0, # Convert kg/step to kg/h
                 temperature_k=1073.15, # ~800C
-                pressure_pa=101325.0,  # Atmospheric or slightly pressurized
+                pressure_pa=self.out_pressure_pa,  # Configurable (default 30 bar)
                 composition={'H2': 1.0},
                 phase='gas'
             )

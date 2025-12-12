@@ -7,7 +7,7 @@ Refactored to follow the new collapsible pattern.
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class HeatExchangerNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.thermal.hx'
+    __identifier__ = 'nodes.Thermal'
     NODE_NAME = 'Heat Exchanger'
 
     def __init__(self):
@@ -38,7 +38,7 @@ class HeatExchangerNode(ConfigurableNode):
 
 class ChillerNode(ConfigurableNode):
     """Chiller/cooler node for thermal management of gas streams."""
-    __identifier__ = 'h2_plant.thermal.chiller'
+    __identifier__ = 'nodes.Thermal'
     NODE_NAME = 'Chiller'
 
     def __init__(self):
@@ -73,7 +73,7 @@ class ChillerNode(ConfigurableNode):
 
 class DryCoolerNode(ConfigurableNode):
     """Dry Cooler node for ambient air cooling."""
-    __identifier__ = 'h2_plant.thermal.dry_cooler'
+    __identifier__ = 'nodes.Thermal'
     NODE_NAME = 'Dry Cooler'
 
     def __init__(self):

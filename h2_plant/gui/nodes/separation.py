@@ -7,7 +7,7 @@ Refactored to follow the new collapsible pattern.
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class PSAUnitNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.separation.psa'
+    __identifier__ = 'nodes.Separation'
     NODE_NAME = 'PSA Unit'
 
     def __init__(self):
@@ -38,7 +38,7 @@ class PSAUnitNode(ConfigurableNode):
         self.add_spacer('collapse_spacer', height=60)
 
 class SeparationTankNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.separation.tank'
+    __identifier__ = 'nodes.Separation'
     NODE_NAME = 'Separation Tank'
 
     def __init__(self):
@@ -68,7 +68,7 @@ class SeparationTankNode(ConfigurableNode):
 
 class CoalescerNode(ConfigurableNode):
     """Coalescer node for aerosol/liquid removal from gas streams."""
-    __identifier__ = 'h2_plant.separation.coalescer'
+    __identifier__ = 'nodes.Separation'
     NODE_NAME = 'Coalescer'
 
     def __init__(self):
@@ -106,7 +106,7 @@ class KnockOutDrumNode(ConfigurableNode):
     A vertical separator vessel that removes liquid water droplets
     from H2 or O2 streams using gravity separation.
     """
-    __identifier__ = 'h2_plant.separation.knock_out_drum'
+    __identifier__ = 'nodes.Separation'
     NODE_NAME = 'Knock-Out Drum'
 
     def __init__(self):
@@ -139,7 +139,7 @@ class KnockOutDrumNode(ConfigurableNode):
 
 class DeoxoReactorNode(ConfigurableNode):
     """Catalytic Deoxidizer for removing O2 from H2 streams."""
-    __identifier__ = 'h2_plant.purification.deoxo'
+    __identifier__ = 'nodes.Separation'
     NODE_NAME = 'Deoxo Reactor'
 
     def __init__(self):
@@ -159,7 +159,7 @@ class DeoxoReactorNode(ConfigurableNode):
 
 class TSAUnitNode(ConfigurableNode):
     """Thermal Swing Adsorption Unit for drying gas streams."""
-    __identifier__ = 'h2_plant.purification.tsa'
+    __identifier__ = 'nodes.Separation'
     NODE_NAME = 'TSA Unit'
 
     def __init__(self):

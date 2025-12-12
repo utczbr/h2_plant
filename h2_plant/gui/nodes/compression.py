@@ -7,8 +7,8 @@ Refactored to follow the new collapsible pattern.
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
 class FillingCompressorNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.compression.filling'
-    NODE_NAME = 'Compressor (Production -> Storage)'
+    __identifier__ = 'nodes.Compression'
+    NODE_NAME = 'Compressor P→S'
 
     def __init__(self):
         super(FillingCompressorNode, self).__init__()
@@ -47,8 +47,8 @@ class FillingCompressorNode(ConfigurableNode):
         self.add_spacer('collapse_spacer', height=80)
 
 class OutgoingCompressorNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.compression.outgoing'
-    NODE_NAME = 'Compressor (Storage -> Export)'
+    __identifier__ = 'nodes.Compression'
+    NODE_NAME = 'Compressor S→E'
 
     def __init__(self):
         super(OutgoingCompressorNode, self).__init__()

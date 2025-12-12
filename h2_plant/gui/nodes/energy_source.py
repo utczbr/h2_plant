@@ -9,7 +9,7 @@ class WindEnergySourceNode(ConfigurableNode):
     Wind energy source node for power input.
     Supports constant power or CSV time series input.
     """
-    __identifier__ = 'h2_plant.source.wind'
+    __identifier__ = 'nodes.Sources'
     NODE_NAME = 'Wind Energy Source'
 
     def __init__(self):

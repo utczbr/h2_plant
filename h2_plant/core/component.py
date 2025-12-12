@@ -215,7 +215,23 @@ class Component(ABC):
             Amount accepted (e.g., mass in kg or energy in kWh)
             Default implementation returns 0 (accepts nothing).
         """
-        # Default implementation: component doesn't accept input
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Log unhandled inputs for debuggability
+        logger.debug(
+            f"{self.component_id}: Ignored input port='{port_name}', "
+            f"value={value}, resource_type='{resource_type}'"
+        )
+        
+        # Optional strict mode: raise on unhandled inputs
+        if self.config and hasattr(self.config, 'get'):
+            if self.config.get('strict_inputs', False):
+                raise ValueError(
+                    f"{self.component_id}: No handler for input port='{port_name}' "
+                    f"with resource_type='{resource_type}'"
+                )
+        
         return 0.0
 
     def extract_output(self, port_name: str, amount: float, resource_type: str) -> None:

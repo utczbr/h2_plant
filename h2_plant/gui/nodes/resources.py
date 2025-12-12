@@ -9,7 +9,7 @@ from h2_plant.gui.nodes.base_node import ConfigurableNode
 SUPPLY_MODES = ['on_demand', 'scaled', 'constant']
 
 class GridConnectionNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.resources.grid'
+    __identifier__ = 'nodes.Sources'
     NODE_NAME = 'Grid Connection'
 
     def __init__(self):
@@ -39,7 +39,7 @@ class GridConnectionNode(ConfigurableNode):
 
 
 class WaterSupplyNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.resources.water'
+    __identifier__ = 'nodes.Sources'
     NODE_NAME = 'Water Supply'
 
     def __init__(self):
@@ -66,7 +66,7 @@ class WaterSupplyNode(ConfigurableNode):
 
 
 class AmbientHeatNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.resources.heat'
+    __identifier__ = 'nodes.Sources'
     NODE_NAME = 'Ambient Heat Source'
 
     def __init__(self):
@@ -92,7 +92,7 @@ class AmbientHeatNode(ConfigurableNode):
 
 
 class NaturalGasSupplyNode(ConfigurableNode):
-    __identifier__ = 'h2_plant.resources.ng'
+    __identifier__ = 'nodes.Sources'
     NODE_NAME = 'Natural Gas Supply'
 
     def __init__(self):

@@ -57,6 +57,11 @@ class Pump(Component):
         self.last_power_kw = 0.0
         self.last_efficiency = 0.0
         
+        # Accumulation State
+        self._last_step_time = -1.0
+        self.timestep_power_kw = 0.0
+        self.timestep_energy_kwh = 0.0
+        
         self._lut_manager = None
         
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
@@ -86,9 +91,17 @@ class Pump(Component):
     def step(self, t: float) -> None:
         super().step(t)
         
+        # 0. Timestep Check
+        if t != self._last_step_time:
+            self.timestep_power_kw = 0.0
+            self.timestep_energy_kwh = 0.0
+            self._last_step_time = t
+        
         # 1. Aggregate Inputs
         if not self._input_buffer:
-            self.power_kw = 0.0
+            # No new input logic, but preserve existing accumulated power for this step
+            # If step() called with no new input, we don't zero out power_kw
+            self.power_kw = self.timestep_power_kw
             self.flow_rate_kg_h = 0.0
             self.outlet_stream = None
             return
@@ -169,7 +182,12 @@ class Pump(Component):
             mass_flow_kg_s = self.flow_rate_kg_h / 3600.0
             fluid_power_w = mass_flow_kg_s * w_real
             shaft_power_w = fluid_power_w / self.eta_m
-            self.power_kw = shaft_power_w / 1000.0
+            batch_power_kw = shaft_power_w / 1000.0
+            
+            self.timestep_power_kw += batch_power_kw
+            self.timestep_energy_kwh += batch_power_kw * self.dt # Approximation
+            
+            self.power_kw = self.timestep_power_kw
             
             # 6. Create Output Stream
             self.outlet_stream = Stream(
@@ -196,7 +214,12 @@ class Pump(Component):
         vol_flow_m3_s = mass_flow_kg_s / rho
         
         hydraulic_power_w = vol_flow_m3_s * dP_Pa
-        self.power_kw = (hydraulic_power_w / (self.eta_is * self.eta_m)) / 1000.0
+        batch_power_kw = (hydraulic_power_w / (self.eta_is * self.eta_m)) / 1000.0
+        
+        self.timestep_power_kw += batch_power_kw
+        self.timestep_energy_kwh += batch_power_kw * self.dt
+        
+        self.power_kw = self.timestep_power_kw
         
         # Neglect temp rise
         self.outlet_temp_c = inlet.temperature_k - 273.15
@@ -213,6 +236,7 @@ class Pump(Component):
         return {
             **super().get_state(),
             "power_kw": self.power_kw,
+            "timestep_energy_kwh": self.timestep_energy_kwh,
             "flow_rate_kg_h": self.flow_rate_kg_h,
             "outlet_temp_c": self.outlet_temp_c,
             "target_pressure_bar": self.target_pressure_pa / 1e5

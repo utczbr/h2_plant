@@ -8,7 +8,7 @@ class MixerNode(ConfigurableNode):
     """
     Gas/Fluid Mixer node.
     """
-    __identifier__ = 'h2_plant.flow.mixer'
+    __identifier__ = 'nodes.Flow'
     NODE_NAME = 'Mixer (Generic)'
 
     def __init__(self):
@@ -49,7 +49,7 @@ class WaterMixerNode(ConfigurableNode):
     """
     Specialized Water Mixer Node.
     """
-    __identifier__ = 'h2_plant.flow.water_mixer'
+    __identifier__ = 'nodes.Flow'
     NODE_NAME = 'Water Mixer'
 
     def __init__(self):

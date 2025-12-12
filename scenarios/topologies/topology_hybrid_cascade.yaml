@@ -18,7 +18,7 @@ nodes:
   - id: "Compressor_1"
     type: "Compressor"
     params:
-      max_flow_kg_h: 500.0
+      max_flow_kg_h: 3000.0
       inlet_pressure_bar: 30.0
       outlet_pressure_bar: 40.0 # To LP Tank
     connections:
@@ -42,7 +42,7 @@ nodes:
   - id: "Compressor_2"
     type: "Compressor"
     params:
-      max_flow_kg_h: 500.0
+      max_flow_kg_h: 3000.0
       inlet_pressure_bar: 40.0 # From LP Tank
       outlet_pressure_bar: 90.0 # To HP Tank
     connections:

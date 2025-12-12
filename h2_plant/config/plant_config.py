@@ -152,6 +152,7 @@ class TankArrayConfig:
     capacity_kg: float = 200.0
     pressure_bar: float = 350.0
     temperature_k: float = 298.15
+    model: Literal['array', 'enhanced'] = 'enhanced'
     
     def validate(self) -> None:
         """Validate tank array configuration."""

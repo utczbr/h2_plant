@@ -77,7 +77,11 @@ class GraphToConfigAdapter:
         
         # Storage
         "LPTankNode": ("storage", "lp_tanks"),
+        "LPTankArrayNode": ("storage", "lp_tanks"),
+        "LPEnhancedTankNode": ("storage", "lp_tanks"),
         "HPTankNode": ("storage", "hp_tanks"),
+        "HPTankArrayNode": ("storage", "hp_tanks"),
+        "HPEnhancedTankNode": ("storage", "hp_tanks"),
         "OxygenBufferNode": ("storage", "oxygen_buffer"), # Note: This might need special handling if it's part of isolated config
         
         # Compression
@@ -308,9 +312,13 @@ class GraphToConfigAdapter:
         PROPERTY_MAPPINGS = {
             'lp': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
             'LPTankNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            'LPTankArrayNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            'LPEnhancedTankNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
             
             'hp': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
             'HPTankNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            'HPTankArrayNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
+            'HPEnhancedTankNode': {'tank_count': 'count', 'capacity_per_tank_kg': 'capacity_kg', 'operating_pressure_bar': 'pressure_bar'},
             
             'filling': {'efficiency': 'isentropic_efficiency'},
             'FillingCompressorNode': {'efficiency': 'isentropic_efficiency'},
@@ -340,8 +348,8 @@ class GraphToConfigAdapter:
         # Property whitelists: Only these properties are passed to backend
         pem_wl = ['rated_power_kw', 'efficiency_rated', 'component_id']
         soec_wl = ['rated_power_kw', 'operating_temp_c', 'component_id']
-        lp_wl = ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id']
-        hp_wl = ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id']
+        lp_wl = ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id', 'model']
+        hp_wl = ['tank_count', 'capacity_per_tank_kg', 'operating_pressure_bar', 'component_id', 'model']
         comp_wl = ['max_flow_kg_h', 'inlet_pressure_bar', 'outlet_pressure_bar', 'efficiency', 'component_id']
         cons_wl = ['num_bays', 'filling_rate_kg_h', 'component_id']
         pump_wl = ['target_pressure_bar', 'isentropic_efficiency', 'mechanical_efficiency', 'design_flow_kg_h', 'component_id']
@@ -352,7 +360,9 @@ class GraphToConfigAdapter:
             'pem': pem_wl, 'PEMStackNode': pem_wl,
             'soec': soec_wl, 'SOECStackNode': soec_wl,
             'lp': lp_wl, 'LPTankNode': lp_wl,
+            'LPTankArrayNode': lp_wl, 'LPEnhancedTankNode': lp_wl,
             'hp': hp_wl, 'HPTankNode': hp_wl,
+            'HPTankArrayNode': hp_wl, 'HPEnhancedTankNode': hp_wl,
             'filling': comp_wl, 'FillingCompressorNode': comp_wl,
             'outgoing': comp_wl, 'OutgoingCompressorNode': comp_wl,
             'consumer': cons_wl, 'ConsumerNode': cons_wl,

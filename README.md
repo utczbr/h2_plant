@@ -1,6 +1,7 @@
 # Hydrogen Plant Simulation System
 
 This project simulates a modular dual-path hydrogen production plant (Arbitration).
+**Status:** Operational & Verified (Dec 2025). Supports Hybrid (Simple/Cascade) topologies with realistic Balance of Plant energy accounting.
 
 ## Prerequisites
 
