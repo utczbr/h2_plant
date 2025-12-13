@@ -11,6 +11,10 @@ class Orchestrator:
     """
     The Orchestrator manages the simulation lifecycle, configuration loading,
     and component coordination.
+    
+    Note: For new simulations, consider using run_integrated_simulation.py
+    which uses the unified SimulationEngine + DispatchStrategy architecture.
+    This class is maintained for backward compatibility with existing GUI code.
     """
     def __init__(self, scenarios_dir: str, context: Optional['SimulationContext'] = None):
         self.scenarios_dir = scenarios_dir
@@ -23,6 +27,15 @@ class Orchestrator:
             from h2_plant.config.loader import ConfigLoader
             self.loader = ConfigLoader(scenarios_dir)
             self.context = self.loader.load_context()
+        
+        # === B3: StateManager integration for checkpointing ===
+        from pathlib import Path
+        from h2_plant.simulation.state_manager import StateManager
+        self._output_dir = Path(scenarios_dir) / "simulation_output"
+        self._output_dir.mkdir(parents=True, exist_ok=True)
+        self.state_manager = StateManager(output_dir=self._output_dir)
+        self._checkpoint_interval_hours = 168  # Weekly checkpoints (configurable)
+        self._last_checkpoint_hour = -1
         
         # Build Graph
         from h2_plant.core.graph_builder import PlantGraphBuilder
@@ -152,8 +165,8 @@ class Orchestrator:
                 current_price=current_price,
                 soec_capacity_mw=soec_capacity,
                 pem_max_power_mw=pem_max,
-                soec_h2_kwh_kg=self.context.physics.soec_cluster.kwh_per_kg,
-                pem_h2_kwh_kg=self.context.physics.pem_system.kwh_per_kg
+                soec_h2_kwh_kg=getattr(self.context.physics.soec_cluster, 'kwh_per_kg', 37.5),
+                pem_h2_kwh_kg=getattr(self.context.physics.pem_system, 'kwh_per_kg', 50.0)
             )
             
             # Update State
@@ -209,10 +222,36 @@ class Orchestrator:
                         self._step_downstream(pem.component_id, 'h2_out', h2_stream, t_hours)
                 except Exception as e:
                     logger.warning(f"PEM Flow Error: {e}")
-
-                except Exception as e:
-                    logger.warning(f"PEM Flow Error: {e}")
                     
+                    
+            # 1.5 Execute Active Balance of Plant Components (Compressors, Pumps)
+            # Iterate through all components to step them and propagate output
+            for comp_id, comp in self.components.items():
+                if comp is soec or comp is pem:
+                    continue
+
+                try:
+                    # 1. Step Component
+                    if hasattr(comp, 'step'):
+                        comp.step(t_hours)
+
+                    # 2. Propagate Output (Push)
+                    # We skip Tanks here because they are handled in the specific "BoP Sweep" below
+                    is_tank = hasattr(comp, 'current_level_kg') or (hasattr(comp, 'get_inventory_kg') and hasattr(comp, 'withdraw_kg'))
+                    
+                    if not is_tank and hasattr(comp, 'get_output'):
+                        # Try standard output ports
+                        # Priority: outlet > h2_out > water_out > out
+                        for port in ['outlet', 'h2_out', 'water_out', 'out']:
+                            try:
+                                stream = comp.get_output(port)
+                                if stream and hasattr(stream, 'mass_flow_kg_h') and stream.mass_flow_kg_h > 0:
+                                    self._step_downstream(comp_id, port, stream, t_hours)
+                            except Exception:
+                                continue 
+                except Exception as e:
+                    logger.warning(f"BoP Component {comp_id} Step Error: {e}")
+
             # 2. Balance of Plant Sweep (BoP) - Resolve Buffer Components
             # Iterate over all components. If it's a Buffer (Tank) with inventory, 
             # propagate its output to downstream components via PUSH model.
@@ -419,6 +458,14 @@ class Orchestrator:
                     f" | {minute:03d} | {minute//60 + 1} | {P_offer:9.2f} | {P_soec_actual:7.2f} | {P_pem_actual:6.2f} | {P_sold_corrected:7.2f} | {current_price:5.0f} | {sell_dec_str:3s} | {h2_soec_min:16.4f} | {h2_pem_min:15.4f} | {h2o_pem_min:16.4f} |"
                 )
             
+            # === B3: Automatic checkpointing ===
+            current_hour = int(t_hours)
+            if (current_hour > 0 and 
+                current_hour % self._checkpoint_interval_hours == 0 and 
+                current_hour != self._last_checkpoint_hour):
+                self._save_checkpoint(current_hour, step_idx)
+                self._last_checkpoint_hour = current_hour
+            
         # DEBUG SUMMARY
         print("\n## Simulation Summary (Total/Average Values)")
         import numpy as np
@@ -509,6 +556,37 @@ class Orchestrator:
                 
         return mapping
 
+    def _save_checkpoint(self, hour: int, step_idx: int, emergency: bool = False) -> None:
+        """
+        Save simulation checkpoint (B3: State Management).
+        
+        Args:
+            hour: Current simulation hour
+            step_idx: Current step index in the simulation
+            emergency: True if this is an emergency checkpoint (e.g., crash)
+        """
+        checkpoint_type = "emergency" if emergency else "regular"
+        logger.info(f"Saving {checkpoint_type} checkpoint at hour {hour}")
+        
+        try:
+            component_states = self.registry.get_all_states()
+            
+            checkpoint_path = self.state_manager.save_checkpoint(
+                hour=hour,
+                component_states=component_states,
+                metadata={
+                    'step_idx': step_idx,
+                    'checkpoint_type': checkpoint_type,
+                    'simulation_state': {
+                        'P_soec_prev': self.simulation_state.get('P_soec_prev', 0.0),
+                        'force_sell': self.simulation_state.get('force_sell', False)
+                    }
+                }
+            )
+            logger.debug(f"Checkpoint saved to: {checkpoint_path}")
+        except Exception as e:
+            logger.error(f"Checkpoint save failed: {e}", exc_info=True)
+
     def _build_process_flow_map(self):
         """Builds the process flow map from topology."""
         self.process_flow_map = {} # source_id -> {source_port -> [(target_id, target_port)]}
@@ -536,42 +614,103 @@ class Orchestrator:
         logger.info(f"Built process flow map with {len(self.process_flow_map)} sources.")
 
     def _step_downstream(self, source_id: str, source_port: str, value: Any, t: float, visited: set = None):
-        """Recursively execute downstream components."""
-        if visited is None: visited = set()
+        """
+        Propagate flow data to downstream components.
+        
+        CRITICAL FIXES (Phase A):
+        - A1: REMOVED step(t) calls - Engine handles stepping, not flow propagation
+        - A2: ADDED extract_output() calls to enforce mass conservation
+        - A4: Wrap values in Stream objects for thermodynamic data preservation
+        
+        This method only transfers data between components. The simulation loop
+        (SimulationEngine or run_simulation) is responsible for calling step()
+        exactly once per component per timestep.
+        """
+        from h2_plant.core.stream import Stream
+        
+        if visited is None: 
+            visited = set()
         
         # Avoid cycles
         state_key = (source_id, source_port)
-        if state_key in visited: return
+        if state_key in visited: 
+            return
         visited.add(state_key)
         
         # Find connections
         targets = self.process_flow_map.get(source_id, {}).get(source_port, [])
         
+        if not targets:
+            return
+        
+        # === A4: Ensure value is a Stream object ===
+        if not isinstance(value, Stream):
+            if isinstance(value, (int, float)):
+                value = Stream(
+                    mass_flow_kg_h=float(value),
+                    temperature_k=298.15,
+                    pressure_pa=101325.0,
+                    composition={'H2': 1.0}
+                )
+            elif value is None:
+                return  # No data to transfer
+        
         for target_id, target_port in targets:
             comp = self.components.get(target_id)
-            if not comp: continue
+            if not comp: 
+                continue
             
             try:
-                # Transfer Input
-                # We don't know resource type here easily, pass 'unknown' or infer
-                comp.receive_input(target_port, value, resource_type='unknown')
+                # Infer resource type from Stream composition
+                resource_type = self._infer_resource_type(value)
                 
-                # Execute Step
-                comp.step(t)
+                # Transfer input to downstream component
+                accepted = comp.receive_input(target_port, value, resource_type=resource_type)
                 
-                # Propagate Outputs
-                # We need to know which outputs to propagate.
-                # Iterate all output ports of the component.
-                ports = comp.get_ports()
+                # === A1 FIX: DO NOT call step(t) here! ===
+                # The simulation loop handles stepping. Flow propagation only transfers data.
+                # REMOVED: comp.step(t)
+                
+                # Propagate outputs from this component (if any)
+                # Note: This is for intermediate buffering only, not physics execution
+                ports = comp.get_ports() if hasattr(comp, 'get_ports') else {}
                 for p_name, p_meta in ports.items():
                     if p_meta.get('type') == 'output':
                         try:
                             out_val = comp.get_output(p_name)
-                            self._step_downstream(target_id, p_name, out_val, t, visited)
+                            if out_val is not None:
+                                # === A2 FIX: Extract output to enforce mass conservation ===
+                                if hasattr(out_val, 'mass_flow_kg_h'):
+                                    dt = self.context.simulation.timestep_hours
+                                    mass_kg = out_val.mass_flow_kg_h * dt
+                                    out_resource = p_meta.get('resource_type', 'hydrogen')
+                                    
+                                    # Deduct mass from source component
+                                    if hasattr(comp, 'extract_output'):
+                                        try:
+                                            comp.extract_output(p_name, mass_kg, out_resource)
+                                        except (NotImplementedError, ValueError):
+                                            pass  # Component doesn't support extraction
+                                
+                                self._step_downstream(target_id, p_name, out_val, t, visited)
                         except NotImplementedError:
-                            pass # Skip if not implemented
-                        except Exception as e:
-                            # logger.warning(f"Failed to propagate {target_id}.{p_name}: {e}")
-                            pass
+                            pass  # Skip if not implemented
+                        except Exception:
+                            pass  # Skip on error
+                            
             except Exception as e:
-                logger.error(f"Error stepping downstream {target_id}: {e}")
+                logger.warning(f"Flow propagation error {source_id} -> {target_id}: {e}")
+    
+    def _infer_resource_type(self, stream) -> str:
+        """Infer resource type from Stream composition."""
+        if not hasattr(stream, 'composition') or not stream.composition:
+            return 'unknown'
+        
+        # Return dominant species
+        try:
+            dominant = max(stream.composition.items(), key=lambda x: x[1])
+            species_map = {'H2': 'hydrogen', 'O2': 'oxygen', 'H2O': 'water', 'CO2': 'carbon_dioxide'}
+            return species_map.get(dominant[0], dominant[0].lower())
+        except (ValueError, TypeError):
+            return 'unknown'
+

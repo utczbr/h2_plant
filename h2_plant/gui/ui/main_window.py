@@ -928,9 +928,9 @@ class PlantEditorWindow(QMainWindow):
             ConsumerNode,
             # Resources
             GridConnectionNode, WaterSupplyNode, # AmbientHeatNode, NaturalGasSupplyNode
-            # Other (Disabled - Future Phase)
-            # ATRReactorNode, SeparationTankNode,
-            # BatteryNode, WaterPurifierNode, UltraPureWaterTankNode
+            # Additional Components
+            ATRReactorNode,
+            BatteryNode, WaterPurifierNode, UltraPureWaterTankNode
         ]
         self.graph.register_nodes(self.node_classes)
     

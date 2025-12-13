@@ -56,6 +56,7 @@ class Pump(Component):
         self.power_kw = 0.0
         self.last_power_kw = 0.0
         self.last_efficiency = 0.0
+        self.outlet_temp_c = 0.0
         
         # Accumulation State
         self._last_step_time = -1.0

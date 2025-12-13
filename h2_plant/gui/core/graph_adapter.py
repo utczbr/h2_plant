@@ -598,10 +598,33 @@ class GraphToConfigAdapter:
             "ArbitrageNode": "Controller",
             "ConsumerNode": "Consumer",
             "DemandSchedulerNode": "Scheduler",
-            "EnergyPriceNode": "DataSource",
+            "EnergyPriceNode": "EnergyPrice",
             "WindEnergySourceNode": "DataSource",
-            "GridConnectionNode": "DataSource",
-            "WaterSupplyNode": "DataSource",
+            "GridConnectionNode": "GridConnection",
+            "WaterSupplyNode": "WaterSupply",
+            
+            # New components
+            "ATRReactorNode": "ATR",
+            "WaterPurifierNode": "WaterPurifier",
+            "UltraPureWaterTankNode": "UltraPureWaterTank",
+            "BatteryNode": "Battery",
+            "ChillerNode": "Chiller",
+            "DryCoolerNode": "DryCooler",
+            "CoalescerNode": "Coalescer",
+            "KnockOutDrumNode": "KnockOutDrum",
+            "PSAUnitNode": "PSA Unit",
+            "TSAUnitNode": "TSA Unit",
+            "DeoxoReactorNode": "DeoxoReactor",
+            
+            # Thermal
+            "ChillerNode": "Chiller",
+            "DryCoolerNode": "DryCooler",
+            "HeatExchangerNode": "HeatExchanger",
+            "chiller": "Chiller",
+            "dry_cooler": "DryCooler",
+            "hx": "HeatExchanger",
+            "ValveNode": "Valve",
+            "valve": "Valve",
             
             # Identifier suffixes (from __identifier__)
             "pem": "PEM",

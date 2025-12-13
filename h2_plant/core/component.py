@@ -41,13 +41,28 @@ class Component(ABC):
         _initialized: Flag tracking initialization status
     """
     
-    def __init__(self, config: Any = None) -> None:
-        """Initialize component with default state."""
+    def __init__(self, config: Any = None, **kwargs) -> None:
+        """
+        Initialize component with default state.
+        
+        Args:
+            config: Optional component configuration object (Pydantic model)
+            **kwargs: Additional keyword arguments for forward compatibility:
+                - component_id: Optional explicit ID (for tests/manual wiring)
+        """
+        # Extract optional component_id if provided (enables direct instantiation in tests)
+        component_id = kwargs.pop("component_id", None)
+        
+        # Preserve existing semantics
         self.component_id: Optional[str] = None
         self.dt: float = 0.0
         self._registry: Optional['ComponentRegistry'] = None
         self._initialized: bool = False
-        self.config = config # Store config object (Pydantic model)
+        self.config = config  # Store config object (Pydantic model)
+        
+        # Allow tests or manual code to set the ID directly
+        if component_id is not None:
+            self.set_component_id(component_id)
     
     @abstractmethod
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:

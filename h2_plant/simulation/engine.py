@@ -14,6 +14,7 @@ from typing import Optional, Dict, Any, Callable, List
 from pathlib import Path
 import time
 import json
+import numpy as np
 
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.exceptions import SimulationError
@@ -23,6 +24,12 @@ from h2_plant.simulation.event_scheduler import EventScheduler, Event
 from h2_plant.simulation.monitoring import MonitoringSystem
 from h2_plant.simulation.flow_network import FlowNetwork
 from h2_plant.visualization.dashboard_generator import DashboardGenerator
+
+# Optional dispatch strategy integration
+try:
+    from h2_plant.control.engine_dispatch import EngineDispatchStrategy
+except ImportError:
+    EngineDispatchStrategy = None
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +48,8 @@ class SimulationEngine:
         config: SimulationConfig,
         output_dir: Optional[Path] = None,
         topology: List[ConnectionConfig] = None,
-        indexed_topology: List[IndexedConnectionConfig] = None
+        indexed_topology: List[IndexedConnectionConfig] = None,
+        dispatch_strategy: Optional['EngineDispatchStrategy'] = None
     ):
         """
         Initialize simulation engine.
@@ -73,6 +81,11 @@ class SimulationEngine:
         # Callbacks
         self.pre_step_callback: Optional[Callable[[int], None]] = None
         self.post_step_callback: Optional[Callable[[int], None]] = None
+        
+        # Dispatch strategy integration (Phase B1: Orchestrator -> DispatchStrategy)
+        self.dispatch_strategy = dispatch_strategy
+        self._dispatch_prices: Optional[np.ndarray] = None
+        self._dispatch_wind: Optional[np.ndarray] = None
     
     def initialize(self) -> None:
         """
@@ -180,6 +193,16 @@ class SimulationEngine:
         
         self.event_scheduler.process_events(hour, self.registry)
         
+        # === Phase B1: Dispatch Strategy Integration ===
+        # Apply dispatch setpoints BEFORE stepping components
+        # This sets power inputs; physics executes during step()
+        if self.dispatch_strategy and self._dispatch_prices is not None:
+            self.dispatch_strategy.decide_and_apply(
+                t=hour,
+                prices=self._dispatch_prices,
+                wind=self._dispatch_wind
+            )
+        
         # Causal Execution Order
         # 1. External Inputs & Utility
         # 2. Production (Generates heat/mass)
@@ -202,7 +225,7 @@ class SimulationEngine:
             'logistics_manager'                                                 # Logistics
         ]
         
-        # Execute ordered components first
+        # Execute ordered components first (A1: each component steps EXACTLY ONCE)
         executed_ids = set()
         executed_instances = set()
         
@@ -218,7 +241,7 @@ class SimulationEngine:
                     logger.error(f"Component {comp_id} step failed at hour {hour}: {e}")
                     raise
 
-        # Execute remaining components
+        # Execute remaining components (still exactly once per component)
         for comp_id, component in self.registry.list_components():
             if component not in executed_instances:
                 try:
@@ -236,6 +259,11 @@ class SimulationEngine:
         except Exception as e:
             logger.error(f"Flow execution failed at hour {hour}: {e}")
             raise
+        
+        # === Phase B1: Record dispatch results AFTER step ===
+        # Capture actual physics outputs from components
+        if self.dispatch_strategy and hasattr(self.dispatch_strategy, 'record_post_step'):
+            self.dispatch_strategy.record_post_step()
         
         if self.post_step_callback:
             self.post_step_callback(hour)
@@ -348,3 +376,42 @@ class SimulationEngine:
     ) -> None:
         self.pre_step_callback = pre_step
         self.post_step_callback = post_step
+
+    def set_dispatch_data(self, prices: np.ndarray, wind: np.ndarray) -> None:
+        """
+        Set dispatch input data for the simulation.
+        
+        Args:
+            prices: Energy price array for the simulation period
+            wind: Wind power offer array for the simulation period
+        """
+        self._dispatch_prices = prices
+        self._dispatch_wind = wind
+        logger.info(f"Dispatch data loaded: {len(prices)} price points, {len(wind)} wind points")
+    
+    def initialize_dispatch_strategy(self, context: 'SimulationContext', total_steps: int) -> None:
+        """
+        Initialize the dispatch strategy with context and pre-allocate arrays.
+        
+        Args:
+            context: SimulationContext with physics configuration
+            total_steps: Total number of timesteps for pre-allocation
+        """
+        if self.dispatch_strategy:
+            self.dispatch_strategy.initialize(
+                registry=self.registry,
+                context=context,
+                total_steps=total_steps
+            )
+            logger.info("Dispatch strategy initialized")
+    
+    def get_dispatch_history(self) -> Optional[Dict[str, np.ndarray]]:
+        """
+        Get recorded history from dispatch strategy.
+        
+        Returns:
+            Dictionary of NumPy arrays if dispatch strategy is configured, else None
+        """
+        if self.dispatch_strategy and hasattr(self.dispatch_strategy, 'get_history'):
+            return self.dispatch_strategy.get_history()
+        return None
