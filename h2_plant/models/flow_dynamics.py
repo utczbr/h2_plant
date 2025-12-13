@@ -111,10 +111,18 @@ class PumpFlowDynamics:
         }
 
 
+try:
+    from h2_plant.optimization.coolprop_lut import CoolPropLUT
+    COOLPROP_AVAILABLE = True
+except ImportError:
+    COOLPROP_AVAILABLE = False
+    CoolPropLUT = None
+
 class GasAccumulatorDynamics:
     """
     Gas buffer tank dynamics for H2 storage/discharge.
-    Governs: (dP/dt) = (R*T / V) * (m_dot_in - m_dot_out)
+    Uses Real Gas EOS (CoolPropLUT) if available, otherwise Ideal Gas.
+    Governance: Mass Accumulation -> Density -> Pressure (EOS)
     """
     
     def __init__(
@@ -132,7 +140,7 @@ class GasAccumulatorDynamics:
             V_tank_m3: Tank volume (m³)
             T_tank_k: Tank temperature (K)
             initial_pressure_pa: Starting pressure (Pa)
-            R_gas_j_kg_k: Gas constant (J/kg·K)
+            R_gas_j_kg_k: Gas constant (J/kg·K) - Used for fallback
             max_pressure_pa: Maximum allowed pressure (Pa). Defaults to HIGH_PRESSURE_PA (350 bar).
         """
         from h2_plant.core.constants import StorageConstants
@@ -143,13 +151,40 @@ class GasAccumulatorDynamics:
         self.R = R_gas_j_kg_k
         self.max_pressure_pa = max_pressure_pa if max_pressure_pa is not None else StorageConstants.HIGH_PRESSURE_PA
         
-        # Current mass in tank
-        self.M_kg = (self.P * self.V) / (self.R * self.T)
+        # Calculate initial mass using EOS
+        self.M_kg = self._calculate_mass_from_pressure(self.P)
         
         # Diagnostics
         self.m_dot_in_kg_s = 0.0
         self.m_dot_out_kg_s = 0.0
     
+    def _calculate_mass_from_pressure(self, P_pa: float) -> float:
+        """Calculate Mass from Pressure using Real Gas EOS."""
+        if COOLPROP_AVAILABLE and CoolPropLUT:
+            try:
+                rho = CoolPropLUT.PropsSI('D', 'P', P_pa, 'T', self.T, 'H2')
+                return rho * self.V
+            except Exception:
+                pass # Fallback
+        
+        # Ideal Gas Fallback
+        return (P_pa * self.V) / (self.R * self.T)
+
+    def _calculate_pressure_from_mass(self, M_kg: float) -> float:
+        """Calculate Pressure from Mass using Real Gas EOS."""
+        if M_kg <= 0: return 0.0
+        
+        rho = M_kg / self.V
+        
+        if COOLPROP_AVAILABLE and CoolPropLUT:
+            try:
+                return CoolPropLUT.PropsSI('P', 'D', rho, 'T', self.T, 'H2')
+            except Exception:
+                pass # Fallback
+        
+        # Ideal Gas Fallback
+        return (M_kg * self.R * self.T) / self.V
+
     def step(
         self,
         dt_s: float,
@@ -157,7 +192,8 @@ class GasAccumulatorDynamics:
         m_dot_out_kg_s: float
     ) -> float:
         """
-        Advance pressure by one timestep.
+        Advance state by one timestep.
+        Uses Mass Conservation (Exact) instead of dP/dt.
         
         Args:
             dt_s: Timestep (60 s for 1-minute)
@@ -170,24 +206,23 @@ class GasAccumulatorDynamics:
         self.m_dot_in_kg_s = m_dot_in_kg_s
         self.m_dot_out_kg_s = m_dot_out_kg_s
         
-        # Mass balance: dM/dt = m_dot_in - m_dot_out
-        dM_dt_kg_s = m_dot_in_kg_s - m_dot_out_kg_s
+        # 1. Exact Mass Balance
+        delta_mass_kg = (m_dot_in_kg_s - m_dot_out_kg_s) * dt_s
+        self.M_kg += delta_mass_kg
+        self.M_kg = max(0.0, self.M_kg)
         
-        # Ideal gas law: P = (M * R * T) / V
-        # dP/dt = (R * T / V) * dM/dt
-        dP_dt_pa_s = (self.R * self.T / self.V) * dM_dt_kg_s
+        # 2. Update Pressure from new Mass
+        P_new_pa = self._calculate_pressure_from_mass(self.M_kg)
         
-        # Forward Euler
-        P_new_pa = self.P + dP_dt_pa_s * dt_s
+        # 3. Physical bounds (Safety Relief / Burst Disc logic)
+        if P_new_pa > self.max_pressure_pa:
+            P_new_pa = self.max_pressure_pa
+            # Adjust mass to match max pressure (venting)
+            self.M_kg = self._calculate_mass_from_pressure(P_new_pa)
         
-        # Physical bounds: configurable max pressure
-        P_new_pa = max(0, min(P_new_pa, self.max_pressure_pa))  # Clamp to [0, max_pressure]
-        
-        # Update state
         self.P = P_new_pa
-        self.M_kg = (self.P * self.V) / (self.R * self.T)
         
-        return P_new_pa
+        return self.P
     
     def get_state(self) -> dict:
         """Return accumulator state."""

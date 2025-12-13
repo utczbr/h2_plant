@@ -1,37 +1,124 @@
+"""
+Heat Exchanger Component.
+
+This module implements a generic heat exchanger for capacity-limited cooling
+of fluid streams. Uses enthalpy-based heat transfer calculation with
+bisection search for outlet temperature when capacity is exceeded.
+
+Heat Transfer Model:
+    The required cooling duty is calculated from enthalpy difference:
+    **Q_required = ṁ × (h_in - h_target)**
+
+    If Q_required exceeds max_heat_removal_kw, the actual outlet temperature
+    is found via bisection search on the enthalpy-temperature curve.
+
+Operating Modes:
+    - **Unconstrained**: Q_required ≤ max_capacity → outlet at target_temp
+    - **Capacity-Limited**: Q_required > max_capacity → outlet warmer than target
+
+Architecture:
+    Implements the Component Lifecycle Contract (Layer 1):
+    - `initialize()`: Standard initialization.
+    - `step()`: Calculates heat removal and outlet conditions.
+    - `get_state()`: Returns heat removed and outlet stream properties.
+"""
 
 from typing import Dict, Any, Optional
+
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
 from h2_plant.core.constants import ConversionFactors
 
+
 class HeatExchanger(Component):
-    def __init__(self, component_id: str, max_heat_removal_kw: float, target_outlet_temp_c: float = 25.0):
+    """
+    Generic heat exchanger for capacity-limited stream cooling.
+
+    Calculates heat removal using enthalpy difference and applies capacity
+    limits. When capacity is exceeded, uses bisection search to find the
+    actual achievable outlet temperature.
+
+    This component fulfills the Component Lifecycle Contract (Layer 1):
+        - `initialize()`: Standard component initialization.
+        - `step()`: Calculates heat removal, determines outlet conditions.
+        - `get_state()`: Returns heat removed and outlet stream.
+
+    Attributes:
+        max_heat_removal_kw (float): Maximum heat removal capacity (kW).
+        target_outlet_temp_c (float): Desired outlet temperature (°C).
+        heat_removed_kw (float): Actual heat removed this timestep (kW).
+
+    Example:
+        >>> hx = HeatExchanger(
+        ...     component_id='HX-1',
+        ...     max_heat_removal_kw=50.0,
+        ...     target_outlet_temp_c=25.0
+        ... )
+        >>> hx.initialize(dt=1/60, registry=registry)
+        >>> hx.receive_input('water_in', hot_stream, 'water')
+        >>> hx.step(t=0.0)
+    """
+
+    def __init__(
+        self,
+        component_id: str,
+        max_heat_removal_kw: float,
+        target_outlet_temp_c: float = 25.0
+    ):
+        """
+        Initialize the heat exchanger.
+
+        Args:
+            component_id (str): Unique identifier for this component.
+            max_heat_removal_kw (float): Maximum heat removal capacity in kW.
+            target_outlet_temp_c (float): Target outlet temperature in °C.
+                Default: 25.0.
+        """
         super().__init__()
         self.component_id = component_id
         self.max_heat_removal_kw = max_heat_removal_kw
         self.target_outlet_temp_c = target_outlet_temp_c
-        
-        # Inputs
+
+        # Stream state
         self.inlet_flow_kg_h = 0.0
         self.input_stream: Optional[Stream] = None
-        
-        # Outputs
         self.output_stream: Optional[Stream] = None
+
+        # Thermal tracking
         self.heat_removed_kw = 0.0
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
+        """
+        Prepare the component for simulation execution.
+
+        Fulfills the Component Lifecycle Contract initialization phase.
+
+        Args:
+            dt (float): Simulation timestep in hours.
+            registry (ComponentRegistry): Central registry for component access.
+        """
         super().initialize(dt, registry)
 
     def step(self, t: float) -> None:
+        """
+        Execute one simulation timestep.
+
+        Calculates required cooling and applies capacity limits:
+        1. Create target stream at desired outlet conditions.
+        2. Calculate required heat removal from enthalpy difference.
+        3. If capacity-limited, use bisection to find actual outlet temperature.
+
+        Args:
+            t (float): Current simulation time in hours.
+        """
         super().step(t)
-        
-        # Handle legacy input
+
+        # Handle legacy input without stream object
         if self.input_stream is None:
             if self.inlet_flow_kg_h > 0:
-                # Assume some default hot temp if not specified (e.g. 80C from electrolyzer)
                 self.input_stream = Stream(
                     mass_flow_kg_h=self.inlet_flow_kg_h,
-                    temperature_k=353.15, # 80C default
+                    temperature_k=353.15,
                     pressure_pa=101325.0,
                     composition={'H2': 1.0}
                 )
@@ -40,61 +127,58 @@ class HeatExchanger(Component):
                 self.heat_removed_kw = 0.0
                 return
 
-        # Target state
         target_temp_k = self.target_outlet_temp_c + 273.15
-        
-        # If input is already cooler than target, do nothing
+
+        # No cooling needed if already at or below target
         if self.input_stream.temperature_k <= target_temp_k:
             self.output_stream = self.input_stream
             self.heat_removed_kw = 0.0
             return
 
-        # Calculate required cooling
-        # Create a hypothetical stream at target temp to get enthalpy
+        # Create target stream for enthalpy calculation
         target_stream = Stream(
             mass_flow_kg_h=self.input_stream.mass_flow_kg_h,
             temperature_k=target_temp_k,
-            pressure_pa=self.input_stream.pressure_pa, # Assume isobaric cooling
+            pressure_pa=self.input_stream.pressure_pa,
             composition=self.input_stream.composition,
             phase=self.input_stream.phase
         )
-        
+
         h_in = self.input_stream.specific_enthalpy_j_kg
         h_target = target_stream.specific_enthalpy_j_kg
-        
-        # Q_required = m * (h_in - h_target)
-        # Units: kg/h * J/kg = J/h
+
+        # Q = ṁ × (h_in - h_target) [J/h → kW]
         q_required_j_h = self.input_stream.mass_flow_kg_h * (h_in - h_target)
         q_required_kw = q_required_j_h * ConversionFactors.J_TO_KWH
-        
-        # Limit by capacity
+
         if q_required_kw <= self.max_heat_removal_kw:
+            # Unconstrained: achieve target temperature
             self.heat_removed_kw = q_required_kw
             self.output_stream = target_stream
         else:
-            # Capacity limited
+            # Capacity-limited: find achievable outlet via bisection
             self.heat_removed_kw = self.max_heat_removal_kw
-            
-            # Calculate actual outlet enthalpy
-            # h_out = h_in - Q_max / m
-            q_removed_j_kg = (self.max_heat_removal_kw / ConversionFactors.J_TO_KWH) / self.input_stream.mass_flow_kg_h
+
+            # h_out = h_in - Q_max / ṁ
+            q_removed_j_kg = (self.max_heat_removal_kw / ConversionFactors.J_TO_KWH) / \
+                             self.input_stream.mass_flow_kg_h
             h_out = h_in - q_removed_j_kg
-            
-            # Find T_out for h_out
-            # Simple bisection search between target_temp and input_temp
+
+            # Bisection search for T_out
             t_low = target_temp_k
             t_high = self.input_stream.temperature_k
-            
-            for _ in range(10): # 10 iterations is enough for <0.1K precision
+
+            for _ in range(10):
                 t_mid = (t_low + t_high) / 2
-                s_mid = Stream(1.0, t_mid, self.input_stream.pressure_pa, self.input_stream.composition)
+                s_mid = Stream(1.0, t_mid, self.input_stream.pressure_pa,
+                              self.input_stream.composition)
                 h_mid = s_mid.specific_enthalpy_j_kg
-                
+
                 if h_mid > h_out:
                     t_high = t_mid
                 else:
                     t_low = t_mid
-            
+
             self.output_stream = Stream(
                 mass_flow_kg_h=self.input_stream.mass_flow_kg_h,
                 temperature_k=t_high,
@@ -104,12 +188,21 @@ class HeatExchanger(Component):
             )
 
     def get_state(self) -> Dict[str, Any]:
+        """
+        Retrieve the component's current operational state.
+
+        Fulfills the Component Lifecycle Contract state access.
+
+        Returns:
+            Dict[str, Any]: State dictionary containing heat removed and
+                outlet stream properties.
+        """
         state = {
-            **super().get_state(), 
-            'component_id': self.component_id, 
+            **super().get_state(),
+            'component_id': self.component_id,
             'heat_removed_kw': self.heat_removed_kw
         }
-        
+
         if self.output_stream:
             state['streams'] = {
                 'out': {
@@ -119,40 +212,60 @@ class HeatExchanger(Component):
                 }
             }
         return state
-            
+
     def get_output(self, port_name: str) -> Any:
-        """Get output from specific port."""
-        # Generic output port naming? 
-        # Or specific based on what is flowing?
-        # The topology uses 'water_out' or 'h2_out'.
-        # But HeatExchanger is generic.
-        # Let's support both or check what we have.
+        """
+        Retrieve output from specified port.
+
+        Supports generic port naming for multi-purpose heat exchanger use.
+
+        Args:
+            port_name (str): Port identifier ('water_out', 'h2_out', 'out',
+                'cooled_gas_out', 'syngas_out', or 'heat_out').
+
+        Returns:
+            Stream or float: Output stream or heat removed value.
+
+        Raises:
+            ValueError: If port_name is not recognized.
+        """
         if port_name in ['water_out', 'h2_out', 'out', 'cooled_gas_out', 'syngas_out']:
             if self.output_stream:
                 return self.output_stream
             else:
-                # Return empty stream if no input
                 return Stream(0.0)
         elif port_name == 'heat_out':
-            # Heat removed
             return self.heat_removed_kw
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 
     def receive_input(self, port_name: str, value: Any, resource_type: str) -> float:
-        """Receive input."""
+        """
+        Accept input at specified port.
+
+        Supports generic port naming for multi-purpose heat exchanger use.
+
+        Args:
+            port_name (str): Target port ('water_in', 'h2_in', or 'in').
+            value (Any): Input stream.
+            resource_type (str): Resource classification hint.
+
+        Returns:
+            float: Mass flow accepted (kg/h).
+        """
         if port_name in ['water_in', 'h2_in', 'in']:
             if isinstance(value, Stream):
                 self.input_stream = value
-                # We accept all flow, as it's a pass-through component
                 return value.mass_flow_kg_h
         return 0.0
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
-        """Return port metadata."""
-        # Dynamic ports based on usage?
-        # Or just advertise generic ports?
-        # Let's advertise common ones.
+        """
+        Define the physical connection ports for this component.
+
+        Returns:
+            Dict[str, Dict[str, str]]: Port definitions.
+        """
         return {
             'water_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
             'h2_in': {'type': 'input', 'resource_type': 'hydrogen', 'units': 'kg/h'},

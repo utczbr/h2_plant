@@ -1,116 +1,158 @@
-# Developer Guide: Component Flow Interface
+# Developer Guide: Component Implementation
 
-This guide explains how to implement the flow interface for new components in the H2 Plant simulation.
+This guide defines the standards for implementing new components in the H2 Plant simulation. All components must adhere to these interfaces to ensure compatibility with the simulation engine, optimization layer, and visualization tools.
 
-## Overview
+## 1. The Component Lifecycle Contract (Layer 1)
 
-All components that participate in resource transfer must implement the `Component` base class interface methods:
-1.  `get_ports()`: Define available inputs and outputs.
-2.  `receive_input()`: Accept resources from upstream.
-3.  `get_output()`: Offer resources to downstream.
-4.  `extract_output()`: Finalize transfer and deduct resources.
+All components must inherit from `h2_plant.core.component.Component` and implement the three-phase lifecycle. This contract ensures deterministic execution and strictly defined state transitions.
 
-## The Output Buffering Pattern
+### Phase 1: Initialization provided by `initialize()`
+**Purpose:** Allocate memory, resolve dependencies, and prepare for the first timestep.
+**Constraint:** No physics execution or time advancement.
+**Args:**
+*   `dt` (float): Simulation timestep in hours (e.g., 1/60 for 1 minute).
+*   `registry` (ComponentRegistry): Access to other system components.
 
-To ensure mass conservation and correct flow timing, components should use an **Output Buffer**.
-This buffer accumulates production during a timestep (`step()`) and offers it to the `FlowNetwork` in the same timestep.
-
-### Implementation Steps
-
-1.  **Initialize Buffer**: Add a buffer variable in `__init__`.
-    ```python
-    self._output_buffer_kg = 0.0
-    ```
-
-2.  **Reset & Accumulate**: In `step()`, reset the buffer (if not cumulative storage) and add production.
-    ```python
-    def step(self, t: float) -> None:
-        super().step(t)
-        # Reset buffer at start of step (for non-storage components)
-        # For storage components, you might keep it or handle differently
-        self._output_buffer_kg = 0.0
-        
-        # Calculate production
-        produced = ... 
-        
-        # Add to buffer
-        self._output_buffer_kg += produced
-    ```
-
-3.  **Offer Output**: In `get_output()`, return the buffered amount as a rate (amount / dt).
-    ```python
-    def get_output(self, port_name: str) -> Any:
-        if port_name == 'out':
-            # Return rate based on buffer
-            flow_rate = self._output_buffer_kg / self.dt if self.dt > 0 else 0.0
-            return Stream(mass_flow_kg_h=flow_rate, ...)
-    ```
-
-4.  **Finalize Extraction**: In `extract_output()`, deduct the amount actually taken.
-    ```python
-    def extract_output(self, port_name: str, amount: float, resource_type: str) -> None:
-        if port_name == 'out':
-            # Clear buffer or deduct
-            self._output_buffer_kg -= amount * self.dt
-            # Ensure non-negative
-            self._output_buffer_kg = max(0.0, self._output_buffer_kg)
-    ```
-
-## Method Details
-
-### `get_ports()`
-Returns a dictionary of port metadata.
 ```python
-return {
-    'in_port': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
-    'out_port': {'type': 'output', 'resource_type': 'hydrogen', 'units': 'kg/h'}
-}
+def initialize(self, dt: float, registry: ComponentRegistry) -> None:
+    super().initialize(dt, registry)
+    # 1. Store timestep
+    self.dt = dt
+    
+    # 2. Resolve dependencies
+    self.other_component = registry.get("other_id")
+    
+    # 3. Initialize sub-components (if composite)
+    self.child.initialize(dt, registry)
+    
+    # 4. Pre-allocate arrays (optimization)
+    self.history = np.zeros(1000)
 ```
 
-### `receive_input(port_name, value, resource_type)`
-Called by `FlowNetwork` to push resources into the component.
-*   **Return**: The amount actually accepted.
-*   **Logic**: Store the input value to be used in the *next* `step()` (or current if order allows, but usually next).
+### Phase 2: Execution provided by `step()`
+**Purpose:** Advance component state by one timestep `dt`.
+**Constraint:** Causal execution. Inputs must be available before processing.
+**Args:**
+*   `t` (float): Current simulation time in hours.
 
-### `get_output(port_name)`
-Called by `FlowNetwork` to check available resources.
-*   **Return**: A `Stream` object or float value representing the *rate* of flow available.
-*   **Important**: Do not modify state here. Just report availability.
+```python
+def step(self, t: float) -> None:
+    super().step(t)
+    
+    # 1. Read Inputs (from upstream or setpoints)
+    inflow = self.input_port.get_value()
+    
+    # 2. Execute Physics (Thermodynamics, Reactions)
+    # Explain WHY: "Calculate equilibrium to determine condensation"
+    outflow = self._calculate_physics(inflow)
+    
+    # 3. Update State
+    self.state.update(outflow)
+    
+    # 4. Push/Buffer Outputs
+    self.output_port.set_value(outflow)
+```
 
-### `extract_output(port_name, amount, resource_type)`
-Called by `FlowNetwork` *after* a successful transfer to a downstream component.
-*   **Logic**: Update internal state (e.g., reduce tank level, clear buffer).
-*   **Critical**: This is where you ensure mass is removed from the system so it isn't duplicated.
+### Phase 3: State Reporting provided by `get_state()`
+**Purpose:** Return a snapshot of the component's internal state for monitoring and checkpoints.
+**Constraint:** Must return a JSON-serializable dictionary.
+**Args:** None.
 
-## Best Practices
+```python
+def get_state(self) -> Dict[str, Any]:
+    return {
+        **super().get_state(),
+        "temperature_k": self.temp_k,
+        "pressure_pa": self.pressure_pa,
+        "efficiency": self.efficiency
+        # Composite components include child states
+        # "subsystem": self.child.get_state()
+    }
+```
 
-*   **Use Streams**: Prefer returning `Stream` objects for fluid flows to carry temperature/pressure data.
-*   **Check Resource Types**: Verify `resource_type` in `receive_input` matches expectation.
-*   **Handle DT**: Always account for timestep `dt` when converting between rates (kg/h) and amounts (kg).
-*   **Mass Balance**: Verify that `Input + Generation = Output + Accumulation`.
+---
 
-## Units and Standards
+## 2. Documentation Standards
 
-To ensure physical accuracy across the simulation, the project follows a strict units convention:
+Professional engineering documentation is mandatory. Code comments should explain **why** logic exists, not just what it does.
 
-### 1. Internal Calculations (SI Units)
+### Google-Style Docstrings
+Every class and method must have a docstring.
+
+```python
+def calculate_efficiency(self, load_fraction: float) -> float:
+    """
+    Calculate thermal efficiency based on current load.
+    
+    Uses a 3rd-order polynomial curve fit from experimental data
+    to approximate efficiency at partial loads.
+    
+    Args:
+        load_fraction (float): Operational load (0.0 to 1.0).
+        
+    Returns:
+        float: Thermal efficiency (0.0 to 1.0).
+        
+    Raises:
+        ValueError: If load_fraction is outside [0, 1].
+    """
+```
+
+### Explaining the "Why"
+*   **Bad:** `i += 1` (Increments i)
+*   **Good:** `i += 1` (Advance to next integration node)
+
+*   **Bad:** `if p > 100: p = 100` (Cap pressure)
+*   **Good:** `if p > 100: p = 100` (Relief valve activation pressure limit per ASME safety standard)
+
+---
+
+## 3. Units and Standards
+
+To ensure physical accuracy, the project follows a strict units convention.
+
+### Internal Calculations (SI Units)
 All internal physics, thermodynamics, and flow calculations use **SI Units**:
-*   **Pressure**: Pascals (`Pa`)
-*   **Temperature**: Kelvin (`K`)
-*   **Mass**: Kilograms (`kg`)
-*   **Energy**: Joules (`J`) or Watt-hours (`Wh`) for electrical/thermal flows
-*   **Time**: Hours (`h`) - *Note: Flow rates are commonly `kg/h` per industry standard, requiring conversion for `dM/dt` (kg/s).*
+*   **Pressure:** Pascals (`Pa`)
+*   **Temperature:** Kelvin (`K`)
+*   **Mass:** Kilograms (`kg`)
+*   **Energy:** Joules (`J`) or Watt-hours (`Wh`) for accumulated energy
+*   **Power:** Watts (`W`)
+*   **Time:** Hours (`h`) (Note: Flow rates are usually `kg/h`)
 
-### 2. Configuration & GUI (Engineering Units)
-For user-facing configuration (YAML) and GUI displays, use **Engineering Units** for readability:
-*   **Pressure**: Bar (`bar`)
-    *   *Convention*: Config loaders convert `bar` -> `Pa` (x1e5) during initialization.
-*   **Temperature**: degrees Celsius (`°C`) or Kelvin (`K`) depending on context.
-*   **Power**: Megawatts (`MW`) or Kilowatts (`kW`).
+### Configuration & GUI (Engineering Units)
+For specific user-facing configuration (YAML) and GUI displays:
+*   **Pressure:** Bar (`bar`) -> Converted to Pa in `__init__`
+*   **Temperature:** Celsius (`°C`) -> Converted to K in `__init__`
+*   **Power:** Megawatts (`MW`) or Kilowatts (`kW`)
 
-**Developer Tip**: When implementing `__init__`, always convert config parameters to SI immediately:
+**Developer Pattern:**
 ```python
-# pattern
-self.pressure_pa = config.pressure_bar * 1e5
+def __init__(self, pressure_bar: float):
+    # Convert config input to internal SI units immediately
+    self.pressure_pa = pressure_bar * 1e5
 ```
-Exceptions: Some advanced physics parameters (like `out_pressure_pa`) may be exposed directly in SI to avoid ambiguity in sensitive calculations.
+
+---
+
+## 4. Flow Interface (Layer 3)
+
+Components that transfer resources use the Flow/Port interface.
+
+1.  **`get_ports()`**: Define metadata for inputs/outputs.
+2.  **`receive_input()`**: Accept resources from upstream (Push).
+3.  **`get_output()`**: Offer resources to downstream (Pull/Query).
+4.  **`extract_output()`**: Finalize transfer and deduct resources (Transaction commit).
+5.  **Output Buffering**: Accumulate production during `step()`, offer it in `get_output()`.
+
+See the `FlowNetwork` documentation for detailed topology examples.
+
+---
+
+## 5. Performance Optimization
+
+For computation-intensive components (thermodynamics, mixing, large arrays):
+
+1.  **LUTManager**: Use `self.registry.get('lut_manager')` for property lookups instead of calling CoolProp directly.
+2.  **Numba**: Move hot loops to `h2_plant/optimization/numba_ops.py` and decorate with `@njit`.
+3.  **Vectorization**: Use NumPy arrays for collections (e.g., `TankArray`) instead of Python lists of objects.

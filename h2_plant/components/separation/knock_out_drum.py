@@ -1,13 +1,30 @@
 """
-Knock-Out Drum (KOD) Component for H2Plant Simulation.
+Knock-Out Drum (KOD) Separator Component.
 
-Implements a vertical separator vessel for removing liquid water droplets
-from gas streams (H2 or O2) following a cooling process. Uses isothermal
-flash physics and Souders-Brown sizing criteria.
+This module implements a vertical gravity separator for removing entrained liquid
+water droplets from gas streams. The KOD is a critical component in hydrogen and
+oxygen processing trains, typically positioned downstream of a chiller or cooler.
 
-Physics Reference:
-- Souders-Brown equation for maximum gas velocity.
-- Rachford-Rice for vapor-liquid equilibrium.
+Physical Principles:
+    - **Souders-Brown Correlation**: Determines the maximum superficial gas velocity
+      to prevent liquid re-entrainment. The correlation balances gravitational settling
+      of droplets against drag forces from the gas flow.
+    - **Rachford-Rice Equilibrium**: Used for vapor-liquid flash calculations when
+      the feed contains condensable species (water vapor). Determines phase split
+      based on K-values derived from Antoine or CoolProp saturation data.
+    - **Isothermal Flash**: Assumes flash occurs at inlet temperature; pressure drop
+      is treated as isenthalpic expansion through the vessel.
+
+Architecture:
+    Implements the Component Lifecycle Contract (Layer 1):
+    - `initialize()`: Validates configuration and registers with component registry.
+    - `step()`: Executes flash physics and prepares output streams per timestep.
+    - `get_state()`: Exposes internal state for monitoring and persistence.
+
+References:
+    - Souders, M. & Brown, G.G. (1934). Design of Fractionating Columns.
+    - Rachford, H.H. & Rice, J.D. (1952). Procedure for Use of Electronic
+      Digital Computers in Calculating Flash Vaporization.
 """
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
@@ -26,23 +43,43 @@ if TYPE_CHECKING:
 # ============================================================================
 # Physical Constants
 # ============================================================================
-RHO_L_WATER: float = 1000.0  # Liquid water density, kg/m³
-K_SOUDERS_BROWN: float = 0.08  # Max permissible velocity factor, m/s
-R_UNIV: float = 8.31446  # Universal Gas Constant, J/(mol·K)
+RHO_L_WATER: float = 1000.0
+"""Liquid water density at standard conditions (kg/m³)."""
+
+K_SOUDERS_BROWN: float = 0.08
+"""Souders-Brown K-factor for vertical separators with mesh demister (m/s).
+Lower values are conservative; typical range 0.05-0.12 depending on demister type."""
+
+R_UNIV: float = 8.31446
+"""Universal gas constant (J/(mol·K))."""
 
 
 class KnockOutDrum(Component):
     """
-    Knock-Out Drum: A vertical separator for liquid water removal from gas.
+    Vertical gravity separator for liquid water removal from gas streams.
 
-    The KOD operates as an isothermal flash separator where liquid water
-    droplets are removed via gravity. It is typically installed after a
-    chiller or cooler in a gas processing train.
+    The Knock-Out Drum operates as an isothermal flash separator where liquid
+    water droplets settle by gravity while gas flows upward. Proper sizing
+    ensures gas velocity remains below the Souders-Brown limit to prevent
+    liquid carryover.
+
+    This component fulfills the Component Lifecycle Contract (Layer 1):
+        - `initialize()`: Validates vessel geometry and registers component.
+        - `step()`: Computes flash equilibrium, phase separation, and sizing adequacy.
+        - `get_state()`: Returns operational metrics for monitoring and diagnostics.
 
     Attributes:
-        diameter_m: Vessel inner diameter (m).
-        delta_p_bar: Pressure drop across the vessel (bar).
-        gas_species: Primary gas species ('H2' or 'O2').
+        diameter_m (float): Vessel inner diameter in meters.
+        delta_p_bar (float): Pressure drop across the vessel in bar.
+        gas_species (str): Primary non-condensable gas species ('H2' or 'O2').
+        separation_efficiency (float): Fraction of liquid captured (0.0 to 1.0).
+
+    Example:
+        >>> kod = KnockOutDrum(diameter_m=1.5, delta_p_bar=0.05, gas_species='H2')
+        >>> kod.initialize(dt=1/60, registry=registry)
+        >>> kod.receive_input('gas_inlet', wet_h2_stream, 'gas')
+        >>> kod.step(t=0.0)
+        >>> dry_gas = kod.get_output('gas_outlet')
     """
 
     def __init__(
@@ -52,15 +89,24 @@ class KnockOutDrum(Component):
         gas_species: str = 'H2'
     ) -> None:
         """
-        Initialize KnockOutDrum component.
+        Initialize the Knock-Out Drum component.
+
+        Constructs a vertical separator with specified geometry and primary gas
+        species. The diameter determines superficial velocity and thus the
+        Souders-Brown adequacy check during operation.
 
         Args:
-            diameter_m: Vessel inner diameter. Default 1.0 m.
-            delta_p_bar: Pressure drop across vessel. Default 0.05 bar.
-            gas_species: Primary gas species, 'H2' or 'O2'. Default 'H2'.
+            diameter_m (float): Vessel inner diameter in meters. Must be positive.
+                Typical industrial values range from 0.5 to 3.0 m. Default: 1.0 m.
+            delta_p_bar (float): Pressure drop across vessel in bar. Represents
+                losses through inlets, internals, and outlet. Default: 0.05 bar.
+            gas_species (str): Primary non-condensable gas species. Must be 'H2'
+                or 'O2'. This determines gas-phase physical properties (density,
+                compressibility). Default: 'H2'.
 
         Raises:
-            ValueError: If diameter is non-positive or gas_species is invalid.
+            ValueError: If diameter_m is not positive.
+            ValueError: If gas_species is not 'H2' or 'O2'.
         """
         super().__init__()
 
@@ -72,13 +118,14 @@ class KnockOutDrum(Component):
         self.diameter_m = diameter_m
         self.delta_p_bar = delta_p_bar
         self.gas_species = gas_species
+        self.separation_efficiency = 0.98
 
-        # Internal state for last computed timestep
+        # Stream state: holds most recent input/output for current timestep
         self._input_stream: Optional[Stream] = None
         self._gas_outlet_stream: Optional[Stream] = None
         self._liquid_drain_stream: Optional[Stream] = None
 
-        # State variables for reporting
+        # Operational state for monitoring and diagnostics
         self._rho_g: float = 0.0
         self._v_max: float = 0.0
         self._v_real: float = 0.0
@@ -87,24 +134,38 @@ class KnockOutDrum(Component):
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
-        Initialize the component before simulation.
+        Prepare the component for simulation execution.
+
+        Fulfills the Component Lifecycle Contract initialization phase by validating
+        configuration parameters and establishing connections to the component
+        registry for cross-component communication.
 
         Args:
-            dt: Simulation timestep in hours.
-            registry: Component registry for accessing other components.
+            dt (float): Simulation timestep in hours.
+            registry (ComponentRegistry): Central registry for component lookup
+                and inter-component communication.
+
+        Raises:
+            ValueError: If diameter_m configuration is invalid at runtime.
         """
         super().initialize(dt, registry)
 
-        # Validate configuration
         if self.diameter_m <= 0:
             raise ValueError("diameter_m must be positive")
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         """
-        Define input/output ports for the KOD.
+        Define the physical connection ports for this component.
+
+        The KOD has one gas inlet and two outlets: a dry gas outlet and a
+        liquid drain. Port definitions enable the orchestrator to validate
+        and establish flow network connections.
 
         Returns:
-            Port definitions with type and resource metadata.
+            Dict[str, Dict[str, str]]: Port definitions with keys:
+                - 'gas_inlet': Receives wet gas from upstream cooler.
+                - 'gas_outlet': Delivers dried gas to downstream processing.
+                - 'liquid_drain': Removes separated liquid water.
         """
         return {
             'gas_inlet': {
@@ -126,15 +187,21 @@ class KnockOutDrum(Component):
 
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """
-        Receive an input stream at a specified port.
+        Accept an input stream at the specified port.
+
+        Stores the incoming Stream object for processing during the next step()
+        call. Only the 'gas_inlet' port accepts input; other port names are
+        silently ignored to allow flexible network topologies.
 
         Args:
-            port_name: Port to receive input ('gas_inlet').
-            value: Stream object containing gas flow data.
-            resource_type: Resource type (optional).
+            port_name (str): Target port identifier. Expected: 'gas_inlet'.
+            value (Any): Stream object containing mass flow, temperature,
+                pressure, and composition data.
+            resource_type (str, optional): Resource classification hint.
+                Not used for KOD but included for interface consistency.
 
         Returns:
-            Mass flow rate received (kg/h), or 0.0 if rejected.
+            float: Mass flow rate accepted (kg/h), or 0.0 if input was rejected.
         """
         if port_name == 'gas_inlet' and isinstance(value, Stream):
             self._input_stream = value
@@ -143,19 +210,31 @@ class KnockOutDrum(Component):
 
     def step(self, t: float) -> None:
         """
-        Execute a single simulation timestep.
+        Execute one simulation timestep.
 
-        Performs flash separation calculations, sizing checks, and
-        prepares output streams for downstream components.
+        Performs the core separator physics calculation sequence:
+        1. Convert mass flow to molar basis for thermodynamic calculations.
+        2. Compute vapor-liquid equilibrium using Rachford-Rice flash.
+        3. Determine phase compositions and split fractions.
+        4. Calculate gas density and superficial velocity for sizing check.
+        5. Apply separation efficiency to determine carryover vs. capture.
+        6. Prepare output streams for downstream components.
+
+        This method fulfills the Component Lifecycle Contract step phase,
+        advancing the component state by one discrete timestep.
 
         Args:
-            t: Current simulation time in hours.
+            t (float): Current simulation time in hours.
+
+        Note:
+            The Souders-Brown criterion (V_real < V_max) determines whether
+            the separator is adequately sized. If exceeded, `_separation_status`
+            is set to "UNDERSIZED", indicating potential liquid carryover.
         """
         super().step(t)
 
         inlet = self._input_stream
         if inlet is None or inlet.mass_flow_kg_h <= 0:
-            # No input or zero flow: reset outputs
             self._gas_outlet_stream = None
             self._liquid_drain_stream = None
             self._separation_status = "NO_FLOW"
@@ -166,15 +245,15 @@ class KnockOutDrum(Component):
             return
 
         # ====================================================================
-        # A. Input Processing: Convert mass flow to molar flow
+        # A. Molar Basis Conversion
         # ====================================================================
+        # Convert mass fractions to molar flows for thermodynamic calculations.
+        # Molar basis is required for K-value equilibrium and Rachford-Rice.
         m_dot_in_kg_h = inlet.mass_flow_kg_h
         T_in = inlet.temperature_k
         P_in = inlet.pressure_pa
         composition = inlet.composition
 
-        # Calculate total molar flow from mass fractions
-        # n_i = (mass_frac_i * m_dot) / MW_i
         n_total_mol_s = 0.0
         n_species: Dict[str, float] = {}
 
@@ -182,9 +261,7 @@ class KnockOutDrum(Component):
             if species in GasConstants.SPECIES_DATA:
                 mw_g_mol = GasConstants.SPECIES_DATA[species]['molecular_weight']
                 mw_kg_mol = mw_g_mol / 1000.0
-                # mass_i (kg/h) = mass_frac * m_dot_kg_h
-                # mol_i (mol/s) = (mass_i (kg/h) / 3600) / (MW kg/mol)
-                #               = (mass_frac * m_dot / 3600) / mw_kg_mol
+                # n_i = (mass_frac × total_mass_flow) / MW
                 n_i = (mass_frac * m_dot_in_kg_h / 3600.0) / mw_kg_mol
                 n_species[species] = n_i
                 n_total_mol_s += n_i
@@ -199,87 +276,77 @@ class KnockOutDrum(Component):
             self._power_consumption_w = 0.0
             return
 
-        # Mole fractions
         z_species: Dict[str, float] = {sp: n / n_total_mol_s for sp, n in n_species.items()}
         z_H2O = z_species.get('H2O', 0.0)
 
         # ====================================================================
         # B. Flash / Separation Physics
         # ====================================================================
-        # Pressure drop
+        # Apply pressure drop as isenthalpic expansion, then determine
+        # vapor-liquid equilibrium at outlet conditions.
         delta_p_pa = self.delta_p_bar * 1e5
         P_out = P_in - delta_p_pa
         if P_out <= 0:
-            P_out = 1e5  # Fallback to 1 bar
+            P_out = 1e5  # Safety floor at 1 bar
 
-        # Saturation pressure of water at inlet temperature
+        # Obtain saturation pressure of water at inlet temperature.
+        # The K-value (K = P_sat/P) determines condensation behavior.
         try:
             P_sat = CoolPropLUT.PropsSI('P', 'T', T_in, 'Q', 0.0, 'Water')
-            # CoolProp might return 0.0 or infinity on failure without raising exception
             if P_sat <= 1e-6 or not math.isfinite(P_sat):
                 raise ValueError("CoolProp returned invalid P_sat")
         except Exception:
-            # Fallback using Antoine equation approximation (T in K)
-            # log10(Psat_mmHg) = A - B/(C+T_C), then convert to Pa
+            # Antoine equation fallback: log10(P_mmHg) = A - B/(C + T_C)
             T_C = T_in - 273.15
             A, B, C = 8.07131, 1730.63, 233.426
             P_sat_mmHg = 10 ** (A - B / (C + T_C))
-            P_sat = P_sat_mmHg * 133.322  # mmHg to Pa
+            P_sat = P_sat_mmHg * 133.322
 
-        # Equilibrium K-value for water
         K_eq = P_sat / P_out if P_out > 0 else 1.0
 
-        # Vapor fraction (beta) using Rachford-Rice
+        # Rachford-Rice solution for vapor fraction (beta).
+        # Water is the only condensable; all other species remain in vapor phase.
         if z_H2O > 1e-12:
             beta = solve_rachford_rice_single_condensable(z_H2O, K_eq)
         else:
-            beta = 1.0  # All vapor, no water
+            beta = 1.0  # No water → all vapor
 
         # ====================================================================
-        # Phase Compositions
+        # Phase Composition Determination
         # ====================================================================
-        # Robust Logic:
-        # If beta == 1.0 (All Vapor), composition matches feed (z).
-        # If beta < 1.0 (Vapor + Liquid), vapor is at saturation limit.
-        
+        # For beta ≈ 1 (superheated), vapor composition equals feed composition.
+        # For beta < 1 (two-phase), vapor water content is limited by saturation.
         if beta >= 1.0 - 1e-9:
-            # All vapor phase (superheated or saturated)
-            # y_H2O is limited by available water (z_H2O)
             y_H2O = z_H2O
         else:
-            # Two-phase region (saturated)
-            # y_H2O is determined by equilibrium (P_sat / P_out)
             y_H2O = min(P_sat / P_out, 1.0) if P_out > 0 else 0.0
 
-        # Clamp to valid range [0, 1]
         y_H2O = max(0.0, min(y_H2O, 1.0))
-
-        # Gas phase: primary gas mole fraction
         y_gas = 1.0 - y_H2O
         y_gas = max(0.0, min(y_gas, 1.0))
 
-        # Liquid phase is assumed pure water
+        # Liquid phase is assumed pure water (immiscible gas approximation)
         x_H2O = 1.0
 
         # ====================================================================
-        # C. Fluid Properties & Sizing
+        # C. Fluid Properties & Sizing Check
         # ====================================================================
-        # Molar flow of vapor and liquid phases
+        # Calculate gas density and compare actual velocity to Souders-Brown limit.
         n_vap_mol_s = beta * n_total_mol_s
         n_liq_mol_s = (1.0 - beta) * n_total_mol_s
 
-        # Mixture molar mass for gas phase (kg/mol)
+        # Mixture molar mass for gas phase
         mw_gas = GasConstants.SPECIES_DATA[self.gas_species]['molecular_weight'] / 1000.0
         mw_h2o = GasConstants.SPECIES_DATA['H2O']['molecular_weight'] / 1000.0
-        M_mix = y_gas * mw_gas + y_H2O * mw_h2o  # kg/mol
+        M_mix = y_gas * mw_gas + y_H2O * mw_h2o
 
-        # Compressibility factor Z (approximate using pure gas)
+        # Real gas compressibility factor (Z) from equation of state
         try:
             Z = CoolPropLUT.PropsSI('Z', 'T', T_in, 'P', P_out, self.gas_species)
         except Exception:
-            Z = 1.0  # Ideal gas fallback
+            Z = 1.0  # Ideal gas approximation
 
-        # Gas density: rho_G = (P_out * M_mix) / (Z * R * T)
+        # Gas density: ρ = PM / (ZRT)
         if Z > 0 and T_in > 0:
             rho_g = (P_out * M_mix) / (Z * R_UNIV * T_in)
         else:
@@ -287,18 +354,16 @@ class KnockOutDrum(Component):
 
         self._rho_g = rho_g
 
-        # Volumetric flow: V_dot_G = (n_vap * M_mix) / rho_G (m³/s)
+        # Volumetric flow and superficial velocity
         m_vap_kg_s = n_vap_mol_s * M_mix
         if rho_g > 0:
             V_dot_g_m3_s = m_vap_kg_s / rho_g
         else:
             V_dot_g_m3_s = 0.0
 
-        # Velocity limits (Souders-Brown criterion)
-        # Velocity limits (Souders-Brown criterion)
-        # V_max = K_sb * sqrt((rho_L - rho_G) / rho_G)
+        # Souders-Brown maximum velocity: V_max = K * sqrt((ρ_L - ρ_G) / ρ_G)
+        # This criterion balances droplet gravitational settling against gas drag.
         if rho_g > 0:
-            # GUARD: Ensure term inside sqrt is non-negative
             density_diff = max(0.0, RHO_L_WATER - rho_g)
             v_max = K_SOUDERS_BROWN * math.sqrt(density_diff / rho_g)
         else:
@@ -306,7 +371,7 @@ class KnockOutDrum(Component):
 
         self._v_max = v_max
 
-        # Actual velocity: V_real = V_dot / A
+        # Actual superficial velocity through vessel cross-section
         A_vessel = math.pi * (self.diameter_m / 2.0) ** 2
         if A_vessel > 0:
             v_real = V_dot_g_m3_s / A_vessel
@@ -315,54 +380,74 @@ class KnockOutDrum(Component):
 
         self._v_real = v_real
 
-        # Status check
+        # Sizing adequacy check
         if v_real < v_max:
             self._separation_status = "OK"
         else:
             self._separation_status = "UNDERSIZED"
 
         # ====================================================================
-        # D. Power & Outputs
+        # D. Power & Output Stream Generation
         # ====================================================================
-        # Parasitic power loss (theoretical work to restore pressure)
-        # Power (W) = V_dot (m³/s) * delta_P (Pa)
+        # Parasitic power represents theoretical work to restore pressure drop.
+        # P = V̇ × ΔP (approximation for pneumatic losses)
         self._power_consumption_w = V_dot_g_m3_s * delta_p_pa
 
-        # Mass flows for output streams
-        m_dot_vap_kg_h = m_vap_kg_s * 3600.0
-        m_dot_liq_kg_h = n_liq_mol_s * mw_h2o * 3600.0
+        # Mass flow rates with separation efficiency applied.
+        # Efficiency < 1.0 means some liquid is carried over as mist.
+        m_liquid_total_kg_h = n_liq_mol_s * mw_h2o * 3600.0
 
-        # Gas outlet stream
-        gas_comp = {self.gas_species: y_gas, 'H2O': y_H2O}
+        m_liq_removed_kg_h = m_liquid_total_kg_h * self.separation_efficiency
+        m_liq_carryover_kg_h = m_liquid_total_kg_h - m_liq_removed_kg_h
+
+        m_dot_vap_kg_h = m_vap_kg_s * 3600.0
+
+        # Gas outlet includes vapor and any liquid carryover as mist
+        m_gas_out_total = m_dot_vap_kg_h + m_liq_carryover_kg_h
+
+        gas_comp = {}
+        if m_gas_out_total > 0:
+            m_H2O_vap = y_H2O * m_dot_vap_kg_h
+            m_Gas_vap = y_gas * m_dot_vap_kg_h
+
+            gas_comp[self.gas_species] = m_Gas_vap / m_gas_out_total
+            gas_comp['H2O'] = m_H2O_vap / m_gas_out_total
+            gas_comp['H2O_liq'] = m_liq_carryover_kg_h / m_gas_out_total
+        else:
+            gas_comp = {self.gas_species: 1.0}
+
         self._gas_outlet_stream = Stream(
-            mass_flow_kg_h=m_dot_vap_kg_h,
+            mass_flow_kg_h=m_gas_out_total,
             temperature_k=T_in,
             pressure_pa=P_out,
             composition=gas_comp,
             phase='gas'
         )
 
-        # Liquid drain stream
         self._liquid_drain_stream = Stream(
-            mass_flow_kg_h=m_dot_liq_kg_h,
+            mass_flow_kg_h=m_liq_removed_kg_h,
             temperature_k=T_in,
             pressure_pa=P_out,
             composition={'H2O': 1.0},
             phase='liquid'
         )
 
-        # Clear input for next timestep
+        # Clear input buffer for next timestep
         self._input_stream = None
 
     def get_output(self, port_name: str) -> Any:
         """
-        Retrieve the output from a specified port.
+        Retrieve the output stream from a specified port.
+
+        Provides access to the separated gas and liquid streams computed
+        during the most recent step() execution.
 
         Args:
-            port_name: 'gas_outlet' or 'liquid_drain'.
+            port_name (str): Port to query. Must be 'gas_outlet' or 'liquid_drain'.
 
         Returns:
-            Stream object for the requested port, or None if unavailable.
+            Stream: Output Stream object containing mass flow, temperature,
+                pressure, and composition. Returns None if no flow is available.
 
         Raises:
             ValueError: If port_name is not a valid output port.
@@ -376,10 +461,22 @@ class KnockOutDrum(Component):
 
     def get_state(self) -> Dict[str, Any]:
         """
-        Return current component state for monitoring/persistence.
+        Retrieve the component's current operational state.
+
+        Fulfills the Component Lifecycle Contract state access, providing
+        internal variables for monitoring dashboards, logging, and simulation
+        state persistence.
 
         Returns:
-            Dictionary with current sizing and operational status.
+            Dict[str, Any]: State dictionary containing:
+                - rho_g (float): Gas phase density (kg/m³).
+                - v_max (float): Souders-Brown maximum velocity (m/s).
+                - v_real (float): Actual superficial velocity (m/s).
+                - separation_status (str): "OK", "UNDERSIZED", "NO_FLOW", or "IDLE".
+                - power_consumption_w (float): Parasitic power loss (W).
+                - diameter_m (float): Vessel diameter (m).
+                - delta_p_bar (float): Pressure drop (bar).
+                - gas_species (str): Primary gas species ('H2' or 'O2').
         """
         state = super().get_state()
         state.update({

@@ -95,12 +95,22 @@ class SeparationTank(Component):
         
         final_gas_flow = gas_flow + carry_over_liquid
         
+        # Recalculate output composition to include carryover water
+        final_comp = {}
+        if final_gas_flow > 0:
+            # Scale down gas species fractions
+            for s, frac in gas_comp.items():
+                final_comp[s] = frac * (gas_flow / final_gas_flow)
+            
+            # Add water fraction
+            final_comp['H2O'] = carry_over_liquid / final_gas_flow
+            
         # Create outlet streams
         self.gas_outlet = Stream(
             mass_flow_kg_h=final_gas_flow,
             temperature_k=self.inlet_stream.temperature_k,
             pressure_pa=self.inlet_stream.pressure_pa,
-            composition=gas_comp # Simplified, ignoring carry over composition effect
+            composition=final_comp
         )
         
         self.liquid_outlet = Stream(

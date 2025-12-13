@@ -50,6 +50,7 @@ class CO2CaptureUnit(Component):
         self.max_flow_kg_h = max_flow_kg_h
         self.capture_rate = capture_rate
         self.tail_gas_input_kg_h = 0.0
+        self.tail_gas_stream = None # Store reference to stream for composition
         self.co2_captured_kg_h = 0.0
         self.recycled_gas_kg_h = 0.0
         self.power_kw = 0.0
@@ -61,14 +62,18 @@ class CO2CaptureUnit(Component):
         super().step(t)
         input_flow = min(self.tail_gas_input_kg_h, self.max_flow_kg_h)
         
-        # Simplified separation
-        # Assume tail gas is ~50% CO2 by mass (simplified)
-        co2_content = input_flow * 0.5
+        # Determine CO2 content from stream composition
+        co2_fraction = 0.5 # Fallback
+        if self.tail_gas_stream and self.tail_gas_stream.composition:
+            co2_fraction = self.tail_gas_stream.composition.get('CO2', 0.0)
+            
+        co2_content = input_flow * co2_fraction
         self.co2_captured_kg_h = co2_content * self.capture_rate
         self.recycled_gas_kg_h = input_flow - self.co2_captured_kg_h
         
         # Energy penalty: ~3 MJ/kg CO2 captured -> 0.83 kWh/kg
-        self.power_kw = (self.co2_captured_kg_h * 0.83) / self.dt if self.dt > 0 else 0.0
+        # Power (kW) = Flow (kg/h) * Energy (kWh/kg)
+        self.power_kw = self.co2_captured_kg_h * 0.83
         
     def get_state(self) -> Dict[str, Any]:
         return {
@@ -97,8 +102,10 @@ class CO2CaptureUnit(Component):
         if port_name in ['tail_gas_in', 'in']:
             if hasattr(value, 'mass_flow_kg_h'):
                 self.tail_gas_input_kg_h = value.mass_flow_kg_h
+                self.tail_gas_stream = value
             else:
                 self.tail_gas_input_kg_h = float(value)
+                self.tail_gas_stream = None
             return self.tail_gas_input_kg_h
         return 0.0
 

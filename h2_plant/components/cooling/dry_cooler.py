@@ -1,9 +1,35 @@
 """
 Dry Cooler (Air-Cooled Heat Exchanger) Component.
 
-Implements rigorous NTU-Effectiveness thermal modeling for cooling
-hydrogen and oxygen streams from PEM electrolyzers.
-Ref: dry_cooler-1.pdf, drydim.py
+This module implements a rigorous NTU-effectiveness model for air-cooled heat
+exchangers used to cool hydrogen and oxygen streams from PEM electrolyzers.
+The model automatically adapts geometry parameters based on stream composition.
+
+Heat Transfer Principles:
+    - **NTU-Effectiveness Method**: Relates actual heat transfer to theoretical
+      maximum based on the Number of Transfer Units and capacity ratio. This
+      method avoids iterative LMTD calculations for complex geometries.
+    - **Crossflow Configuration**: Models unmixed-mixed crossflow, typical of
+      finned-tube air coolers where tube-side fluid is mixed and air-side is
+      unmixed (each air streamline contacts multiple tube rows).
+    - **Capacity Ratio**: R = C_min/C_max determines effectiveness behavior.
+      For high R (balanced flows), effectiveness is limited by temperature
+      pinch at the exchanger outlet.
+
+Architecture:
+    Implements the Component Lifecycle Contract (Layer 1):
+    - `initialize()`: Prepares component for simulation (no configuration required).
+    - `step()`: Computes heat duty, outlet temperature, and fan power.
+    - `get_state()`: Returns thermal performance metrics for monitoring.
+
+Design Philosophy:
+    The cooler automatically detects fluid type (H₂ or O₂) from inlet composition
+    and selects appropriate geometry (area, design air flow) from pre-defined
+    constants. This enables a single component class to serve multiple services.
+
+References:
+    - Incropera, DeWitt (2007). Fundamentals of Heat and Mass Transfer, 6th Ed.
+    - Kays, London (1984). Compact Heat Exchangers, 3rd Ed.
 """
 
 import logging
@@ -21,49 +47,97 @@ from h2_plant.optimization import numba_ops
 
 logger = logging.getLogger(__name__)
 
+
 class DryCooler(Component):
     """
-    Air-cooled heat exchanger for process cooling.
-    
-    Automatically adapts strict geometry/performance parameters based on
-    fluid type (H2 or O2) detected at inlet.
-    
-    Physics:
-    - Crossflow/Counterflow Heat Exchanger (Unmixed-Mixed)
-    - NTU-Effectiveness Method
-    - Variable heat capacity based on phase (Gas + Liquid Water)
+    Air-cooled heat exchanger for process stream cooling.
+
+    Uses the NTU-effectiveness method to calculate heat duty and outlet
+    temperature for hydrogen or oxygen streams. Geometry parameters are
+    automatically selected based on the dominant species in the inlet stream.
+
+    This component fulfills the Component Lifecycle Contract (Layer 1):
+        - `initialize()`: Base initialization (geometry set dynamically on input).
+        - `step()`: Computes NTU, effectiveness, heat duty, and outlet conditions.
+        - `get_state()`: Returns thermal performance and fan power metrics.
+
+    The NTU-effectiveness method computes:
+        ε = f(NTU, C_min/C_max)  for crossflow geometry
+        Q = ε × C_min × (T_hot_in - T_cold_in)
+        T_hot_out = T_hot_in - Q / C_hot
+
+    Attributes:
+        fluid_type (str): Detected fluid species ('H2', 'O2', or 'Unknown').
+        heat_duty_kw (float): Current heat transfer rate (kW).
+        fan_power_kw (float): Fan electrical consumption (kW).
+        effectiveness (float): Thermal effectiveness (0-1).
+        ntu (float): Number of Transfer Units.
+
+    Example:
+        >>> cooler = DryCooler(component_id='DC_H2')
+        >>> cooler.initialize(dt=1/60, registry=registry)
+        >>> cooler.receive_input('fluid_in', hot_h2_stream, 'gas')
+        >>> cooler.step(t=0.0)
+        >>> cold_stream = cooler.get_output('fluid_out')
+        >>> print(f"Outlet: {cooler.outlet_temp_c:.1f}°C, Q={cooler.heat_duty_kw:.1f} kW")
     """
-    
+
     def __init__(self, component_id: str = "dry_cooler"):
+        """
+        Initialize the dry cooler component.
+
+        Args:
+            component_id (str): Unique identifier for this component instance.
+                Default: 'dry_cooler'.
+        """
         super().__init__()
         self.component_id = component_id
-        
-        # State
-        self.fluid_type = "Unknown" 
+
+        # Stream state
+        self.fluid_type = "Unknown"
         self.inlet_stream: Optional[Stream] = None
         self.outlet_stream: Optional[Stream] = None
-        
-        # Results
+
+        # Performance metrics
         self.heat_duty_kw = 0.0
         self.fan_power_kw = 0.0
         self.outlet_temp_c = 0.0
         self.effectiveness = 0.0
         self.ntu = 0.0
         self.air_mass_flow_kg_s = 0.0
-        
-        # Constants loaded dynamically based on fluid
+
+        # Geometry (set dynamically based on fluid type)
         self.area_m2 = 0.0
         self.design_air_flow_kg_s = 0.0
-        
+
     def initialize(self, dt: float, registry: Any) -> None:
-        """Initialize component."""
+        """
+        Prepare the component for simulation execution.
+
+        Fulfills the Component Lifecycle Contract initialization phase.
+        Geometry parameters are set dynamically when the first valid stream
+        is received, based on detected fluid composition.
+
+        Args:
+            dt (float): Simulation timestep in hours.
+            registry (ComponentRegistry): Central registry for component access.
+        """
         super().initialize(dt, registry)
 
     def _detect_fluid_config(self, stream: Stream) -> None:
-        """Configure exchanger geometry based on dominant species."""
+        """
+        Configure exchanger geometry based on dominant species.
+
+        Detects whether the stream is primarily hydrogen or oxygen by
+        comparing mass fractions, then loads appropriate geometry constants
+        (heat transfer area and design air flow rate).
+
+        Args:
+            stream (Stream): Inlet stream for composition analysis.
+        """
         h2_frac = stream.composition.get('H2', 0.0)
         o2_frac = stream.composition.get('O2', 0.0)
-        
+
         if h2_frac > o2_frac:
             self.fluid_type = "H2"
             self.area_m2 = DCC.AREA_H2_M2
@@ -74,9 +148,22 @@ class DryCooler(Component):
             self.design_air_flow_kg_s = DCC.MDOT_AIR_DESIGN_O2_KG_S
 
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
+        """
+        Accept an input stream at the specified port.
+
+        Stores the inlet stream and triggers geometry configuration based
+        on detected fluid composition.
+
+        Args:
+            port_name (str): Target port ('fluid_in' or 'electricity_in').
+            value (Any): Stream object for fluid or float for power.
+            resource_type (str, optional): Resource classification hint.
+
+        Returns:
+            float: Mass flow rate accepted (kg/h) or fan power (kW).
+        """
         if port_name == "fluid_in" and isinstance(value, Stream):
             self.inlet_stream = value
-            # Auto-configure on first valid input or if type changes
             self._detect_fluid_config(value)
             return value.mass_flow_kg_h
         elif port_name == "electricity_in":
@@ -84,129 +171,157 @@ class DryCooler(Component):
         return 0.0
 
     def get_output(self, port_name: str) -> Any:
+        """
+        Retrieve the output stream from a specified port.
+
+        Args:
+            port_name (str): Port identifier. Expected: 'fluid_out'.
+
+        Returns:
+            Stream: Cooled stream at outlet conditions, or None if no flow.
+        """
         if port_name == "fluid_out":
             return self.outlet_stream
         return None
 
     def step(self, t: float) -> None:
+        """
+        Execute one simulation timestep.
+
+        Computes heat transfer using the NTU-effectiveness method:
+        1. Calculate mixture heat capacity using mass-weighted species Cp.
+        2. Compute capacity rates: C_hot = ṁ × Cp, C_air = ṁ_air × Cp_air.
+        3. Determine NTU = UA / C_min and capacity ratio R = C_min / C_max.
+        4. Calculate effectiveness from crossflow correlation (Numba JIT).
+        5. Compute heat duty: Q = ε × C_min × (T_hot_in - T_cold_in).
+        6. Calculate outlet temperature and fan power.
+
+        Args:
+            t (float): Current simulation time in hours.
+
+        Note:
+            For wet streams containing liquid water, the water heat capacity
+            (4186 J/kg·K) is used to represent the high thermal inertia.
+        """
         super().step(t)
-        
+
         if not self.inlet_stream or self.inlet_stream.mass_flow_kg_h <= 0:
             self.outlet_stream = None
             self.heat_duty_kw = 0.0
             self.fan_power_kw = 0.0
             return
 
-        # 1. Process Conditions
-        m_dot_total = self.inlet_stream.mass_flow_kg_h / 3600.0 # kg/s
+        # ====================================================================
+        # Hot Side (Process Stream) Properties
+        # ====================================================================
+        m_dot_total = self.inlet_stream.mass_flow_kg_h / 3600.0
         T_h_in = self.inlet_stream.temperature_k
         P_in = self.inlet_stream.pressure_pa
-        
-        # Liquid fraction handling (simplified assumption: H2O is liquid if explicitly stated or T < 100C @ 1atm check)
-        # Using composition for mass balance. In rigorous mode, stream.phase might be 'mixed'
-        # Approximate: separate water flow logic if needed, but for now assuming 'wet gas' properties
-        
-        # Mass fractions calculation (User Requirement: Convert mole fractions to mass fractions)
-        # 1. Calculate average molecular weight
+
+        # Calculate mixture molecular weight for mass fraction conversion
         mw_mix = 0.0
         for sp, mole_frac in self.inlet_stream.composition.items():
             if sp in GasConstants.SPECIES_DATA:
                 mw_sp = GasConstants.SPECIES_DATA[sp]['molecular_weight']
                 mw_mix += mole_frac * mw_sp
-        
-        # Avoid division by zero
-        if mw_mix < 1e-12: mw_mix = 18.015 # Fallback to water
-        
-        # 2. Calculate mass fractions for specific heat weighting
-        w_h2o = 0.0
-        w_gas = 0.0
-        
-        # We need to sum Cp contribution from all species
-        # But for this specific model, we are blending a "Gas" Cp and a "Liquid" Cp
-        # "Gas" here is the non-condensable part (H2 or O2), "Liquid" is H2O (simplified)
-        
+
+        if mw_mix < 1e-12:
+            mw_mix = 18.015  # Default to water if undefined
+
+        # Mass-weighted heat capacity calculation
         Cp_weighted = 0.0
-        
         for sp, mole_frac in self.inlet_stream.composition.items():
             if sp in GasConstants.SPECIES_DATA:
                 mw_sp = GasConstants.SPECIES_DATA[sp]['molecular_weight']
                 mass_frac = (mole_frac * mw_sp) / mw_mix
-                
-                # Determine Cp for this species
+
+                # Species-specific heat capacity
                 if sp == 'H2O':
-                     # Simplification: Treat H2O as liquid for conservative cooling?
-                     # Or use vapor? Reference says "Liq + Vap".
-                     # For NTU "C_hot" capacity rate, using liquid Cp for water portion
-                     # approximates the high thermal inertia of the wet stream.
-                     cp_sp = 4186.0
+                    # Liquid water Cp for wet stream thermal inertia
+                    cp_sp = 4186.0
                 elif sp == 'H2':
-                     cp_sp = GasConstants.CP_H2_AVG
+                    cp_sp = GasConstants.CP_H2_AVG
                 elif sp == 'O2':
-                     cp_sp = GasConstants.CP_O2_AVG
+                    cp_sp = GasConstants.CP_O2_AVG
                 else:
-                     cp_sp = 1000.0 # Generic fallback
-                
+                    cp_sp = 1000.0
+
                 Cp_weighted += mass_frac * cp_sp
-        
-        # C_hot = m_dot * Cp_mix
+
         C_hot = m_dot_total * Cp_weighted
-        
-        # 2. Air Conditions (Cold Side)
-        # Fixed design air flow (Fan runs at constant speed in this model)
+
+        # ====================================================================
+        # Cold Side (Air) Properties
+        # ====================================================================
         m_dot_air = self.design_air_flow_kg_s
         C_air = m_dot_air * DCC.CP_AIR_J_KG_K
-        T_c_in = DCC.T_A_IN_DESIGN_C + 273.15 # 20C (293.15K)
-        
-        # 3. NTU Parameters
+        T_c_in = DCC.T_A_IN_DESIGN_C + 273.15
+
+        # ====================================================================
+        # NTU-Effectiveness Calculation
+        # ====================================================================
         C_min = min(C_hot, C_air)
         C_max = max(C_hot, C_air)
         R_capacity = C_min / C_max
-        
-        area_eff = self.area_m2 # Geometry
-        
+
+        area_eff = self.area_m2
+
+        # NTU = UA / C_min
         NTU = (DCC.U_W_M2_K * area_eff) / C_min
-        
-        # 4. Effectiveness (JIT)
+
+        # Effectiveness from crossflow correlation (JIT-compiled)
         eff = numba_ops.dry_cooler_ntu_effectiveness(NTU, R_capacity)
         self.effectiveness = eff
         self.ntu = NTU
-        
-        # 5. Heat Duty
+
+        # ====================================================================
+        # Heat Duty and Outlet Conditions
+        # ====================================================================
         Q_max = C_min * (T_h_in - T_c_in)
         Q_actual = eff * Q_max
-        
+
         self.heat_duty_kw = Q_actual / 1000.0
-        
-        # 6. Outlet Conditions
-        # Q = C_hot * (T_h_in - T_h_out) -> T_h_out = T_h_in - Q/C_hot
+
+        # Hot side outlet temperature: Q = C_hot × (T_in - T_out)
         if C_hot > 1e-9:
             T_h_out = T_h_in - (Q_actual / C_hot)
         else:
             T_h_out = T_h_in
-        
-        # Pressure Drop
+
+        # Fluid side pressure drop
         P_out = P_in - (DCC.DP_FLUID_BAR * 1e5)
-        if P_out < 101325: P_out = 101325 # Clamp to ambient minimum
-        
+        if P_out < 101325:
+            P_out = 101325
+
         self.outlet_temp_c = T_h_out - 273.15
-        
+
         self.outlet_stream = Stream(
-            mass_flow_kg_h = self.inlet_stream.mass_flow_kg_h,
-            temperature_k = T_h_out,
-            pressure_pa = P_out,
-            composition = self.inlet_stream.composition,
-            phase = 'mixed' # Cooling likely results in two-phase
+            mass_flow_kg_h=self.inlet_stream.mass_flow_kg_h,
+            temperature_k=T_h_out,
+            pressure_pa=P_out,
+            composition=self.inlet_stream.composition,
+            phase='mixed'
         )
-        
-        # 7. Fan Power
-        # Power = (V_dot * dP) / eta
-        # V_dot = m_dot / rho
+
+        # ====================================================================
+        # Fan Power Calculation
+        # ====================================================================
+        # P_fan = (V̇ × ΔP) / η_fan
         vol_air = m_dot_air / DCC.RHO_AIR_KG_M3
         power_j_s = (vol_air * DCC.DP_AIR_PA) / DCC.ETA_FAN
         self.fan_power_kw = power_j_s / 1000.0
         self.air_mass_flow_kg_s = m_dot_air
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
+        """
+        Define the physical connection ports for this component.
+
+        Returns:
+            Dict[str, Dict[str, str]]: Port definitions with keys:
+                - fluid_in: Hot process stream inlet.
+                - electricity_in: Fan power supply.
+                - fluid_out: Cooled process stream outlet.
+        """
         return {
             'fluid_in': {'type': 'input', 'resource_type': 'stream'},
             'electricity_in': {'type': 'input', 'resource_type': 'electricity'},
@@ -214,6 +329,22 @@ class DryCooler(Component):
         }
 
     def get_state(self) -> Dict[str, Any]:
+        """
+        Retrieve the component's current operational state.
+
+        Fulfills the Component Lifecycle Contract state access, providing
+        thermal performance metrics for monitoring and logging.
+
+        Returns:
+            Dict[str, Any]: State dictionary containing:
+                - fluid_type (str): Detected species ('H2' or 'O2').
+                - heat_duty_kw (float): Heat transfer rate (kW).
+                - fan_power_kw (float): Fan electrical consumption (kW).
+                - outlet_temp_c (float): Outlet temperature (°C).
+                - effectiveness (float): Thermal effectiveness (0-1).
+                - ntu (float): Number of Transfer Units.
+                - air_flow_kg_s (float): Air mass flow rate (kg/s).
+        """
         return {
             **super().get_state(),
             'fluid_type': self.fluid_type,

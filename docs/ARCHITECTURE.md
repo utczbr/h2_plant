@@ -1,7 +1,7 @@
 # Dual-Path Hydrogen Production System v2.0 - System Architecture
 
-**Document Version:** 1.1  
-**Last Updated:** November 20, 2025  
+**Document Version:** 1.2
+**Last Updated:** December 13, 2025
 **Target Audience:** Senior Engineers, System Architects, New Maintainers
 
 ---
@@ -16,24 +16,24 @@ This document provides a **comprehensive architectural overview** of the Dual-Pa
 
 The Dual-Path Hydrogen Production System is a **modular, high-performance simulation framework** for modeling industrial-scale hydrogen production. It combines rigorous thermodynamic physics with event-driven orchestration to model:
 
-- **Dual Pathways:** Grid-powered electrolysis and natural gas autothermal reforming (ATR).
-- **Complex Physics:** Real-gas mixtures (H₂, O₂, CO₂, H₂O) with phase equilibrium.
-- **Deep Composition:** Recursive subsystems (e.g., electrolyzers containing pumps, heat exchangers).
-- **HPC Performance:** Sub-millisecond timesteps via LUT caching and Numba JIT.
-- **Interactive GUI:** Node-based visual editor for plant configuration.
-- **Rich Visualization:** Automated generation of interactive dashboards and reports.
+-   **Dual Pathways:** Grid-powered electrolysis and natural gas autothermal reforming (ATR).
+-   **Complex Physics:** Real-gas mixtures (H₂, O₂, CO₂, H₂O) with phase equilibrium.
+-   **Deep Composition:** Recursive subsystems (e.g., electrolyzers containing pumps, heat exchangers).
+-   **HPC Performance:** Sub-millisecond timesteps via LUT caching and Numba JIT.
+-   **Interactive GUI:** Node-based visual editor for plant configuration.
+-   **Rich Visualization:** Automated generation of interactive dashboards and reports.
 
-**Scale:** 8,760 minutes timesteps per annual simulation cycle[file:1].
+**Scale:** 8,760 hours (525,600 minutes) per annual simulation cycle.
 
 ---
 
 ## Execution Flow: SimulationEngine Loop
 
-The core execution pattern follows a **registry-driven event loop** where the `SimulationEngine` orchestrates component lifecycle management through the `ComponentRegistry`[file:3].
+The core execution pattern follows a **registry-driven event loop** where the `SimulationEngine` orchestrates component lifecycle management through the `ComponentRegistry`.
 
 ### Sequence Diagram
 
-```
+```mermaid
 sequenceDiagram
     participant User
     participant SimEngine as SimulationEngine
@@ -44,11 +44,11 @@ sequenceDiagram
     participant StateManager
 
     User->>SimEngine: run(start_hour=0, end_hour=8760)
-    SimEngine->>Registry: initialize_all(dt=1.0)
+    SimEngine->>Registry: initialize_all(dt=0.0167)
     Registry->>Components: initialize(dt, registry)
     Components-->>Registry: ✓ Initialized
 
-    loop Every Minute (t = 0..518400)
+    loop Every Minute (t = 0..8760)
         SimEngine->>EventSched: process_events(t)
         
         SimEngine->>Registry: step_all(t)
@@ -57,8 +57,9 @@ sequenceDiagram
         Components-->>Registry: ✓ Timestep complete
         
         SimEngine->>FlowTracker: record_flows(t)
+        SimEngine->>Monitoring: collect_metrics(t)
         
-        alt Checkpoint Interval (t % 168 == 0)
+        alt Checkpoint Interval (e.g., Daily)
             SimEngine->>Registry: get_all_states()
             Registry->>Components: get_state()
             Components-->>Registry: Deep State Dicts
@@ -73,154 +74,102 @@ sequenceDiagram
 
 ## Layered Architecture (6 Layers)
 
-The system is organized into **six distinct layers**, plus a set of **Advanced Capabilities** that cut across layers[file:1].
+The system is organized into **six distinct layers**, plus a set of **Advanced Capabilities** that cut across layers.
 
 ### Layer 1: Core Foundation
 **Purpose:** Establish standardized interfaces and shared abstractions.
-- **`Component` ABC:** Defines the strict `initialize`, `step`, `get_state` lifecycle[file:2].
-- **`ComponentRegistry`:** Central orchestrator for dependency injection.
-- **`Integer Enums`:** Numba-compatible state definitions (`TankState`, `FlowType`).
+-   **`Component` ABC:** Defines the strict `initialize`, `step`, `get_state` lifecycle contract.
+-   **`ComponentRegistry`:** Central orchestrator for dependency injection and component management.
+-   **`Integer Enums`:** Numba-compatible state definitions (`TankState`, `FlowType`).
 
 ### Layer 2: Performance Optimization
 **Purpose:** Achieve 50-200x speedup on computational bottlenecks.
-- **`LUTManager`:** 3D lookup tables for pure fluids and **mixture properties** (H₂/O₂/CO₂/H₂O).
-- **`numba_ops`:** JIT-compiled hot paths for flash calculations and array operations.
-- **`TankArray`:** Vectorized storage logic using NumPy.
+-   **`LUTManager`:** 3D lookup tables for pure fluids and **mixture properties** (H₂/O₂/CO₂/H₂O).
+-   **`numba_ops`:** JIT-compiled hot paths for flash calculations, tank array operations, and solvers.
+-   **`TankArray`:** Vectorized storage logic using NumPy.
 
 ### Layer 3: Component Implementations
 **Purpose:** Standardized simulation entities.
-- **Production:** `DetailedPEMElectrolyzer`, `SOECOperator`, `ATRProductionSource`.
-- **Storage:** `TankArray`, `SourceIsolatedTanks`, `OxygenBuffer`, `BatteryStorage`, `H2StorageTankEnhanced`.
-- **Compression:** `FillingCompressor`, `OutgoingCompressor`, `CompressorStorage`.
-- **Separation:** `KnockOutDrum`, `Coalescer`, `OxygenMixer`, `MultiComponentMixer`.
-- **Thermal:** `Chiller`, `HeatExchanger`.
-- **External:** `ExternalOxygenSource`, `ExternalHeatSource`.
-- **Water:** `WaterQualityTestBlock`, `WaterTreatmentBlock`, `UltrapureWaterStorageTank`, `WaterPumpThermodynamic`.
-- **Utility:** `DemandScheduler`, `EnergyPriceTracker`.
+-   **Production:** `DetailedPEMElectrolyzer`, `SOECOperator`, `ATRProductionSource`.
+-   **Storage:** `TankArray`, `SourceIsolatedTanks`, `OxygenBuffer`.
+-   **Compression:** `FillingCompressor`, `OutgoingCompressor`.
+-   **Separation:** `KnockOutDrum`, `Coalescer`, `OxygenMixer`, `MultiComponentMixer`.
+-   **Thermal:** `Chiller`, `HeatExchanger`.
+-   **Water:** `DetailedWaterTreatment`, `WaterQualityTestBlock`.
+-   **Utility:** `DemandScheduler`, `EnergyPriceTracker`.
 
 ### Layer 4: Pathway Orchestration
 **Purpose:** Coordinate production and allocation strategies.
-- **`DualPathCoordinator`:** Economic optimization and demand allocation.
-- **`IsolatedProductionPath`:** Encapsulates source → storage → compression chains.
-- **`PlantBuilder`:** YAML-driven component instantiation.
+-   **`DualPathCoordinator`:** Economic optimization and demand allocation logic.
+-   **`IsolatedProductionPath`:** Encapsulates source → storage → compression chains.
+-   **`IntegratedPlant`:** Full plant coordinator wiring all subsystems together.
+-   **`AllocationStrategies`:** Algorithmic strategies (Cost, Emissions, Balanced) for demand splitting.
 
 ### Layer 5: Simulation Engine
 **Purpose:** Execution and monitoring.
-- **`SimulationEngine`:** Main loop and event scheduling.
-- **`StateManager`:** Checkpoint persistence (JSON/Pickle).
-- **`MonitoringSystem`:** Real-time metrics.
-- **`FlowTracker`:** Topology-aware flow tracking for Sankey diagrams.
-- **`MetricsCollector`:** Centralized data gathering for the visualization system.
+-   **`SimulationEngine`:** Main loop and event scheduling.
+-   **`Integrated Dispatch`:** Replaces legacy orchestration with a high-performance control loop[file:8][file:9].
+    -   **`dispatch.py`:** Pure logic for power allocation (Grid vs Electrolyzer vs Sales).
+    -   **`engine_dispatch.py`:** Binds logic to the engine with **pre-allocated NumPy arrays** for history.
+    -   **Pattern:** Separation of *Intention* (Dispatch sets inputs) vs *Outcome* (Physics determines outputs).
+-   **`EventScheduler`:** Time-based and recurring event management (maintenance, price updates).
+-   **`StateManager`:** Checkpoint persistence (JSON/Pickle).
+-   **`MonitoringSystem`:** Real-time metrics.
+-   **`FlowTracker`:** Topology-aware flow tracking for Sankey diagrams.
+-   **`MetricsCollector`:** Centralized data gathering for the visualization system.
 
 ### Layer 6: User Interface
 **Purpose:** Visual configuration and interaction.
-- **`PlantEditorWindow`:** Main GUI entry point (PySide6).
-- **`NodeEditor`:** Visual programming interface for connecting components.
-- **`GraphGenerator`:** Post-simulation reporting engine.
+-   **`PlantEditorWindow`:** Main GUI entry point (PySide6).
+-   **`NodeEditor`:** Visual programming interface for connecting components.
+-   **`GraphGenerator`:** Post-simulation reporting engine.
 
 ---
 
-## Advanced Capabilities
+## Integrated Control Architecture
 
-These features distinguish the system as a high-fidelity engineering tool.
+The system employs a **Split-Layer Control Architecture** to manage plant dispatch and power arbitration. This design separates economic decision-making from physical execution, enabling high-frequency optimization without coupling physics to control logic.
 
-### 1. High-Fidelity Physics & Mixing[file:5]
-Unlike simple mass-balance simulators, this system implements rigorous thermodynamics:
-- **`MultiComponentMixer`:** Handles real-gas mixtures (H₂, O₂, CO₂, H₂O) using **UV-flash calculations**.
-- **Phase Equilibrium:** Solves Rachford-Rice equations to detect water condensation and phase splitting.
-- **LUT Integration:** The `LUTManager` supports mixture property caching to maintain performance (<2ms/step) despite physical complexity.
+### 1. Architecture Overview
+The control system replaces the legacy `Orchestrator` with a two-part implementation:
 
-### 2. Recursive Subsystem Decomposition[file:6]
-Components are not always atomic. The architecture supports **Composite Components**:
-- **Pattern:** A parent component (e.g., `DetailedPEMElectrolyzer`) manages child components.
-- **Example:** An electrolyzer contains:
-  - `RecirculationPump` (P-1, P-2)
-  - `HeatExchanger` (HX-1, HX-2)
-  - `SeparationTank` (ST-1, ST-2)
-- **Lifecycle:** The parent's `step()` orchestrates the children, and `get_state()` aggregates their data into a nested structure.
+*   **Logic Layer (`control/dispatch.py`)**: Pure Python classes (e.g., `ReferenceHybridStrategy`) that determine *intent*. They process market signals (price, wind availability) and output power setpoints (MW to SOEC, MW to PEM, MW to Grid). This layer is stateless regarding physics but stateful regarding control decisions (e.g., hysteresis, arbitrage mode).
+*   **Binding Layer (`control/engine_dispatch.py`)**: The `HybridArbitrageEngineStrategy` binds the logic to the `SimulationEngine`. It handles:
+    *   **Pre-allocation**: Creates NumPy arrays for the entire simulation duration (8760 hours) at initialization, providing 10-50x speedup over dynamic lists.
+    *   **Application**: Injects setpoints into standard components via `receive_input()` before the physics step.
+    *   **Recording**: collecting *actual* outcomes (real power consumed, H2 produced) after the physics step.
 
-### 3. Topology-Aware Flow Tracking[file:4]
-The **`FlowTracker`** (in Layer 5) provides "Flow Intelligence":
-- **Graph Topology:** Automatically maps connections between components.
-- **Sankey Generation:** Captures mass, energy, and cost flows for visualization.
-- **Enhanced States:** Component state dictionaries include flow metadata (source, destination, flow type) to enable rich dashboards.
+### 2. Execution Cycle
+The `SimulationEngine` executes the control loop in three precise phases per timestep:
 
-### 4. External Interfaces[file:11]
-The system models boundaries with the outside world:
-- **`ExternalOxygenSource`:** For importing O₂ when internal production is insufficient.
-- **`ExternalWasteHeatSource`:** For integrating industrial heat streams.
-- **Interface:** These components behave like standard sources but track "imported" vs "produced" resources for economic analysis.
-
-### 5. Integrated Visualization & Reporting[file:visualization/README.md]
-The system includes a comprehensive reporting engine:
-- **`MetricsCollector`:** Hooks into the simulation loop to capture time-series data.
-- **`GraphGenerator`:** Produces interactive Plotly graphs (HTML) and static images (PNG/PDF).
-- **`Dashboard`:** Aggregates graphs into a unified HTML report.
-- **Configurable:** Users can enable/disable specific graph categories (Production, Economics, etc.) via YAML.
-
----
-
-## Directory Structure
-
-The folder structure reflects the layered design and advanced capabilities[file:1]:
-
-```
-h2_plant/
-├── core/                          # Layer 1: Foundation
-│   ├── component.py               # Component ABC
-│   ├── component_registry.py      # Registry
-│   └── ...
-├── optimization/                  # Layer 2: Performance
-│   ├── lut_manager.py             # Thermodynamics & Mixtures
-│   └── numba_ops.py               # JIT Flash Calculations
-├── models/                        # Physics Models (Separated from Components)
-│   ├── pem_physics.py
-│   ├── soec_operation.py
-│   └── ...
-├── components/                    # Layer 3: Components
-│   ├── production/
-│   │   ├── pem_electrolyzer_detailed.py  # Uses models/pem_physics.py
-│   │   └── ...
-│   ├── mixing/
-│   │   ├── multicomponent_mixer.py       # Physics Engine
-│   │   └── oxygen_mixer.py
-│   ├── external/
-│   │   ├── oxygen_source.py
-│   │   └── heat_source.py
-│   ├── water/
-│   │   ├── quality_test.py
-│   │   ├── treatment.py
-│   │   ├── storage.py
-│   │   └── pump.py
-│   └── ...
-├── pathways/                      # Layer 4: Orchestration
-├── config/                        # YAML Builders
-├── simulation/                    # Layer 5: Execution
-│   ├── engine.py
-│   ├── flow_tracker.py            # Flow Intelligence
-│   └── ...
-├── visualization/                 # Reporting Engine
-│   ├── metrics_collector.py
-│   ├── graph_generator.py
-│   └── ...
-├── gui/                           # Layer 6: User Interface
-│   ├── main.py
-│   ├── nodes/                     # Visual Nodes
-│   └── ...
-├── data/                          # Static Data Assets
-└── utils/                         # Shared Utilities
-```
+1.  **Decide & Apply (Pre-Step)**:
+    -   Engine calls `dispatch.decide_and_apply(t, prices, wind)`.
+    -   Strategy calculates optimal split based on arbitrage threshold ($P_{threshold} = P_{PPA} + (1000/\eta) \times P_{H2}$).
+    -   Strategy sets `power_kw` inputs on Electrolyzer components.
+2.  **Physics Execution (Step)**:
+    -   Engine calls `registry.step_all(t)`.
+    -   Components consume power, produce hydrogen, and update thermal states.
+    -   *Note*: Components may consume less than the setpoint if constrained by temperature or maintenance.
+3.  **Record (Post-Step)**:
+    -   Engine calls `dispatch.record_post_step()`.
+    -   Strategy reads actual state (e.g., `pem.P_consumed_W`) and writes to history arrays.
 
 ---
 
 ## Component Lifecycle Contract
 
-Every component, whether atomic or composite, follows the strict three-phase lifecycle[file:2]:
+Every component, whether atomic or composite, follows the strict three-phase lifecycle:
 
-1. **`initialize(dt, registry)`**: Allocate memory, resolve dependencies (including child components).
-2. **`step(t)`**: Execute physics, mixing logic, and update state.
-3. **`get_state()`**: Return a JSON-serializable dict. For composites, this includes nested states of all sub-components.
+1.  **`initialize(dt, registry)`**:
+    -   Allocate memory and pre-compute constants.
+    -   Resolve dependencies (lookup other components in registry).
+    -   Initialize child components (if composite).
+2.  **`step(t)`**:
+    -   Execute physics, mixing logic, and reactions.
+    -   Update internal state based on inputs and time `dt`.
+    -   Ensure causal execution (inputs → processing → outputs).
+3.  **`get_state()`**:
+    -   Return a JSON-serializable dictionary representing the full internal state.
+    -   For composites, this recursively includes nested states of all sub-components.
 
 ---
-
-***
