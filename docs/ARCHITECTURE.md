@@ -90,13 +90,17 @@ The system is organized into **six distinct layers**, plus a set of **Advanced C
 
 ### Layer 3: Component Implementations
 **Purpose:** Standardized simulation entities.
--   **Production:** `DetailedPEMElectrolyzer`, `SOECOperator`, `ATRProductionSource`.
--   **Storage:** `TankArray`, `SourceIsolatedTanks`, `OxygenBuffer`.
--   **Compression:** `FillingCompressor`, `OutgoingCompressor`.
--   **Separation:** `KnockOutDrum`, `Coalescer`, `OxygenMixer`, `MultiComponentMixer`.
--   **Thermal:** `Chiller`, `HeatExchanger`.
--   **Water:** `DetailedWaterTreatment`, `WaterQualityTestBlock`.
--   **Utility:** `DemandScheduler`, `EnergyPriceTracker`.
+-   **Production & Reforming:** `DetailedPEMElectrolyzer` (`h2_plant/components/electrolysis/pem_electrolyzer.py`), `SOECOperator` (`h2_plant/components/electrolysis/soec_operator.py`), `ATRReactor` (`h2_plant/components/reforming/atr_reactor.py`), `WGSReactor` (`h2_plant/components/reforming/wgs_reactor.py`).
+-   **Storage:** `H2StorageTankEnhanced` (`h2_plant/components/storage/h2_storage_enhanced.py`), `SourceIsolatedTanks` (`h2_plant/components/storage/source_isolated_tanks.py`), `OxygenBuffer` (`h2_plant/components/storage/oxygen_buffer.py`), `BatteryStorage` (`h2_plant/components/storage/battery_storage.py`), `TankArray` (`h2_plant/components/storage/h2_tank.py`).
+-   **Compression & Logistics:** `CompressorStorage` (`h2_plant/components/compression/compressor.py`), `ThrottlingValve` (`h2_plant/components/control/valve.py`), `Consumer` (`h2_plant/components/logistics/consumer.py`), `H2Distribution` (`h2_plant/components/mixing/h2_distribution.py`).
+-   **Separation & Purification:** `KnockOutDrum` (`h2_plant/components/separation/knock_out_drum.py`), `Coalescer` (`h2_plant/components/separation/coalescer.py`), `PSA` (`h2_plant/components/separation/psa.py`), `TSAUnit` (`h2_plant/components/separation/tsa_unit.py`), `SeparationTank` (`h2_plant/components/separation/separation_tank.py`), `DeoxoReactor` (`h2_plant/components/purification/deoxo_reactor.py`).
+-   **Carbon Management:** `DetailedCO2Capture` (`h2_plant/components/carbon/co2_capture_detailed.py`), `CO2Storage` (`h2_plant/components/carbon/co2_storage.py`).
+-   **Thermal Management:** `Chiller` (`h2_plant/components/thermal/chiller.py`), `DryCooler` (`h2_plant/components/cooling/dry_cooler.py`), `HeatExchanger` (`h2_plant/components/thermal/heat_exchanger.py`), `SteamGenerator` (`h2_plant/components/thermal/steam_generator.py`), `ThermalManager` (`h2_plant/components/thermal/thermal_manager.py`).
+-   **Water Systems:** `DetailedWaterTreatment` (`h2_plant/components/water/water_treatment_detailed.py`), `WaterQualityTestBlock` (`h2_plant/components/water/quality_test.py`), `WaterBalanceTracker` (`h2_plant/components/water/water_balance_tracker.py`), `WaterPumpThermodynamic` (`h2_plant/components/water/water_pump.py`), `UltrapureWaterStorageTank` (`h2_plant/components/water/storage.py`), `UltraPureWaterTank` (`h2_plant/components/water/ultrapure_water_tank.py`).
+-   **Mixing:** `OxygenMixer` (`h2_plant/components/mixing/oxygen_mixer.py`), `MultiComponentMixer` (`h2_plant/components/mixing/multicomponent_mixer.py`), `WaterMixer` (`h2_plant/components/mixing/water_mixer.py`).
+-   **Power:** `Rectifier` (`h2_plant/components/power/rectifier.py`).
+-   **Environment & External:** `EnvironmentManager` (`h2_plant/components/environment/environment_manager.py`), `BiogasSource` (`h2_plant/components/external/biogas_source.py`), `ExternalOxygenSource` (`h2_plant/components/external/oxygen_source.py`), `ExternalHeatSource` (`h2_plant/components/external/heat_source.py`).
+-   **Utility & Coordination:** `DemandScheduler` (`h2_plant/components/utility/demand_scheduler.py`), `EnergyPriceTracker` (`h2_plant/components/utility/energy_price_tracker.py`), `SimpleWindCoordinator` (`h2_plant/components/coordination/simple_wind_coordinator.py`).
 
 ### Layer 4: Pathway Orchestration
 **Purpose:** Coordinate production and allocation strategies.
@@ -171,5 +175,162 @@ Every component, whether atomic or composite, follows the strict three-phase lif
 3.  **`get_state()`**:
     -   Return a JSON-serializable dictionary representing the full internal state.
     -   For composites, this recursively includes nested states of all sub-components.
+
+---
+
+## Directory Structure
+
+Understanding the project layout helps you navigate quickly to the right location.
+
+```
+h2_plant/
+├── components/           # Layer 3: All simulation entities
+│   ├── electrolysis/     #   PEM, SOEC electrolyzers
+│   ├── storage/          #   Tank arrays, oxygen buffers
+│   ├── compression/      #   Multi-stage compressors
+│   ├── separation/       #   PSA, TSA, Coalescer, Knock-out drums
+│   ├── thermal/          #   Chillers, heat exchangers
+│   ├── water/            #   Water treatment, pumps, tanks
+│   ├── mixing/           #   Gas mixers
+│   ├── carbon/           #   CO2 capture and storage
+│   ├── external/         #   External sources (biogas, heat)
+│   └── utility/          #   Price tracker, demand scheduler
+│
+├── control/              # Layer 5: Dispatch logic
+│   ├── dispatch.py       #   Pure control strategies (Intent)
+│   └── engine_dispatch.py#   Engine binding with NumPy arrays (Outcome)
+│
+├── core/                 # Layer 1: Foundation
+│   ├── component.py      #   Component ABC
+│   ├── component_registry.py  #   Central registry
+│   ├── stream.py         #   Stream dataclass for flow
+│   ├── constants.py      #   Physical constants
+│   └── enums.py          #   State enumerations
+│
+├── simulation/           # Layer 5: Engine and infrastructure
+│   ├── engine.py         #   SimulationEngine main loop
+│   ├── event_scheduler.py#   Time-based events
+│   ├── state_manager.py  #   Checkpoint persistence
+│   ├── flow_network.py   #   Topology-aware flow routing
+│   └── monitoring.py     #   Real-time metrics collection
+│
+├── optimization/         # Layer 2: Performance
+│   ├── lut_manager.py    #   Lookup tables for thermodynamics
+│   ├── numba_ops.py      #   JIT-compiled hot paths
+│   └── coolprop_lut.py   #   CoolProp wrapper with caching
+│
+├── pathways/             # Layer 4: Orchestration strategies
+│   ├── integrated_plant.py    #   Full plant coordinator
+│   ├── isolated_production_path.py  #   Source→Storage→Compression
+│   └── allocation_strategies.py     #   Demand splitting logic
+│
+├── config/               # Configuration files
+│   ├── plant_config.py   #   Pydantic models for validation
+│   ├── constants_physics.py  #   Physical constants (SI units)
+│   └── simulation_config.yaml  #   Default simulation settings
+│
+├── gui/                  # Layer 6: User interface (PySide6)
+│   ├── main_window.py    #   Application entry point
+│   ├── node_editor/      #   Visual component wiring
+│   └── core/             #   Backend-GUI bridge
+│
+├── visualization/        # Post-simulation reporting
+│   └── dashboard_generator.py  #   Interactive HTML reports
+│
+└── data/                 # Input data files
+    ├── prices/           #   Electricity price timeseries
+    ├── wind/             #   Wind availability profiles
+    └── demand/           #   Demand schedules
+```
+
+---
+
+## Quick Navigation: Common Tasks
+
+### "I need to add a new component"
+1.  Create file in `h2_plant/components/<category>/my_component.py`
+2.  Inherit from `Component` (`from h2_plant.core.component import Component`)
+3.  Implement `initialize()`, `step()`, `get_state()` (see `developer_guide_component.md`)
+4.  Register in `h2_plant/core/graph_builder.py` for GUI support
+
+### "I need to change the control logic"
+1.  **Intent changes** → Edit `h2_plant/control/dispatch.py`
+    -   Modify `ReferenceHybridStrategy.decide()` for arbitrage logic
+    -   Add new strategy by subclassing `DispatchStrategy`
+2.  **Recording changes** → Edit `h2_plant/control/engine_dispatch.py`
+    -   Add fields to `_history` dict in `initialize()`
+    -   Update `record_post_step()` to capture new metrics
+
+### "I need to modify the simulation loop"
+1.  Main loop is in `h2_plant/simulation/engine.py:SimulationEngine._execute_timestep()`
+2.  Execution order is defined in the `execution_order` list (line ~273)
+3.  Add pre/post hooks via `pre_step_callback` / `post_step_callback`
+
+### "I need to change thermodynamic properties"
+1.  Pure fluid lookups → `h2_plant/optimization/lut_manager.py`
+2.  Physical constants → `h2_plant/config/constants_physics.py`
+3.  Add new species → Update `GasConstants` in `h2_plant/core/constants.py`
+
+### "I need to add a new GUI element"
+1.  Component palette → `h2_plant/gui/widgets/palette_panel.py`
+2.  Properties panel → `h2_plant/gui/core/property_inspector.py`
+3.  Backend binding → `h2_plant/gui/core/graph_adapter.py`
+
+---
+
+## Data Flow Patterns
+
+### Stream Propagation (Push Architecture)
+Components push data downstream via `receive_input()`:
+```
+Producer.step() → Downstream.receive_input(port, stream, resource_type)
+```
+
+### Control Flow (Pull Architecture)
+Dispatch queries component state after physics:
+```
+Engine → dispatch.record_post_step() → component.get_state()['actual_power']
+```
+
+### Registry Pattern
+Components resolve dependencies at initialization:
+```python
+def initialize(self, dt, registry):
+    self._lut = registry.get(ComponentID.LUT_MANAGER)
+```
+
+---
+
+## Configuration Guide
+
+### Simulation Parameters
+Located in `h2_plant/config/plant_config.py`:
+-   `timestep_hours`: Default 1/60 (1 minute)
+-   `duration_hours`: Total simulation length
+-   `checkpoint_interval_hours`: State save frequency
+
+### Physical Constants
+Located in `h2_plant/config/constants_physics.py`:
+-   **SI Units** for internal calculations
+-   **Engineering Units** for GUI display (converted at boundaries)
+
+### Unit Conventions
+| Domain     | Internal (SI)      | Display (Engineering) |
+|------------|--------------------|-----------------------|
+| Pressure   | Pa                 | bar                   |
+| Temperature| K                  | °C                    |
+| Mass Flow  | kg/s               | kg/h                  |
+| Power      | W                  | MW                    |
+
+---
+
+## Related Documentation
+
+| Document | Purpose |
+|----------|---------|
+| [developer_guide_component.md](developer_guide_component.md) | How to implement new components |
+| [BACKEND_DIAGRAM.md](BACKEND_DIAGRAM.md) | Detailed execution flow diagrams |
+| [docs/diagrams/](diagrams/) | Component-level architecture diagrams |
+| [README.md](../README.md) | Project overview and quick start |
 
 ---

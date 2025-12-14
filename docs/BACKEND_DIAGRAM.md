@@ -1,8 +1,10 @@
 # Backend Architecture Diagram
 
-This document provides a visual representation of the backend execution flow for the Dual-Path Hydrogen Production System.
+This document provides a visual representation of the backend execution flow for the Hydrogen Production System, including the Integrated Control Architecture.
 
-## Simulation Execution Flow
+---
+
+## Simulation Execution Flow (Legacy View)
 
 ```mermaid
 sequenceDiagram
@@ -22,8 +24,8 @@ sequenceDiagram
     Components-->>Registry: initialized
     Engine->>Monitor: initialize(registry)
 
-    Note over User, State: Main Simulation Loop (Hourly)
-    loop For each hour (t)
+    Note over User, State: Main Simulation Loop
+    loop For each timestep (t)
         Engine->>Engine: _execute_timestep(t)
         
         rect rgb(240, 248, 255)
@@ -65,12 +67,156 @@ sequenceDiagram
     Engine-->>User: Return Results Dict
 ```
 
+---
+
+## Integrated Control Architecture (New)
+
+The Integrated Control Architecture separates **Intent** (what we want to happen) from **Outcome** (what physics allows). This enables high-frequency optimization without coupling control logic to physics calculations.
+
+### Execution Cycle Diagram
+
+```mermaid
+sequenceDiagram
+    participant Engine as SimulationEngine
+    participant Dispatch as DispatchStrategy
+    participant PEM as PEMElectrolyzer
+    participant SOEC as SOECOperator
+    participant Registry as ComponentRegistry
+    participant History as NumPy Arrays
+
+    Note over Engine, History: Per-Timestep Execution (1-minute resolution)
+
+    rect rgb(230, 245, 255)
+        Note right of Engine: Phase 1: DECIDE & APPLY (Pre-Step)
+        Engine->>Dispatch: decide_and_apply(t, prices, wind)
+        Dispatch->>Dispatch: Calculate optimal split (Arbitrage Logic)
+        Dispatch->>PEM: receive_input('power_kw', setpoint_pem)
+        Dispatch->>SOEC: receive_input('power_kw', setpoint_soec)
+        Note right of Dispatch: Intent: "Use 3 MW for PEM, 2 MW for SOEC"
+    end
+
+    rect rgb(255, 245, 230)
+        Note right of Engine: Phase 2: PHYSICS (Step)
+        Engine->>Registry: step_all(t)
+        Registry->>PEM: step(t)
+        PEM->>PEM: Consume power, produce H2, update thermal state
+        Registry->>SOEC: step(t)
+        SOEC->>SOEC: Consume steam, produce H2
+        Note right of PEM: Outcome: "Actually consumed 2.8 MW (thermal limit)"
+    end
+
+    rect rgb(245, 255, 230)
+        Note right of Engine: Phase 3: RECORD (Post-Step)
+        Engine->>Dispatch: record_post_step()
+        Dispatch->>PEM: get_state()
+        PEM-->>Dispatch: {P_consumed_W, H2_produced_kg, T_stack}
+        Dispatch->>SOEC: get_state()
+        SOEC-->>Dispatch: {P_consumed_W, H2_produced_kg}
+        Dispatch->>History: Write actual values to pre-allocated arrays
+    end
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **Intent** | Power setpoints calculated by `dispatch.py` based on prices and availability. |
+| **Outcome** | Actual consumption/production after physics constraints (temperature limits, ramp rates). |
+| **Pre-allocation** | `engine_dispatch.py` creates NumPy arrays for entire simulation duration at initialization. |
+| **Arbitrage Threshold** | `P_threshold = P_PPA + (1000/η) × P_H2`. Below threshold, produce H2; above, sell to grid. |
+
+---
+
+## Component Lifecycle Flow
+
+Every component follows this three-phase lifecycle:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Uninitialized
+    Uninitialized --> Ready: initialize(dt, registry)
+    Ready --> Stepping: step(t)
+    Stepping --> Ready: step complete
+    Ready --> [*]: finalize()
+    
+    note right of Ready
+        Component can:
+        - receive_input()
+        - get_output()
+        - get_state()
+    end note
+    
+    note right of Stepping
+        Component performs:
+        - Mass balance
+        - Energy balance
+        - State update
+    end note
+```
+
+---
+
+## Data Flow Patterns
+
+### Stream Propagation (Push Architecture)
+
+```mermaid
+flowchart LR
+    A[Producer] -->|step()| B[output_stream]
+    B -->|receive_input| C[Consumer.inlet]
+    C -->|step()| D[Consumer Output]
+    
+    style A fill:#e1f5fe
+    style C fill:#fff3e0
+```
+
+### Control Flow (Pull Architecture)
+
+```mermaid
+flowchart LR
+    E[Engine] -->|record_post_step| F[Dispatch]
+    F -->|get_state| G[Component]
+    G -->|actual_power| F
+    F -->|write| H[History Arrays]
+    
+    style E fill:#f3e5f5
+    style H fill:#e8f5e9
+```
+
+---
+
 ## Key Components
 
-1.  **SimulationEngine**: The central conductor. It manages the clock, triggers events, steps components, and handles data persistence.
-2.  **ComponentRegistry**: A central directory of all system components (Electrolyzers, Tanks, etc.). It abstracts the complexity of iterating over hundreds of components.
-3.  **EventScheduler**: Handles dynamic events (e.g., "Grid Power Outage at hour 500"). It injects changes into components at specific times.
-4.  **Components**: The actual physical models. They implement the `step(t)` method to calculate their internal physics (mass balance, energy balance) for one timestep.
-5.  **MonitoringSystem**: Observes the system. It collects time-series data (e.g., "H2 Production Rate", "Tank Level") for analysis and dashboard generation.
-6.  **MetricsCollector**: Specialized data collector for the Visualization system. It feeds data into the GraphGenerator.
-7.  **StateManager**: Handles saving/loading simulation state to disk, allowing for checkpoints and resuming long simulations.
+| Component | Role | File |
+|-----------|------|------|
+| **SimulationEngine** | Main loop, timestep management | `simulation/engine.py` |
+| **ComponentRegistry** | Central component directory | `core/component_registry.py` |
+| **DispatchStrategy** | Power allocation logic (Intent) | `control/dispatch.py` |
+| **HybridArbitrageEngineStrategy** | Engine binding (Outcome recording) | `control/engine_dispatch.py` |
+| **EventScheduler** | Time-based event injection | `simulation/event_scheduler.py` |
+| **MonitoringSystem** | Real-time metrics collection | `simulation/monitoring.py` |
+| **MetricsCollector** | Visualization data pipeline | `visualization/metrics_collector.py` |
+| **StateManager** | Checkpoint persistence | `simulation/state_manager.py` |
+
+---
+
+## Performance Optimizations
+
+The Integrated Control Architecture achieves 10-50x speedup through:
+
+1. **Pre-allocated NumPy Arrays**: History arrays created once at initialization for entire simulation duration.
+2. **Vectorized Operations**: Batch calculations where possible (e.g., efficiency curves).
+3. **LUT Manager**: Thermodynamic lookups via bilinear interpolation instead of CoolProp calls.
+4. **Numba JIT**: Hot paths (PFR solver, flash equilibrium) compiled to machine code.
+
+```python
+# Example: Pre-allocation in engine_dispatch.py
+def initialize(self, dt, registry):
+    n_steps = int(8760 * 60)  # 1-minute resolution for 1 year
+    self._history = {
+        'pem_power_kw': np.zeros(n_steps, dtype=np.float32),
+        'soec_power_kw': np.zeros(n_steps, dtype=np.float32),
+        'h2_produced_kg': np.zeros(n_steps, dtype=np.float32),
+    }
+```
+
