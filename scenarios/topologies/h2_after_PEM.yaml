@@ -107,4 +107,17 @@ nodes:
       purity_target: 0.9999
       recovery_rate: 0.90
       power_consumption_kw: 10.0
+    connections: 
+      - source_port: "outlet"
+        target_name: "Compressor_1"
+        target_port: "gas_in"
+        resource_type: "gas"
+
+  # === Compressor (initial Compressor to 70 bar) ===
+  - id: "Compressor_1"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 93.3
+      inlet_pressure_bar: 40.0
+      outlet_pressure_bar: 70.0
     connections: []

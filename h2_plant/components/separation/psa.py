@@ -426,7 +426,7 @@ class PSA(Component):
         Returns:
             Stream: Requested output stream.
         """
-        if port_name == "purified_gas_out":
+        if port_name == "purified_gas_out" or port_name == "outlet":
             return self.product_outlet
         elif port_name == "tail_gas_out":
             return self.tail_gas_outlet

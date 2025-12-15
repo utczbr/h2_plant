@@ -157,6 +157,9 @@ class CompressorSingle(Component):
         self._last_step_time = -1.0
         self.timestep_power_kw = 0.0
         self.timestep_energy_kwh = 0.0
+        
+        # Store inlet stream for composition propagation
+        self._inlet_stream: Optional[Stream] = None
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
@@ -383,12 +386,18 @@ class CompressorSingle(Component):
             ValueError: If port_name is not recognized.
         """
         if port_name == 'h2_out' or port_name == 'outlet':
+            # Propagate inlet composition (compression doesn't change composition)
+            if self._inlet_stream and self._inlet_stream.composition:
+                out_comp = self._inlet_stream.composition.copy()
+            else:
+                out_comp = {'H2': 1.0}  # Default if no inlet stream
+            
             return Stream(
                 mass_flow_kg_h=(self.actual_mass_transferred_kg / self.dt
                                if self.dt > 0 else 0.0),
                 temperature_k=self.outlet_temperature_k,
                 pressure_pa=self.outlet_pressure_bar * self.BAR_TO_PA,
-                composition={'H2': 1.0},
+                composition=out_comp,
                 phase='gas'
             )
         else:
@@ -408,7 +417,7 @@ class CompressorSingle(Component):
         Returns:
             Amount accepted (kg for hydrogen, value for power).
         """
-        if port_name == 'h2_in' or port_name == 'inlet':
+        if port_name == 'h2_in' or port_name == 'inlet' or port_name == 'gas_in':
             if isinstance(value, Stream):
                 available_mass = value.mass_flow_kg_h * self.dt
                 max_capacity = self.max_flow_kg_h * self.dt
@@ -417,6 +426,15 @@ class CompressorSingle(Component):
                 accepted_mass = min(available_mass, space_left)
 
                 self.transfer_mass_kg += accepted_mass
+                
+                # Store inlet stream for composition and temperature propagation
+                self._inlet_stream = value
+                
+                # Use inlet stream temperature for compression calculation
+                if value.temperature_k > 0:
+                    self.inlet_temperature_k = value.temperature_k
+                    self.inlet_temperature_c = value.temperature_k - 273.15
+                
                 return accepted_mass
 
         elif port_name == 'electricity_in':
