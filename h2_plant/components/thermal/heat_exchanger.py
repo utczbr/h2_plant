@@ -129,12 +129,6 @@ class HeatExchanger(Component):
 
         target_temp_k = self.target_outlet_temp_c + 273.15
 
-        # No cooling needed if already at or below target
-        if self.input_stream.temperature_k <= target_temp_k:
-            self.output_stream = self.input_stream
-            self.heat_removed_kw = 0.0
-            return
-
         # Create target stream for enthalpy calculation
         target_stream = Stream(
             mass_flow_kg_h=self.input_stream.mass_flow_kg_h,
@@ -148,40 +142,59 @@ class HeatExchanger(Component):
         h_target = target_stream.specific_enthalpy_j_kg
 
         # Q = ṁ × (h_in - h_target) [J/h → kW]
+        # Positive = Cooling (Heat Removal)
+        # Negative = Heating (Heat Addition)
         q_required_j_h = self.input_stream.mass_flow_kg_h * (h_in - h_target)
         q_required_kw = q_required_j_h * ConversionFactors.J_TO_KWH
 
-        if q_required_kw <= self.max_heat_removal_kw:
+        # Check against capacity (absolute limit)
+        if abs(q_required_kw) <= self.max_heat_removal_kw:
             # Unconstrained: achieve target temperature
             self.heat_removed_kw = q_required_kw
             self.output_stream = target_stream
         else:
-            # Capacity-limited: find achievable outlet via bisection
-            self.heat_removed_kw = self.max_heat_removal_kw
+            # Capacity-limited: apply max duty with correct sign
+            sign = 1.0 if q_required_kw > 0 else -1.0
+            self.heat_removed_kw = sign * self.max_heat_removal_kw
 
-            # h_out = h_in - Q_max / ṁ
-            q_removed_j_kg = (self.max_heat_removal_kw / ConversionFactors.J_TO_KWH) / \
+            # h_out = h_in - Q_actual / ṁ
+            q_actual_j_kg = (self.heat_removed_kw / ConversionFactors.J_TO_KWH) / \
                              self.input_stream.mass_flow_kg_h
-            h_out = h_in - q_removed_j_kg
+            h_out = h_in - q_actual_j_kg
 
             # Bisection search for T_out
-            t_low = target_temp_k
-            t_high = self.input_stream.temperature_k
+            # Range depends on heating or cooling
+            t_low = min(target_temp_k, self.input_stream.temperature_k)
+            t_high = max(target_temp_k, self.input_stream.temperature_k)
+            
+            # Widen search space slightly to ensure bracketing if properties non-linear
+            if sign < 0: # Heating: T_out might be slightly less than T_target if limited
+                 t_high = target_temp_k
+                 t_low = self.input_stream.temperature_k
+            else: # Cooling
+                 t_high = self.input_stream.temperature_k
+                 t_low = target_temp_k
 
-            for _ in range(10):
+            found_t = t_low # Fallback
+            
+            for _ in range(20):
                 t_mid = (t_low + t_high) / 2
                 s_mid = Stream(1.0, t_mid, self.input_stream.pressure_pa,
                               self.input_stream.composition)
                 h_mid = s_mid.specific_enthalpy_j_kg
 
+                # We want h_mid == h_out
+                # h(T) is monotonically increasing
                 if h_mid > h_out:
                     t_high = t_mid
                 else:
                     t_low = t_mid
+            
+            found_t = (t_low + t_high) / 2
 
             self.output_stream = Stream(
                 mass_flow_kg_h=self.input_stream.mass_flow_kg_h,
-                temperature_k=t_high,
+                temperature_k=found_t,
                 pressure_pa=self.input_stream.pressure_pa,
                 composition=self.input_stream.composition,
                 phase=self.input_stream.phase

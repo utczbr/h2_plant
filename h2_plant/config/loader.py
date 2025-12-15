@@ -28,15 +28,27 @@ class ConfigLoader:
             logger.error(f"Error loading {filename}: {e}")
             raise
 
-    def load_context(self) -> SimulationContext:
+    def load_context(self, topology_file: str = "plant_topology.yaml") -> SimulationContext:
         """
         Loads all required configs and returns a validated SimulationContext.
+        
+        Args:
+            topology_file (str): Topology file name or path. If absolute path,
+                                 used directly. Otherwise, relative to scenarios_dir.
+                                 Default: "plant_topology.yaml"
         """
-        logger.info("Loading configuration context...")
+        logger.info(f"Loading configuration context with topology: {topology_file}")
 
         # 1. Load Raw YAMLs
         physics_data = self._load_yaml("physics_parameters.yaml")
-        topology_data = self._load_yaml("plant_topology.yaml")
+        
+        # Handle topology file - support absolute or relative paths
+        if os.path.isabs(topology_file):
+            with open(topology_file, 'r') as f:
+                topology_data = yaml.safe_load(f)
+        else:
+            topology_data = self._load_yaml(topology_file)
+        
         sim_data = self._load_yaml("simulation_config.yaml")
         econ_data = self._load_yaml("economics_parameters.yaml")
 

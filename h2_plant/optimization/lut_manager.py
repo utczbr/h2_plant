@@ -124,6 +124,10 @@ class LUTManager(Component):
         self._pressure_grid: Optional[npt.NDArray] = None
         self._temperature_grid: Optional[npt.NDArray] = None
         self._entropy_grid: Optional[npt.NDArray] = None
+        
+        # 1D Saturation LUTs (T → P_sat, T → H_liq, T → H_vap)
+        self._saturation_lut: Dict[str, npt.NDArray] = {}
+        self._saturation_temp_grid: Optional[npt.NDArray] = None
 
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -180,6 +184,9 @@ class LUTManager(Component):
                 logger.info(f"Cache not found for {fluid}. Generating new LUT...")
                 self._luts[fluid] = self._generate_lut(fluid)
                 self._save_to_cache(fluid, cache_path)
+
+        # Generate 1D saturation LUT for water (T → P_sat)
+        self._generate_saturation_lut()
 
         logger.info("LUT Manager initialization complete")
 
@@ -457,6 +464,89 @@ class LUTManager(Component):
             self.config.pressure_min <= pressure <= self.config.pressure_max and
             self.config.temperature_min <= temperature <= self.config.temperature_max
         )
+
+    def _generate_saturation_lut(self) -> None:
+        """
+        Generate 1D saturation LUT for water (T → P_sat).
+        
+        Creates a lookup table for water saturation pressure as a function
+        of temperature, enabling fast flash calculations without CoolProp.
+        Temperature range: 273.15 K (0°C) to 647 K (near critical point).
+        """
+        if CP is None:
+            logger.warning("CoolProp unavailable - saturation LUT not generated")
+            return
+        
+        # Temperature grid for saturation curve (0°C to near-critical)
+        self._saturation_temp_grid = np.linspace(273.15, 640.0, 1000)
+        
+        logger.info("Generating water saturation LUT...")
+        
+        p_sat = np.zeros_like(self._saturation_temp_grid)
+        h_liq = np.zeros_like(self._saturation_temp_grid)
+        h_vap = np.zeros_like(self._saturation_temp_grid)
+        
+        for i, T in enumerate(self._saturation_temp_grid):
+            try:
+                p_sat[i] = CP.PropsSI('P', 'T', T, 'Q', 0, 'Water')
+                h_liq[i] = CP.PropsSI('H', 'T', T, 'Q', 0, 'Water')
+                h_vap[i] = CP.PropsSI('H', 'T', T, 'Q', 1, 'Water')
+            except Exception:
+                p_sat[i] = np.nan
+                h_liq[i] = np.nan
+                h_vap[i] = np.nan
+        
+        self._saturation_lut['P_sat'] = p_sat
+        self._saturation_lut['H_liq'] = h_liq
+        self._saturation_lut['H_vap'] = h_vap
+        
+        logger.info("  ✓ Water saturation LUT complete (1000 points)")
+
+    def lookup_saturation_pressure(self, temperature_k: float) -> float:
+        """
+        Lookup water saturation pressure from 1D LUT.
+        
+        Uses linear interpolation on pre-computed saturation curve.
+        Falls back to CoolProp if out of bounds.
+        
+        Args:
+            temperature_k (float): Temperature in Kelvin.
+            
+        Returns:
+            float: Saturation pressure in Pa.
+        """
+        if self._saturation_temp_grid is None or 'P_sat' not in self._saturation_lut:
+            if CP:
+                return CP.PropsSI('P', 'T', temperature_k, 'Q', 0, 'Water')
+            else:
+                # Antoine fallback
+                T_C = temperature_k - 273.15
+                A, B, C = 8.07131, 1730.63, 233.426
+                P_mmHg = 10 ** (A - B / (C + T_C))
+                return P_mmHg * 133.322
+        
+        T_grid = self._saturation_temp_grid
+        P_sat = self._saturation_lut['P_sat']
+        
+        # Check bounds
+        if temperature_k < T_grid[0] or temperature_k > T_grid[-1]:
+            if CP:
+                return CP.PropsSI('P', 'T', temperature_k, 'Q', 0, 'Water')
+            else:
+                T_C = temperature_k - 273.15
+                A, B, C = 8.07131, 1730.63, 233.426
+                P_mmHg = 10 ** (A - B / (C + T_C))
+                return P_mmHg * 133.322
+        
+        # Linear interpolation
+        idx = np.searchsorted(T_grid, temperature_k)
+        idx = np.clip(idx, 1, len(T_grid) - 1)
+        
+        T0, T1 = T_grid[idx - 1], T_grid[idx]
+        P0, P1 = P_sat[idx - 1], P_sat[idx]
+        
+        w = (temperature_k - T0) / (T1 - T0) if T1 != T0 else 0.0
+        return float(P0 * (1 - w) + P1 * w)
 
     def _fallback_coolprop(
         self,

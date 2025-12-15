@@ -1,3 +1,11 @@
+"""
+Physics constants configuration loader.
+
+This module loads physical parameters for the PEM electrolyzer and balance of plant (BoP)
+from external configuration files, falling back to safe defaults if necessary.
+It centralizes the source of truth for simulation parameters.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Any
 from h2_plant.config.physics_loader import load_physics_parameters
@@ -6,7 +14,17 @@ from h2_plant.config.physics_loader import load_physics_parameters
 _CONFIG = load_physics_parameters()
 
 def _get_val(section: str, key: str, default: Any) -> Any:
-    """Helper to get value from config or return default with type safety."""
+    """
+    Retrieve value from configuration dictionary with type safety mechanisms.
+
+    Args:
+        section (str): Configuration section (e.g., 'pem', 'physical_constants').
+        key (str): Parameter name.
+        default (Any): Fallback value if key is missing or invalid.
+
+    Returns:
+        Any: Type-casted configuration value or default.
+    """
     try:
         value = _CONFIG.get(section, {}).get(key, default)
         # If value exists in config but is wrong type, convert to match default
@@ -25,69 +43,84 @@ def _get_val(section: str, key: str, default: Any) -> Any:
 
 @dataclass(frozen=True)
 class PEMConstants:
-    """Physical constants for PEM electrolyzer model."""
+    """
+    Physical constants for PEM electrolyzer model.
+    
+    Encapsulates electrochemical parameters, stack geometry, and degradation
+    curves required for the polarization curve model involved in V-I calculations.
+    """
     # Physical Constants
-    F: float = _get_val('physical_constants', 'F', 96485.33)
-    R: float = _get_val('physical_constants', 'R', 8.314)
-    P_ref: float = _get_val('physical_constants', 'P_ref', 1.0e5)
-    z: int = _get_val('physical_constants', 'z', 2)
-    MH2: float = _get_val('physical_constants', 'MH2', 2.016e-3)
-    MO2: float = _get_val('physical_constants', 'MO2', 31.998e-3)
-    MH2O: float = _get_val('physical_constants', 'MH2O', 18.015e-3)
-    LHVH2_kWh_kg: float = _get_val('physical_constants', 'LHVH2_kWh_kg', 33.33)
+    F: float = _get_val('physical_constants', 'F', 96485.33)      # Faraday Constant (C/mol)
+    R: float = _get_val('physical_constants', 'R', 8.314)         # Ideal Gas Constant (J/(mol·K))
+    P_ref: float = _get_val('physical_constants', 'P_ref', 1.0e5) # Reference Pressure (Pa)
+    z: int = _get_val('physical_constants', 'z', 2)               # Electrons per H2 molecule (2 for H2)
+    MH2: float = _get_val('physical_constants', 'MH2', 2.016e-3)  # Molar Mass H2 (kg/mol)
+    MO2: float = _get_val('physical_constants', 'MO2', 31.998e-3) # Molar Mass O2 (kg/mol)
+    MH2O: float = _get_val('physical_constants', 'MH2O', 18.015e-3) # Molar Mass H2O (kg/mol)
+    LHVH2_kWh_kg: float = _get_val('physical_constants', 'LHVH2_kWh_kg', 33.33) # Lower Heating Value
     
     # Geometry
-    N_stacks: int = _get_val('pem', 'N_stacks', 35)
+    N_stacks: int = _get_val('pem', 'N_stacks', 35)               # Total number of stacks
     # Updated to 85 cells per stack per user specification
-    # With degradation table: 1290V / 85 cells = 15.18V/cell at BOL+1yr
     N_cell_per_stack: int = _get_val('pem', 'N_cell_per_stack', 85)
-    A_cell_cm2: float = _get_val('pem', 'A_cell_cm2', 300.0)
+    A_cell_cm2: float = _get_val('pem', 'A_cell_cm2', 300.0)      # Active area per cell
     
     @property
     def Area_Total(self) -> float:
-        """Total active area in cm² (N_stacks × N_cell_per_stack × A_cell_cm2).
+        """
+        Total active area in cm².
         
-        WARNING: This is in cm², NOT m². For SI units, divide by 10000.
+        Formula: Area_Total = N_stacks * N_cells_per_stack * Area_cell
+        WARNING: Unit is cm², consistent with electrochemical literature.
         """
         return self.N_stacks * self.N_cell_per_stack * self.A_cell_cm2
     
-    # Electrochemistry (Note: j parameters in A/cm² - empirical, non-SI)
-    delta_mem: float = _get_val('pem', 'delta_mem', 100 * 1e-4)  # Membrane thickness in cm
-    sigma_base: float = _get_val('pem', 'sigma_base', 0.1)       # Conductivity in S/cm
+    # Electrochemistry
+    # Note: j parameters commonly defined in A/cm² in empirical models
+    delta_mem: float = _get_val('pem', 'delta_mem', 100 * 1e-4)  # Membrane thickness (cm)
+    sigma_base: float = _get_val('pem', 'sigma_base', 0.1)       # Proton conductivity (S/cm)
     j0: float = _get_val('pem', 'j0', 1.0e-6)                    # Exchange current density (A/cm²)
-    alpha: float = _get_val('pem', 'alpha', 0.5)                 # Charge transfer coefficient
+    alpha: float = _get_val('pem', 'alpha', 0.5)                 # Charge transfer coefficient (symmetric)
     j_lim: float = _get_val('pem', 'j_lim', 4.0)                 # Limiting current density (A/cm²)
     j_nom: float = _get_val('pem', 'j_nom', 2.91)                # Nominal current density (A/cm²)
     
     # Operating Conditions
-    T_default: float = _get_val('pem', 'T_default', 333.15)      # Default temperature (K) = 60°C
-    P_op_default: float = _get_val('pem', 'P_op_default', 40.0e5)  # Default pressure (Pa) = 40 bar
+    T_default: float = _get_val('pem', 'T_default', 333.15)      # Default temperature (K)
+    P_op_default: float = _get_val('pem', 'P_op_default', 40.0e5)  # Default pressure (Pa)
     
-    # BoP and System Power
-    floss: float = _get_val('pem', 'floss', 0.02)
-    k_bop_var: float = _get_val('pem', 'k_bop_var', 0.04)
+    # Balance of Plant (BoP) and System Power
+    floss: float = _get_val('pem', 'floss', 0.02)                          # Fluid loss factor
+    k_bop_var: float = _get_val('pem', 'k_bop_var', 0.04)                  # Variable BoP power fraction
     unreacted_water_fraction: float = _get_val('pem', 'unreacted_water_fraction', 0.03)
-    P_nominal_sistema_kW: float = _get_val('pem', 'P_nominal_sistema_kW', 5000.0)  # 5 MW nominal
+    P_nominal_sistema_kW: float = _get_val('pem', 'P_nominal_sistema_kW', 5000.0)
     
     @property
     def P_nominal_sistema_W(self) -> float:
-        """Nominal system power in Watts"""
+        """Nominal system power capacity in Watts."""
         return self.P_nominal_sistema_kW * 1000.0
     
     @property
     def P_bop_fixo(self) -> float:
-        """Fixed BoP power (25% of nominal)"""
+        """
+        Fixed BoP power consumption.
+        
+        Assumed constant overhead (e.g., control systems, lighting).
+        Currently estimated as 2.5% of nominal system power.
+        """
         return 0.025 * self.P_nominal_sistema_W
     
-    # Degradation Tables (Years, V_stack) - UPDATED TO MATCH ALL_Reference
-    # These are the TOTAL stack voltages at different operating years
+    # Degradation Tables (Reference Data)
+    # Maps operational years to expected stack voltage rise due to degradation.
     DEGRADATION_TABLE_YEARS: tuple = (1.0, 2.0, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 7.0, 8.0, 9.0, 10.0)
-    # FIXED: Using ALL_Reference values (171-197V) instead of old values (1290-1490V)
     DEGRADATION_TABLE_V_STACK: tuple = (171, 172, 176, 178, 178, 180, 181, 183, 184, 187, 190, 193, 197)
     
     @property
     def DEGRADATION_TABLE_V_CELL(self) -> tuple:
-        """Degradation table in V/cell for backward compatibility"""
+        """
+        Degradation table normalized to V/cell.
+        
+        Used for scalable performance calculations independent of stack count.
+        """
         return tuple(v / self.N_cell_per_stack for v in self.DEGRADATION_TABLE_V_STACK)
     
     # Backward compatibility aliases
@@ -100,43 +133,51 @@ class PEMConstants:
         return self.DEGRADATION_TABLE_V_STACK
     
     # Simulation Time Parameters
-    H_MES: float = 730.0  # Hours per operational month for degradation model
-    H_SIM_YEARS: float = 10.0  # Simulation years for pre-calculator
+    H_MES: float = 730.0       # Average operational hours per month
+    H_SIM_YEARS: float = 10.0  # Simulation horizon
     
     @property
     def H_SIM_TOTAL_PRECALC(self) -> int:
-        """Total hours for pre-calculation"""
+        """Total simulation duration in hours."""
         return int(self.H_SIM_YEARS * 8760)
 
 @dataclass(frozen=True)
 class SOECConstants:
-    """Constants for SOEC cluster operation."""
+    """
+    Constants for Solid Oxide Electrolyzer Cell (SOEC) operations.
+    
+    Parameters defining the high-temperature electrolysis performance.
+    """
     # Performance
-    SPECIFIC_ENERGY_KWH_KG: float = _get_val('soec', 'specific_energy_kwh_kg', 37.5)
+    SPECIFIC_ENERGY_KWH_KG: float = _get_val('soec', 'specific_energy_kwh_kg', 37.5) # Efficiency metric
     STEAM_CONSUMPTION_KG_PER_MWH: float = _get_val('soec', 'steam_consumption_kg_per_mwh', 280.0)
     
-    # Operational
+    # Operational Limits and Grid Integration
     NUM_MODULES: int = 6
     MAX_POWER_NOMINAL_MW: float = 2.4
-    LIMIT_OPTIMAL_RATIO: float = _get_val('soec', 'limit_optimal_ratio', 0.80)
-    POWER_FIRST_STEP_MW: float = _get_val('soec', 'power_first_step_mw', 0.12)
-    POWER_STANDBY_MW: float = 0.0
-    RAMP_STEP_MW: float = _get_val('soec', 'ramp_step_mw', 0.24)
+    LIMIT_OPTIMAL_RATIO: float = _get_val('soec', 'limit_optimal_ratio', 0.80) # Optimal efficiency point
+    POWER_FIRST_STEP_MW: float = _get_val('soec', 'power_first_step_mw', 0.12) # Minimum stable load
+    POWER_STANDBY_MW: float = 0.0                                              # Hot standby power
+    RAMP_STEP_MW: float = _get_val('soec', 'ramp_step_mw', 0.24)               # Max ramp rate per step
     UNREACTED_WATER_FRACTION: float = _get_val('soec', 'unreacted_water_fraction', 0.10)
     ROTATION_PERIOD_MIN: int = 10
-    V_CUTOFF_EOL: float = 2.2
+    V_CUTOFF_EOL: float = 2.2 # End-of-Life Voltage limit
 
 @dataclass(frozen=True)
 class HybridConstants:
-    """Economic and hybrid dispatch constants."""
+    """Economic parameters for hybrid system dispatch optimization."""
     PEM_MAX_MW: float = 5.0
-    PH2_EQUIVALENT_EUR_MWh: float = 288.29
-    PPPA_EUR_MWh: float = 50.0
-    ARBITRAGE_LIMIT_EUR_MWh: float = 338.29
+    PH2_EQUIVALENT_EUR_MWh: float = 288.29   # H2 value equivalent
+    PPPA_EUR_MWh: float = 50.0               # Power Purchase Agreement price
+    ARBITRAGE_LIMIT_EUR_MWh: float = 338.29  # Grid price limit for arbitrage
 
 @dataclass(frozen=True)
 class WaterConstants:
-    """Constants for Water Treatment System."""
+    """
+    Constants for Water Treatment System.
+    
+    Defines parameters for Reverse Osmosis (RO) and ultrapure water storage.
+    """
     WATER_AMBIENT_T_K: float = 293.15  # 20°C
     WATER_ATM_P_PA: float = 101325.0   # 1 atm
     
@@ -144,10 +185,11 @@ class WaterConstants:
     WATER_RO_RECOVERY_RATIO: float = _get_val('water', 'ro_recovery_ratio', 0.75)
     WATER_RO_SPEC_ENERGY_KWH_KG: float = _get_val('water', 'ro_spec_energy_kwh_kg', 0.004) # 4 kWh/m3
     WATER_PURIFIER_MAX_FLOW_KGH: float = _get_val('water', 'purifier_max_flow_kgh', 5000.0)
-    WATER_PURIFIER_PRESSURE_DROP_PA: float = 5e4  # 0.5 bar drop
+    WATER_PURIFIER_PRESSURE_DROP_PA: float = 5e4  # 0.5 bar
     
     # Storage Tank
     ULTRAPURE_TANK_CAPACITY_KG: float = _get_val('water', 'tank_capacity_kg', 10000.0)
     ULTRAPURE_TANK_OUTLET_MAX_KGH: float = 2000.0
-    ULTRAPURE_TANK_LOW_FILL_RATIO: float = 0.2  # Trigger refill
+    ULTRAPURE_TANK_LOW_FILL_RATIO: float = 0.2  # Trigger pump start
+
 

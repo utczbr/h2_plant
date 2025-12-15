@@ -543,17 +543,37 @@ class GraphToConfigAdapter:
             
         topology = TopologyConfig(nodes=nodes)
         
-        # 2. Build PhysicsConfig (Defaults for now)
-        # In a real app, we might extract these from a global settings node or dialog
+        # 2. Build PhysicsConfig
+        # Aggregate capacities from graph nodes
+        total_pem_mw = 0.0
+        total_soec_mw = 0.0
+        
+        for node in self.nodes.values():
+            if "PEMStackNode" in node.type or "ElectrolyzerNode" in node.type:
+                # Assuming single PEM logic for now (strategy limitation)
+                # But we sum capacity to represent system total
+                p_kw = node.properties.get('rated_power_kw', 2500.0)
+                total_pem_mw += float(p_kw) / 1000.0
+            elif "SOECStackNode" in node.type:
+                 p_kw = node.properties.get('rated_power_kw', 1000.0)
+                 total_soec_mw += float(p_kw) / 1000.0
+
+        # Fallback if no nodes found (or defaults needed)
+        if total_pem_mw == 0 and total_soec_mw == 0:
+            total_pem_mw = 5.0 # Default fallback
+            
         physics = PhysicsConfig(
             pem_system=PEMPhysicsSpec(
-                max_power_mw=5.0,
+                max_power_mw=total_pem_mw,
                 base_efficiency=0.65,
                 kwh_per_kg=50.0
             ),
             soec_cluster=SOECPhysicsSpec(
-                max_power_nominal_mw=2.4,
-                optimal_limit=0.8
+                # Map total SOEC MW to a "single module" for strategy simplicity
+                # or set num_modules=1.
+                num_modules=1,
+                max_power_nominal_mw=total_soec_mw if total_soec_mw > 0 else 2.4,
+                optimal_limit=1.0 # Use full range if defined by user rating
             )
         )
         
@@ -642,7 +662,7 @@ class GraphToConfigAdapter:
             "energy_price": "DataSource",
             "wind": "DataSource",
             "grid": "DataSource",
-            "water_supply": "DataSource",
+            "water_supply": "WaterSupply",
             
             # Thermal
             "ChillerNode": "Chiller",
@@ -672,6 +692,8 @@ class GraphToConfigAdapter:
             node = arb_nodes[0]
             econ.h2_price_eur_kg = node.properties.get('h2_price_eur_kg', 9.60)
             econ.ppa_price_eur_mwh = node.properties.get('ppa_price_eur_mwh', 50.0)
-            # Threshold is handled in Pathway but good to extract if model supports it
+            econ.arbitrage_enabled = True
+        else:
+            econ.arbitrage_enabled = False
             
         return econ

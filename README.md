@@ -44,6 +44,9 @@ To start the GUI simulation:
 python3 run_gui_simulation.py
 ```
 
+### Windows & Installation Issues
+If you encounter **"Filename too long"** or **"LFS budget exceeded"** errors during cloning, please consult the [Windows Troubleshooting Guide](docs/windows_troubleshooting.md).
+
 ## Project Structure
 
 - `h2_plant/`: Core package containing all simulation logic and components.

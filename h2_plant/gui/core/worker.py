@@ -24,7 +24,7 @@ class SimulationWorker(QThread):
     - HybridArbitrageEngineStrategy: Dispatch decisions, pre-allocated history
     """
     progress = Signal(int)
-    finished = Signal(dict)
+    finished = Signal(dict, object)
     error = Signal(str)
     
     def __init__(self, context):
@@ -50,10 +50,26 @@ class SimulationWorker(QThread):
             registry = ComponentRegistry()
             for comp_id, comp in components.items():
                 registry.register(comp_id, comp)
+
+            # Register LUT Manager (for legacy plots/enthalpy)
+            from h2_plant.optimization.lut_manager import LUTManager
+            lut = LUTManager()
+            try:
+                lut.initialize()
+                registry.register('lut_manager', lut)
+            except Exception as e:
+                logger.warning(f"Failed to initialize LUTManager: {e}")
+
             
             # === 2. Create Dispatch Strategy ===
-            from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
-            dispatch_strategy = HybridArbitrageEngineStrategy()
+            # === 2. Create Dispatch Strategy ===
+            dispatch_strategy = None
+            if hasattr(self.context.economics, 'arbitrage_enabled') and self.context.economics.arbitrage_enabled:
+                from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
+                dispatch_strategy = HybridArbitrageEngineStrategy()
+                logger.info("Arbitrage enabled: Using HybridArbitrageEngineStrategy")
+            else:
+                logger.info("Arbitrage disabled: Running in manual/physics-only mode")
             
             # === 3. Create SimulationEngine ===
             from h2_plant.simulation.engine import SimulationEngine
@@ -128,7 +144,7 @@ class SimulationWorker(QThread):
             
             # Emit Results
             logger.info("Simulation completed successfully!")
-            self.finished.emit(results)
+            self.finished.emit(results, registry)
             
         except Exception as e:
             logger.error(f"Simulation failed: {e}")

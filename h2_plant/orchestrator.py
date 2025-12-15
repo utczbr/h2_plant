@@ -208,6 +208,18 @@ class Orchestrator:
             h2_pem = 0.0
             P_pem_actual = result.P_pem
             if pem:
+                # CRITICAL: Supply water to PEM BEFORE stepping
+                # PEM requires water in its buffer for electrolysis (water starves otherwise)
+                from h2_plant.core.stream import Stream
+                water_stream = Stream(
+                    mass_flow_kg_h=10000.0,  # Ample water supply (infinite source)
+                    temperature_k=298.15,
+                    pressure_pa=5e5,
+                    composition={'H2O': 1.0},
+                    phase='liquid'
+                )
+                pem.receive_input('water_in', water_stream, 'water')
+                
                 pem.set_power_input_mw(result.P_pem)
                 pem.step(t=t_hours)
                 h2_pem = pem.h2_output_kg

@@ -6,8 +6,10 @@ from h2_plant.core.component import Component
 # Import Components
 from h2_plant.components.electrolysis.pem_electrolyzer import DetailedPEMElectrolyzer
 from h2_plant.components.electrolysis.soec_operator import SOECOperator
-from h2_plant.components.balance_of_plant.tank import Tank
+from h2_plant.components.storage.h2_tank import TankArray
+from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
 from h2_plant.components.compression.compressor import CompressorStorage as Compressor
+from h2_plant.components.compression.compressor_single import CompressorSingle
 from h2_plant.components.balance_of_plant.pump import Pump
 from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer as Mixer
 from h2_plant.components.control.valve import ThrottlingValve as Valve
@@ -45,6 +47,15 @@ class PlantGraphBuilder:
         return self.components
 
     def _create_component(self, node: ComponentNode) -> Component:
+        # Wrapper with logging
+        comp = self._create_component_internal(node)
+        if comp:
+             logger.info(f"Initialized {node.id} ({node.type}) as {type(comp).__name__}")
+        else:
+             logger.warning(f"Failed to initialize {node.id} ({node.type})")
+        return comp
+
+    def _create_component_internal(self, node: ComponentNode) -> Component:
         """Factory method to create component based on type."""
         
         if node.type == "PEM":
@@ -69,8 +80,32 @@ class PlantGraphBuilder:
                 params['outlet_pressure_bar'] = 200.0
             return Compressor(**params)
             
+        elif node.type == "CompressorSingle":
+            # Single-stage adiabatic compressor (no intercooling)
+            params = node.params.copy() if node.params else {}
+            if 'max_flow_kg_h' not in params:
+                params['max_flow_kg_h'] = 500.0
+            if 'inlet_pressure_bar' not in params:
+                params['inlet_pressure_bar'] = 1.0
+            if 'outlet_pressure_bar' not in params:
+                params['outlet_pressure_bar'] = 30.0
+            return CompressorSingle(**params)
+            
         elif node.type == "Tank":
-            return Tank(node.params)
+            # Simple vectorized tank array
+            n_tanks = int(node.params.get('n_tanks', 1))
+            capacity = float(node.params.get('capacity_kg', 1000.0))
+            pressure = float(node.params.get('max_pressure_bar', 200.0))
+            temp = float(node.params.get('temperature_k', 298.15))
+            return TankArray(n_tanks=n_tanks, capacity_kg=capacity, pressure_bar=pressure, temperature_k=temp)
+            
+        elif node.type == "Tank_Enhanced":
+            # Enhanced single tank with PVT dynamics
+            tank_id = node.params.get('tank_id', node.id)
+            volume = float(node.params.get('volume_m3', 10.0))
+            init_p = float(node.params.get('initial_pressure_bar', 40.0))
+            max_p = float(node.params.get('max_pressure_bar', 350.0))
+            return H2StorageTankEnhanced(tank_id=tank_id, volume_m3=volume, initial_pressure_bar=init_p, max_pressure_bar=max_p)
             
         elif node.type == "Pump":
             # Extract explicit params to avoid kwargs issues (Pump doesn't accept **kwargs)
@@ -106,10 +141,11 @@ class PlantGraphBuilder:
             return DeoxoReactor(node.id)
 
         elif node.type == "PSA Unit":
-            from h2_plant.components.separation.psa_unit import PSAUnit
-            # Extract specific params or use defaults
-            gas_type = node.params.get('gas_type', 'H2')
-            return PSAUnit(node.id, gas_type=gas_type)
+            from h2_plant.components.separation.psa import PSA
+            return PSA(
+                component_id=node.id,
+                **node.params
+            )
 
         elif node.type == "TSA Unit":
             from h2_plant.components.separation.tsa_unit import TSAUnit
@@ -153,7 +189,29 @@ class PlantGraphBuilder:
             
         elif node.type == "DryCooler":
             from h2_plant.components.cooling.dry_cooler import DryCooler
-            return DryCooler(**node.params)
+            comp_id = node.params.get('component_id', node.id)
+            return DryCooler(component_id=comp_id)
+            
+        elif node.type == "Chiller":
+            from h2_plant.components.thermal.chiller import Chiller
+            return Chiller(
+                component_id=node.params.get('component_id', node.id),
+                cooling_capacity_kw=float(node.params.get('cooling_capacity_kw', 100.0)),
+                target_temp_k=float(node.params.get('target_temp_k', 278.15)),
+                cop=float(node.params.get('cop', 4.0))
+            )
+            
+        elif node.type == "HeatExchanger":
+            from h2_plant.components.thermal.heat_exchanger import HeatExchanger
+            return HeatExchanger(
+                component_id=node.params.get('component_id', node.id),
+                max_heat_removal_kw=float(node.params.get('max_heat_removal_kw', 50.0)),
+                target_outlet_temp_c=float(node.params.get('target_outlet_temp_c', 25.0))
+            )
+            
+        elif node.type == "Coalescer":
+            from h2_plant.components.separation.coalescer import Coalescer
+            return Coalescer(component_id=node.params.get('component_id', node.id))
             
         elif node.type == "Consumer":
              from h2_plant.components.logistics.consumer import Consumer
@@ -164,9 +222,13 @@ class PlantGraphBuilder:
              return PassiveComponent()
              
         elif node.type == "WaterSupply":
-             # Placeholder for Water Supply
-             return PassiveComponent()
+            from h2_plant.components.external.water_source import ExternalWaterSource
+            return ExternalWaterSource(node.params)
+
+        elif node.type == "H2Source":
+            from h2_plant.components.external.h2_source import ExternalH2Source
+            return ExternalH2Source(config=node.params)
 
         else:
-            logger.warning(f"Unknown component type: {node.type}")
+            logger.warning(f"Unknown component type: {node.type} (ID: {node.id}) -> Instantiating PassiveComponent")
             return PassiveComponent()

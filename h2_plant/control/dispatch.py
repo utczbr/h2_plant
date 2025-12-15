@@ -58,6 +58,8 @@ class DispatchInput:
     pem_max_power_mw: float
     soec_h2_kwh_kg: float = 37.5
     pem_h2_kwh_kg: float = 50.0
+    ppa_price_eur_mwh: float = 50.0 # Default
+    h2_price_eur_kg: float = 9.6    # Default
 
 
 @dataclass
@@ -146,8 +148,8 @@ class ReferenceHybridStrategy(DispatchStrategy):
             DispatchResult: Power allocation to SOEC, PEM, and grid.
         """
         # Economic parameters
-        PPA_PRICE = 50.0
-        H2_PRICE_KG = 9.6
+        PPA_PRICE = inputs.ppa_price_eur_mwh
+        H2_PRICE_KG = inputs.h2_price_eur_kg
 
         # Select reference efficiency for arbitrage calculation
         ref_h2_kwh_kg = inputs.soec_h2_kwh_kg
@@ -252,8 +254,8 @@ class SoecOnlyStrategy(DispatchStrategy):
         Returns:
             DispatchResult: Power allocation to SOEC and grid (P_pem always 0).
         """
-        PPA_PRICE = 50.0
-        H2_PRICE_KG = 9.6
+        PPA_PRICE = inputs.ppa_price_eur_mwh
+        H2_PRICE_KG = inputs.h2_price_eur_kg
 
         ref_h2_kwh_kg = inputs.soec_h2_kwh_kg
         h2_eq_price = (1000.0 / ref_h2_kwh_kg) * H2_PRICE_KG

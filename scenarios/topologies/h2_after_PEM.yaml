@@ -1,0 +1,110 @@
+# H2 Purification Train Topology
+# H2Source → KOD_1 → DryCooler_1 → Chiller_1(4°C) → KOD_2 → Coalescer_1 → Chiller_2(40°C) → Deoxo_1 → PSA_1
+
+nodes:
+  # === H2 Source (PEM-like output with 5% moisture and trace O2) ===
+  - id: "H2_Source"
+    type: "H2Source"
+    params:
+      mass_flow_kg_h: 93.3  # Legacy: 0.02591 kg/s × 3600
+      pressure_bar: 40.0     # Legacy inlet
+      temperature_c: 60.0    # Legacy inlet
+      h2_purity: 0.9417      # Adjusted for new O2 mass fraction
+      o2_impurity: 0.00316   # ~3160 ppm mass → ~199 ppm molar (M_O2/M_H2=15.87)
+      h2o_impurity: 0.0549   # 5.49% (Legacy value)
+    connections:
+      - source_port: "h2_out"
+        target_name: "KOD_1"
+        target_port: "gas_inlet"
+        resource_type: "gas"
+
+  # === Knock-Out Drum 1 (Initial water separation) ===
+  - id: "KOD_1"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05  # Legacy: 0.05 bar
+      gas_species: "H2"
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "DryCooler_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  # === Dry Cooler 1 (Initial passive cooling) ===
+  - id: "DryCooler_1"
+    type: "DryCooler"
+    params: {}
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Chiller_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  # === Chiller 1 (Deep cooling to 4°C = 277.15 K) ===
+  - id: "Chiller_1"
+    type: "Chiller"
+    params:
+      target_temp_k: 277.15
+      cooling_capacity_kw: 100.0
+      cop: 4.0
+      pressure_drop_bar: 0.0  # Legacy Chiller has no pressure drop
+    connections:
+      - source_port: "fluid_out"
+        target_name: "KOD_2"
+        target_port: "gas_inlet"
+        resource_type: "gas"
+
+  # === Knock-Out Drum 2 (Secondary water separation after chilling) ===
+  - id: "KOD_2"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05  # Legacy: 0.05 bar
+      gas_species: "H2"
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "Coalescer_1"
+        target_port: "inlet"
+        resource_type: "gas_mixture"
+
+  # === Coalescer (Aerosol/mist removal) ===
+  - id: "Coalescer_1"
+    type: "Coalescer"
+    params:
+      gas_type: "H2"
+    connections:
+      - source_port: "outlet"
+        target_name: "HeatExchanger_1"
+        target_port: "h2_in"  # ← Change from "fluid_in"
+        resource_type: "stream"
+
+  - id: "HeatExchanger_1"
+    type: "HeatExchanger"
+    params: 
+      max_heat_removal_kw: 100.0
+      target_outlet_temp_c: 40.0  # ← Use Celsius (40°C = 313.15K)
+    connections:
+      - source_port: "h2_out"  
+        target_name: "Deoxo_1"
+        target_port: "inlet"
+        resource_type: "gas"
+
+  # === Deoxo Reactor (Adiabatic O2 removal) ===
+  - id: "Deoxo_1"
+    type: "DeoxoReactor"
+    params: {}
+    connections:
+      - source_port: "outlet"
+        target_name: "PSA_1"
+        target_port: "gas_in"
+        resource_type: "gas"
+
+  # === PSA (Final H2O removal to high purity) ===
+  - id: "PSA_1"
+    type: "PSA Unit"
+    params:
+      purity_target: 0.9999
+      recovery_rate: 0.90
+      power_consumption_kw: 10.0
+    connections: []

@@ -32,7 +32,7 @@ import math
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
-from h2_plant.core.constants import GasConstants
+from h2_plant.core.constants import GasConstants, HenryConstants
 from h2_plant.optimization.coolprop_lut import CoolPropLUT
 from h2_plant.optimization.numba_ops import solve_rachford_rice_single_condensable
 
@@ -118,7 +118,7 @@ class KnockOutDrum(Component):
         self.diameter_m = diameter_m
         self.delta_p_bar = delta_p_bar
         self.gas_species = gas_species
-        self.separation_efficiency = 0.98
+        self.separation_efficiency = 0.97 # Legacy: 0.97, was 0.98
 
         # Stream state: holds most recent input/output for current timestep
         self._input_stream: Optional[Stream] = None
@@ -131,6 +131,7 @@ class KnockOutDrum(Component):
         self._v_real: float = 0.0
         self._separation_status: str = "IDLE"
         self._power_consumption_w: float = 0.0
+        self._dissolved_gas_kg_h: float = 0.0
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
@@ -152,6 +153,56 @@ class KnockOutDrum(Component):
 
         if self.diameter_m <= 0:
             raise ValueError("diameter_m must be positive")
+
+    def _calculate_dissolved_gas(self, temp_k: float, pressure_pa: float, gas_type: str) -> float:
+        """
+        Calculate gas solubility in liquid water using Henry's Law.
+
+        Determines equilibrium concentration of dissolved gas in the liquid drain,
+        which represents a product loss that must be accounted for in mass balance.
+
+        Formula:
+            H(T) = H_298 * exp(C * (1/T - 1/298.15))
+            c_mol_L = P_gas_atm / H(T)
+            c_mg_kg = c_mol_L * MW * 1000^2
+
+        Args:
+            temp_k (float): Temperature in Kelvin.
+            pressure_pa (float): Total pressure in Pascals.
+            gas_type (str): 'H2' or 'O2'.
+
+        Returns:
+            float: Solubility in mg/kg water.
+        """
+        if gas_type == 'H2':
+            H_298 = HenryConstants.H2_H_298_L_ATM_MOL
+            C = HenryConstants.H2_DELTA_H_R_K
+            MW = HenryConstants.H2_MOLAR_MASS_KG_MOL
+        elif gas_type == 'O2':
+            H_298 = HenryConstants.O2_H_298_L_ATM_MOL
+            C = HenryConstants.O2_DELTA_H_R_K
+            MW = HenryConstants.O2_MOLAR_MASS_KG_MOL
+        else:
+            return 0.0
+            
+        T0 = 298.15
+        if temp_k <= 0:
+            return 0.0
+        
+        # Temperature-corrected Henry constant
+        H_T = H_298 * math.exp(C * (1.0/temp_k - 1.0/T0))
+        
+        # Partial pressure in atm (assume gas phase is dominated by species)
+        p_atm = pressure_pa / 101325.0
+        
+        # Molar concentration (mol/L)
+        c_mol_L = p_atm / H_T
+        
+        # Convert to mass concentration (mg/kg, assuming water density ~1 kg/L)
+        mw_g_mol = MW * 1000.0
+        c_mg_L = c_mol_L * mw_g_mol * 1000.0
+        
+        return c_mg_L
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         """
@@ -404,15 +455,37 @@ class KnockOutDrum(Component):
 
         # Gas outlet includes vapor and any liquid carryover as mist
         m_gas_out_total = m_dot_vap_kg_h + m_liq_carryover_kg_h
+        
+        # Calculate vapor-phase water mass flow from mole fraction and vapor flow
+        m_H2O_vap = y_H2O * m_dot_vap_kg_h
 
         gas_comp = {}
         if m_gas_out_total > 0:
-            m_H2O_vap = y_H2O * m_dot_vap_kg_h
-            m_Gas_vap = y_gas * m_dot_vap_kg_h
-
-            gas_comp[self.gas_species] = m_Gas_vap / m_gas_out_total
+            # Non-condensables (H2, O2, N2) pass through with same MASS FLOW (not moles).
+            # Their mass fraction increases as water is removed.
+            # m_species_out = m_species_in (conservation)
+            # x_species_out = m_species_in / m_total_out
+            
+            # Calculate mass of each non-H2O species from inlet
+            for species, mass_frac in composition.items():
+                if species == 'H2O' or species == 'H2O_liq':
+                    continue  # Water handled separately
+                # Mass of this species = inlet_mass_frac × inlet_total_mass
+                m_species_kg_h = mass_frac * m_dot_in_kg_h
+                # New mass fraction = species_mass / outlet_total_mass
+                gas_comp[species] = m_species_kg_h / m_gas_out_total
+            
+            # Add vapor-phase water (equilibrium amount)
+            # m_H2O_vap was calculated from flash equilibrium
             gas_comp['H2O'] = m_H2O_vap / m_gas_out_total
+            
+            # Add liquid carryover (mist)
             gas_comp['H2O_liq'] = m_liq_carryover_kg_h / m_gas_out_total
+            
+            # Normalize to ensure sum = 1.0 (floating point safety)
+            total_comp = sum(gas_comp.values())
+            if total_comp > 0 and abs(total_comp - 1.0) > 1e-6:
+                gas_comp = {s: f / total_comp for s, f in gas_comp.items()}
         else:
             gas_comp = {self.gas_species: 1.0}
 
@@ -424,11 +497,28 @@ class KnockOutDrum(Component):
             phase='gas'
         )
 
-        self._liquid_drain_stream = Stream(
-            mass_flow_kg_h=m_liq_removed_kg_h,
+        # Calculate dissolved gas loss using Henry's Law
+        dissolved_gas_mg_kg = self._calculate_dissolved_gas(T_in, P_out, self.gas_species)
+        dissolved_gas_kg_h = (m_liq_removed_kg_h * dissolved_gas_mg_kg) / 1e6
+        self._dissolved_gas_kg_h = dissolved_gas_kg_h
+        
+        # Subtract dissolved gas from gas outlet flow
+        m_gas_out_corrected = max(0.0, m_gas_out_total - dissolved_gas_kg_h)
+        
+        # Update gas outlet stream with corrected flow
+        self._gas_outlet_stream = Stream(
+            mass_flow_kg_h=m_gas_out_corrected,
             temperature_k=T_in,
             pressure_pa=P_out,
-            composition={'H2O': 1.0},
+            composition=gas_comp,
+            phase='gas'
+        )
+
+        self._liquid_drain_stream = Stream(
+            mass_flow_kg_h=m_liq_removed_kg_h + dissolved_gas_kg_h,
+            temperature_k=T_in,
+            pressure_pa=P_out,
+            composition={'H2O': 1.0, f'{self.gas_species}_dissolved': dissolved_gas_kg_h / (m_liq_removed_kg_h + dissolved_gas_kg_h + 1e-12)},
             phase='liquid'
         )
 
@@ -453,9 +543,9 @@ class KnockOutDrum(Component):
             ValueError: If port_name is not a valid output port.
         """
         if port_name == 'gas_outlet':
-            return self._gas_outlet_stream
+            return self._gas_outlet_stream if self._gas_outlet_stream else Stream(0.0)
         elif port_name == 'liquid_drain':
-            return self._liquid_drain_stream
+            return self._liquid_drain_stream if self._liquid_drain_stream else Stream(0.0)
         else:
             raise ValueError(f"Unknown output port '{port_name}'")
 
@@ -485,8 +575,10 @@ class KnockOutDrum(Component):
             'v_real': self._v_real,
             'separation_status': self._separation_status,
             'power_consumption_w': self._power_consumption_w,
+            'dissolved_gas_kg_h': self._dissolved_gas_kg_h,
             'diameter_m': self.diameter_m,
             'delta_p_bar': self.delta_p_bar,
-            'gas_species': self.gas_species
+            'gas_species': self.gas_species,
+            'water_removed_kg_h': self._liquid_drain_stream.mass_flow_kg_h if self._liquid_drain_stream else 0.0
         })
         return state

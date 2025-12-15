@@ -349,11 +349,27 @@ class SimulationEngine:
         logger.info(f"Saving {checkpoint_type} checkpoint at hour {hour}")
         try:
             component_states = self.registry.get_all_states()
-            from dataclasses import asdict
+            
+            # Serialize config - handle both dataclass and Pydantic
+            config_dict = {}
+            if hasattr(self.config, 'model_dump'):
+                # Pydantic v2
+                config_dict = self.config.model_dump()
+            elif hasattr(self.config, 'dict'):
+                # Pydantic v1
+                config_dict = self.config.dict()
+            elif hasattr(self.config, '__dataclass_fields__'):
+                # Dataclass
+                from dataclasses import asdict
+                config_dict = asdict(self.config)
+            else:
+                # Fallback: try to convert to dict
+                config_dict = dict(vars(self.config)) if hasattr(self.config, '__dict__') else {}
+            
             checkpoint_path = self.state_manager.save_checkpoint(
                 hour=hour,
                 component_states=component_states,
-                metadata={'simulation_config': asdict(self.config)}
+                metadata={'simulation_config': config_dict}
             )
             logger.debug(f"Checkpoint saved to: {checkpoint_path}")
         except Exception as e:

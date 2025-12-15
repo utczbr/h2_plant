@@ -40,6 +40,9 @@ from h2_plant.core.stream import Stream
 from h2_plant.core.constants import DeoxoConstants, GasConstants
 from h2_plant.optimization import numba_ops
 
+import logging
+logger = logging.getLogger(__name__)
+
 
 class DeoxoReactor(Component):
     """
@@ -91,6 +94,13 @@ class DeoxoReactor(Component):
         self.last_conversion_o2 = 0.0
         self.last_peak_temp_k = 0.0
         self.last_pressure_drop_bar = 0.0
+        
+        # Profile data for plotting (L, T, X)
+        self.last_profiles: Dict[str, np.ndarray] = {
+            'L': np.array([]),
+            'T': np.array([]),
+            'X': np.array([])
+        }
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
@@ -131,33 +141,45 @@ class DeoxoReactor(Component):
         y_h2_in = comp.get('H2', 0.0)
         y_h2o_in = comp.get('H2O', 0.0)
 
-        # Molecular weights for mixture properties
-        MW_H2 = 2.016e-3   # kg/mol
-        MW_O2 = 32.00e-3   # kg/mol
-        MW_H2O = 18.015e-3 # kg/mol
+        # Molecular weights
+        MW = {
+            'H2': 2.016e-3,
+            'O2': 32.00e-3,
+            'H2O': 18.015e-3,
+            'other': 28.0e-3
+        }
 
-        # Mixture molecular weight (mole-weighted average)
-        total_y = sum(comp.values())
-        if total_y <= 0:
-            total_y = 1.0
-
-        mw_mix = 0.0
-        for s, y in comp.items():
-            if s == 'H2':
-                mw_i = MW_H2
-            elif s == 'O2':
-                mw_i = MW_O2
-            elif s == 'H2O':
-                mw_i = MW_H2O
-            else:
-                mw_i = 28e-3  # N₂/inert default
-            mw_mix += (y / total_y) * mw_i
-
+        # 1. Convert Mass Fractions to Mole Fractions
+        # n_i_rel = x_i / M_i
+        n_rel = {}
+        total_n_rel = 0.0
+        
+        for s, x in comp.items():
+            mw_i = MW.get(s, MW['other'])
+            ni = x / mw_i
+            n_rel[s] = ni
+            total_n_rel += ni
+            
+        if total_n_rel <= 0:
+            total_n_rel = 1.0
+            
+        y_fracs = {s: n/total_n_rel for s, n in n_rel.items()}
+        y_o2_in = y_fracs.get('O2', 0.0)
+        
+        # DEBUG: Log inlet O2 concentration
+        #logger.warning(f"[DEOXO DEBUG] {self.component_id}: Inlet O2 = {y_o2_in*1e6:.1f} ppm (y_O2 = {y_o2_in:.6f})")
+        
+        # 2. Calculate Mix MW
+        mw_mix = sum(y * MW.get(s, MW['other']) for s, y in y_fracs.items())
+        
         # Convert mass flow to molar flow
         molar_flow_total = (stream.mass_flow_kg_h / 3600.0) / mw_mix
+        
+        # DEBUG: Log PFR inputs
+        #logger.warning(f"[DEOXO] In: T={stream.temperature_k:.1f}K, molar_flow={molar_flow_total:.4f} mol/s, y_O2={y_o2_in*1e6:.1f} ppm")
 
         # Solve PFR physics via Numba JIT integrator
-        conversion, t_out, t_peak = numba_ops.solve_deoxo_pfr_step(
+        conversion, t_out, t_peak, L_prof, T_prof, X_prof = numba_ops.solve_deoxo_pfr_step(
             L_total=DeoxoConstants.L_REACTOR_M,
             steps=50,
             T_in=stream.temperature_k,
@@ -171,11 +193,20 @@ class DeoxoReactor(Component):
             U_a=DeoxoConstants.U_A_W_M3_K,
             T_jacket=DeoxoConstants.T_JACKET_K,
             Area=DeoxoConstants.AREA_REACTOR_M2,
-            Cp_mix=DeoxoConstants.CP_MIX_AVG_J_MOL_K
+            Cp_mix=DeoxoConstants.CP_MIX_AVG_J_MOL_K,
+            y_o2_target=DeoxoConstants.MAX_ALLOWED_O2_OUT_MOLE_FRAC
         )
+        
+        # DEBUG LOG
+        # print(f"DEBUG DEOXO: X={conversion}, T_out={t_out}, T_peak={t_peak}")
 
         self.last_conversion_o2 = conversion
         self.last_peak_temp_k = t_peak
+        self.last_profiles = {
+            'L': L_prof,
+            'T': T_prof,
+            'X': X_prof
+        }
 
         # Stoichiometric mass balance: 2H₂ + O₂ → 2H₂O
         n_o2_in = molar_flow_total * y_o2_in
@@ -185,23 +216,38 @@ class DeoxoReactor(Component):
 
         # Update molar inventories
         new_moles = {}
-        for s, y in comp.items():
+        for s, y in y_fracs.items():
             new_moles[s] = molar_flow_total * y
 
-        new_moles['O2'] = new_moles.get('O2', 0.0) - n_o2_consumed
-        new_moles['H2'] = new_moles.get('H2', 0.0) - n_h2_consumed
+        new_moles['O2'] = max(0.0, new_moles.get('O2', 0.0) - n_o2_consumed)
+        new_moles['H2'] = max(0.0, new_moles.get('H2', 0.0) - n_h2_consumed)
         new_moles['H2O'] = new_moles.get('H2O', 0.0) + n_h2o_gen
 
-        # Normalize to mole fractions
+        # Normalize to mole fractions (internal) -> Then convert to Mass for Output Stream
         total_moles_out = sum(new_moles.values())
-        new_comp = {s: n / total_moles_out for s, n in new_moles.items()}
+        if total_moles_out > 0:
+            y_out = {s: n / total_moles_out for s, n in new_moles.items()}
+        else:
+            y_out = y_fracs
+
+        # Convert back to Mass Fractions for Stream
+        # x_i = (y_i * M_i) / M_mix_out
+        mw_mix_out = sum(y * MW.get(s, MW['other']) for s, y in y_out.items())
+        
+        new_comp = {}
+        if mw_mix_out > 0:
+            for s, y in y_out.items():
+                mw_i = MW.get(s, MW['other'])
+                new_comp[s] = (y * mw_i) / mw_mix_out
+        else:
+            new_comp = comp # Fallback
 
         # Mass is conserved (2×2 + 32 = 36 g reactants, 2×18 = 36 g product)
         mass_flow_out = stream.mass_flow_kg_h
 
         # Pressure drop using Ergun-type velocity scaling
-        u_design = 0.06       # Design superficial velocity (m/s)
-        dp_design = 0.0019    # Design pressure drop (bar)
+        u_design = DeoxoConstants.DESIGN_SURF_VEL_M_S # Calibrated
+        dp_design = DeoxoConstants.DESIGN_DP_BAR      # Calibrated (0.05 bar)
 
         # Current velocity from volumetric flow
         rho_gas = (stream.pressure_pa * mw_mix) / (
@@ -229,7 +275,7 @@ class DeoxoReactor(Component):
             phase='gas'
         )
 
-    def receive_input(self, port_name: str, value: Any, resource_type: str = 'stream') -> None:
+    def receive_input(self, port_name: str, value: Any, resource_type: str = 'stream') -> float:
         """
         Accept inlet stream from upstream component.
 
@@ -237,9 +283,14 @@ class DeoxoReactor(Component):
             port_name (str): Target port ('inlet').
             value (Any): Stream object containing H₂ with trace O₂.
             resource_type (str): Resource classification hint. Default: 'stream'.
+
+        Returns:
+            float: Mass flow rate accepted (kg/h), or 0.0 if input rejected.
         """
         if port_name == 'inlet' and isinstance(value, Stream):
             self.input_stream = value
+            return value.mass_flow_kg_h
+        return 0.0
 
     def get_output(self, port_name: str) -> Any:
         """
@@ -285,3 +336,12 @@ class DeoxoReactor(Component):
             'peak_temperature_c': self.last_peak_temp_k - 273.15,
             'pressure_drop_mbar': self.last_pressure_drop_bar * 1000.0
         }
+
+    def get_last_profiles(self) -> Dict[str, np.ndarray]:
+        """
+        Retrieve internal profiles from the last step.
+        
+        Returns:
+            Dict containing arrays for 'L' (m), 'T' (K), and 'X' (conversion).
+        """
+        return self.last_profiles

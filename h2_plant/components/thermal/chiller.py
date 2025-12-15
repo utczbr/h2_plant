@@ -41,6 +41,8 @@ from h2_plant.core.stream import Stream
 from h2_plant.core.constants import GasConstants
 from h2_plant.models.thermal_inertia import ThermalInertiaModel
 from h2_plant.models.flow_dynamics import PumpFlowDynamics
+from h2_plant.optimization.coolprop_lut import CoolPropLUT
+import math
 
 
 class Chiller(Component):
@@ -247,7 +249,11 @@ class Chiller(Component):
             h_target = target_stream.specific_enthalpy_j_kg
 
             # Q = ṁ × (h_in - h_target): positive when cooling
-            Q_dot_W = mass_flow_kg_s * (h_in - h_target)
+            if h_in < h_target:
+                Q_dot_W = 0.0
+                self.logger.debug(f"Chiller {self.component_id}: Inlet enthalpy below target. No cooling needed.")
+            else:
+                Q_dot_W = mass_flow_kg_s * (h_in - h_target)
 
         except Exception as e:
             # Fallback to Cp-based calculation
@@ -258,7 +264,9 @@ class Chiller(Component):
         max_Q_W = self.cooling_capacity_kw * 1000.0 * self.efficiency
         final_temp_k = self.target_temp_k
 
-        if abs(Q_dot_W) > max_Q_W:
+        if Q_dot_W == 0.0:
+            final_temp_k = self.inlet_stream.temperature_k
+        elif abs(Q_dot_W) > max_Q_W:
             Q_dot_W = np.sign(Q_dot_W) * max_Q_W
             self.logger.warning(
                 f"Chiller {self.component_id}: Capacity exceeded. "
@@ -278,12 +286,81 @@ class Chiller(Component):
         else:
             batch_electrical_kw = 0.0
 
-        # Create outlet stream
+        # Create outlet stream with flash condensation
+        # Flash calculation: determine how much water condenses at outlet T/P
+        inlet_comp = self.inlet_stream.composition.copy()
+        outlet_comp = inlet_comp.copy()
+        m_condensed_kg_h = 0.0
+        
+        # Get water content from inlet
+        x_H2O_in = inlet_comp.get('H2O', 0.0)  # Mass fraction
+        
+        if x_H2O_in > 0 and outlet_pressure_pa > 0:
+            # Calculate saturation pressure at outlet temperature
+            try:
+                P_sat = CoolPropLUT.PropsSI('P', 'T', final_temp_k, 'Q', 0.0, 'Water')
+                if P_sat <= 1e-6 or not math.isfinite(P_sat):
+                    raise ValueError("Invalid P_sat")
+            except Exception:
+                # Antoine equation fallback
+                T_C = final_temp_k - 273.15
+                A, B, C = 8.07131, 1730.63, 233.426
+                P_sat_mmHg = 10 ** (A - B / (C + T_C))
+                P_sat = P_sat_mmHg * 133.322
+            
+            # Maximum water vapor mole fraction at equilibrium
+            y_H2O_sat = P_sat / outlet_pressure_pa if outlet_pressure_pa > 0 else 1.0
+            y_H2O_sat = min(y_H2O_sat, 1.0)
+            
+            # Convert inlet mass fraction to mole fraction for comparison
+            MW_H2O = 18.015e-3  # kg/mol
+            MW_H2 = 2.016e-3
+            MW_other = 28.0e-3
+            
+            # Calculate mole fractions from mass fractions
+            # n_i = x_i / M_i (relative moles)
+            # y_i = n_i / Σ(n_j) (mole fraction)
+            n_total = sum(
+                frac / (MW_H2 if s == 'H2' else MW_H2O if s in ('H2O', 'H2O_liq') else MW_other)
+                for s, frac in inlet_comp.items()
+            )
+            if n_total > 0:
+                y_H2O_in = (x_H2O_in / MW_H2O) / n_total  # Correct mole fraction
+            else:
+                y_H2O_in = x_H2O_in
+            
+            # If inlet water exceeds saturation, condense
+            if y_H2O_in > y_H2O_sat:
+                # Fraction of water that condenses
+                condensation_fraction = 1.0 - (y_H2O_sat / y_H2O_in) if y_H2O_in > 0 else 0.0
+                condensation_fraction = max(0.0, min(1.0, condensation_fraction))
+                
+                # Mass of water condensed
+                m_H2O_in = x_H2O_in * self.inlet_stream.mass_flow_kg_h
+                m_condensed_kg_h = m_H2O_in * condensation_fraction
+                
+                # Update outlet composition
+                m_total_out = self.inlet_stream.mass_flow_kg_h - m_condensed_kg_h
+                if m_total_out > 0:
+                    # Recalculate mass fractions
+                    m_H2O_out = m_H2O_in - m_condensed_kg_h
+                    outlet_comp['H2O'] = m_H2O_out / m_total_out
+                    
+                    # Scale up other species proportionally
+                    for species in outlet_comp:
+                        if species not in ('H2O', 'H2O_liq'):
+                            m_species = inlet_comp[species] * self.inlet_stream.mass_flow_kg_h
+                            outlet_comp[species] = m_species / m_total_out
+        
+        # Track condensation for state reporting
+        self.water_condensed_kg_h = m_condensed_kg_h
+        outlet_mass_flow = self.inlet_stream.mass_flow_kg_h - m_condensed_kg_h
+        
         self.outlet_stream = Stream(
-            mass_flow_kg_h=self.inlet_stream.mass_flow_kg_h,
+            mass_flow_kg_h=outlet_mass_flow,
             temperature_k=final_temp_k,
             pressure_pa=outlet_pressure_pa,
-            composition=self.inlet_stream.composition.copy()
+            composition=outlet_comp
         )
 
         # Accumulate timestep totals
@@ -351,7 +428,8 @@ class Chiller(Component):
                 )
         elif port_name == "electricity_in":
             return self.electrical_power_kw
-        return 0.0
+        
+        raise ValueError(f"Unknown output port '{port_name}'")
 
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """

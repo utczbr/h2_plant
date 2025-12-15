@@ -8,6 +8,7 @@ Features:
 - Multi-processing (Parallel execution using all CPU cores).
 - Robust Fallback (Vectorized -> Loop if errors occur).
 - High Resolution Config (2000x2000 points).
+- Saturation LUT for water (1D: T → P_sat, H_liq, H_vap).
 
 Requirements:
     pip install CoolProp numpy
@@ -94,6 +95,11 @@ class LUTConfig:
     entropy_max: float = 100000.0
     entropy_points: int = 500          # High resolution for isentropic
     
+    # Saturation temperature range (K) for water
+    saturation_temp_min: float = 273.15   # 0°C
+    saturation_temp_max: float = 640.0    # Near critical point
+    saturation_points: int = 10000        # 1D saturation curve (High Res)
+    
     # Properties to pre-compute
     properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C')
     
@@ -117,17 +123,22 @@ class StandaloneGenerator:
         # Determine CPU count for parallelization
         self.max_workers = os.cpu_count() or 4
         
-    def generate_all(self):
-        logger.info("Starting Batch Generation (Parallelized)...")
-        logger.info(f"Workers: {self.max_workers}")
-        logger.info(f"Grid: {self.config.pressure_points}x{self.config.temperature_points} points")
-        logger.info(f"Fluids: {self.config.fluids}")
+    def generate_all(self, skip_fluids: bool = False):
+        if not skip_fluids:
+            logger.info("Starting Batch Generation (Parallelized)...")
+            logger.info(f"Workers: {self.max_workers}")
+            logger.info(f"Grid: {self.config.pressure_points}x{self.config.temperature_points} points")
+            logger.info(f"Fluids: {self.config.fluids}")
+            
+            for fluid in self.config.fluids:
+                self._generate_fluid_lut(fluid)
+        else:
+            logger.info("Skipping main fluid generation (skip_fluids=True)...")
         
-        for fluid in self.config.fluids:
-            self._generate_fluid_lut(fluid)
+        # Generate 1D saturation LUT for water
+        self._generate_saturation_lut()
             
         logger.info("All LUTs generated successfully.")
-        logger.info(f"Location: {self.config.cache_dir.absolute()}")
 
     def _generate_fluid_lut(self, fluid_name: str):
         """Generate LUT for a single fluid."""
@@ -221,6 +232,66 @@ class StandaloneGenerator:
         vals_flat = self._parallel_compute(cp_fluid_name, 'H', 'P', P_s_flat, 'S', S_flat)
         lut_data['H_from_PS'] = vals_flat.reshape(P_s_mesh.shape)
 
+    def _generate_saturation_lut(self):
+        """
+        Generate 1D saturation LUT for water (T → P_sat, H_liq, H_vap).
+        
+        This enables fast flash calculations without calling CoolProp for
+        saturation properties at every timestep.
+        """
+        logger.info("Generating water saturation LUT (1D)...")
+        start_time = time.time()
+        
+        t_grid = np.linspace(
+            self.config.saturation_temp_min,
+            self.config.saturation_temp_max,
+            self.config.saturation_points
+        )
+        
+        p_sat = np.zeros_like(t_grid)
+        h_liq = np.zeros_like(t_grid)
+        h_vap = np.zeros_like(t_grid)
+        rho_liq = np.zeros_like(t_grid)
+        rho_vap = np.zeros_like(t_grid)
+        
+        for i, T in enumerate(t_grid):
+            try:
+                p_sat[i] = CP.PropsSI('P', 'T', T, 'Q', 0, 'Water')
+                h_liq[i] = CP.PropsSI('H', 'T', T, 'Q', 0, 'Water')
+                h_vap[i] = CP.PropsSI('H', 'T', T, 'Q', 1, 'Water')
+                rho_liq[i] = CP.PropsSI('D', 'T', T, 'Q', 0, 'Water')
+                rho_vap[i] = CP.PropsSI('D', 'T', T, 'Q', 1, 'Water')
+            except Exception as e:
+                logger.warning(f"  Saturation at T={T:.1f}K failed: {e}")
+                p_sat[i] = np.nan
+                h_liq[i] = np.nan
+                h_vap[i] = np.nan
+                rho_liq[i] = np.nan
+                rho_vap[i] = np.nan
+        
+        # Save as separate file
+        saturation_data = {
+            'temperature_grid': t_grid,
+            'P_sat': p_sat,
+            'H_liq': h_liq,
+            'H_vap': h_vap,
+            'D_liq': rho_liq,
+            'D_vap': rho_vap,
+            'config': {
+                'temp_min': self.config.saturation_temp_min,
+                'temp_max': self.config.saturation_temp_max,
+                'points': self.config.saturation_points
+            }
+        }
+        
+        out_path = self.config.cache_dir / 'lut_water_saturation_v1.pkl'
+        with open(out_path, 'wb') as f:
+            pickle.dump(saturation_data, f, protocol=pickle.HIGHEST_PROTOCOL)
+        
+        elapsed = time.time() - start_time
+        logger.info(f"  ✓ Saturation LUT saved ({self.config.saturation_points} points, {elapsed:.2f}s)")
+        logger.info(f"  File: {out_path}")
+
     def _save_lut(self, fluid_name, lut_data):
         safe_name = "".join(c for c in fluid_name if c.isalnum() or c in ('_', '-'))
         filename = f"lut_{safe_name}_v1.pkl"
@@ -243,11 +314,13 @@ class StandaloneGenerator:
 
 if __name__ == "__main__":
     print("-" * 50)
-    print(" H2 PLANT - PARALLEL LUT GENERATOR")
+    print(" H2 PLANT - PARALLEL LUT GENERATOR (v2)")
+    print(" Includes: P-T, P-S, and Saturation LUTs")
     print("-" * 50)
     
     config = LUTConfig()
     generator = StandaloneGenerator(config)
-    generator.generate_all()
+    # Generate ONLY saturation LUT to save time/space since others exist
+    generator.generate_all(skip_fluids=True)
     
     print("\nGeneration Complete.")

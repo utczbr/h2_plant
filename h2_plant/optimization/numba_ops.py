@@ -756,6 +756,7 @@ def bilinear_interp_jit(
     if y <= grid_y[0]:
         iy = 1
     elif y >= grid_y[-1]:
+
         iy = len(grid_y) - 1
     else:
         iy = np.searchsorted(grid_y, y)
@@ -889,8 +890,9 @@ def solve_deoxo_pfr_step(
     U_a: float,
     T_jacket: float,
     Area: float,
-    Cp_mix: float
-) -> Tuple[float, float, float]:
+    Cp_mix: float,
+    y_o2_target: float = 0.0
+) -> Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
     Solve DeOxo PFR mass/energy balance using adaptive RK4.
 
@@ -898,6 +900,9 @@ def solve_deoxo_pfr_step(
     based on conversion rate and temperature gradients.
 
     Reaction: 2H₂ + O₂ → 2H₂O (exothermic, ΔH < 0)
+    
+    Legacy Parity:
+    - Stops if y_O2 drops below y_o2_target (5 ppm).
 
     Args:
         L_total (float): Total reactor length (m).
@@ -914,9 +919,11 @@ def solve_deoxo_pfr_step(
         T_jacket (float): Jacket temperature (K).
         Area (float): Cross-sectional area (m²).
         Cp_mix (float): Mixture heat capacity (J/(mol·K)).
+        y_o2_target (float): Target O2 fraction to stop reaction (Legacy parity).
 
     Returns:
-        Tuple[float, float, float]: (conversion X, outlet T, max T).
+        Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]: 
+            (conversion X, outlet T, max T, L_profile, T_profile, X_profile).
     """
     L_curr = 0.0
     dL = L_total / 100.0
@@ -926,14 +933,55 @@ def solve_deoxo_pfr_step(
     T_max = T_in
 
     F_o2_in = molar_flow_total * y_o2_in
-    if F_o2_in <= 1e-12:
-        return 0.0, T_in, T_in
-
     max_iter = 10000
+    
+    # Pre-allocate arrays for history
+    L_hist = np.zeros(max_iter + 1)
+    T_hist = np.zeros(max_iter + 1)
+    X_hist = np.zeros(max_iter + 1)
+    
+    # Initial point
+    L_hist[0] = 0.0
+    T_hist[0] = T_in
+    X_hist[0] = 0.0
+    step_count = 1
+
+    if F_o2_in <= 1e-12:
+        # Trim arrays to 1 point
+        return 0.0, T_in, T_in, L_hist[:1], T_hist[:1], X_hist[:1]
 
     for _ in range(max_iter):
         if L_curr >= L_total:
             break
+            
+        # Check target condition (Legacy Parity)
+        current_y_o2 = y_o2_in * (1.0 - X)
+        if y_o2_target > 0 and current_y_o2 <= y_o2_target:
+            # Reaction stops (Rate becomes 0)
+            # We continue strictly for Temperature profile if active cooling exists?
+            # Legacy says: if X >= target, r_O2 = 0.
+            # We enforce that by setting dX=0, dT=cooling only.
+            dx_est = 0.0
+            dt_est = 0.0 
+            if U_a > 0: # If cooling
+                dt_est = (Area / (molar_flow_total * Cp_mix)) * (-U_a * (T - T_jacket))
+            
+            # Step forward
+            dL = min(L_total - L_curr, L_total/100.0) # Simple step
+            X_next = X
+            T_next = T + dt_est * dL
+            
+            # Update
+            X = X_next
+            T = T_next
+            L_curr += dL
+             # Record history
+            if step_count < max_iter:
+                L_hist[step_count] = L_curr
+                T_hist[step_count] = T
+                X_hist[step_count] = X
+                step_count += 1
+            continue
 
         def get_grads_local(x_c, t_c):
             if x_c >= 1.0:
@@ -981,8 +1029,15 @@ def solve_deoxo_pfr_step(
         if T > T_max:
             T_max = T
         L_curr += dL
+        
+        # Record history
+        if step_count < max_iter:
+            L_hist[step_count] = L_curr
+            T_hist[step_count] = T
+            X_hist[step_count] = X
+            step_count += 1
 
-    return X, T, T_max
+    return X, T, T_max, L_hist[:step_count], T_hist[:step_count], X_hist[:step_count]
 
 
 @njit
@@ -1077,6 +1132,34 @@ def dry_cooler_ntu_effectiveness(ntu: float, r: float) -> float:
 
     if abs(r - 1.0) < 1e-6:
         return ntu / (1.0 + ntu)
+        
+    term = np.exp(-ntu * (1.0 + r))
+    return (1.0 - term) / (1.0 + r * term)
+
+@njit
+def counter_flow_ntu_effectiveness(ntu: float, r: float) -> float:
+    """
+    Calculate effectiveness for counter-flow heat exchanger.
+
+    **ε = (1 - exp(-NTU(1-R))) / (1 - R·exp(-NTU(1-R)))**
+
+    Special case R=1: ε = NTU / (1 + NTU)
+
+    Args:
+        ntu (float): Number of Transfer Units.
+        r (float): Capacity ratio Cmin/Cmax.
+
+    Returns:
+        float: Heat exchanger effectiveness (0-1).
+    """
+    if ntu <= 0:
+        return 0.0
+
+    if abs(r - 1.0) < 1e-6:
+        return ntu / (1.0 + ntu)
+
+    term = np.exp(-ntu * (1.0 - r))
+    return (1.0 - term) / (1.0 - r * term)
 
     arg = -ntu * (1.0 - r)
     if arg < -50.0:
