@@ -489,10 +489,13 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     df_indexed['H2_total'] = df_indexed['H2_soec'] + df_indexed['H2_pem']
     
     # Resample to hourly averages
+    # Resample to hourly averages
     try:
-        df_hourly = df_indexed.resample('h').mean()
+        numeric_cols = df_indexed.select_dtypes(include=[np.number]).columns
+        df_hourly = df_indexed[numeric_cols].resample('h').mean()
     except ValueError:
-        df_hourly = df_indexed.resample('H').mean()  # Fallback for older pandas
+        numeric_cols = df_indexed.select_dtypes(include=[np.number]).columns 
+        df_hourly = df_indexed[numeric_cols].resample('H').mean()  # Fallback for older pandas
     
     # Skip if not enough data
     if len(df_hourly) < 2:
@@ -1275,6 +1278,151 @@ def create_dry_cooler_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
 
 
 # ==============================================================================
+# DRAIN & WATER REMOVAL CHARTS (Migrated from Legacy)
+# ==============================================================================
+
+def create_water_removal_total_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create a bar chart showing total water removed (kg) by each separation component.
+    
+    This is the dynamic adaptation of plot_agua_removida_total.py.
+    Instead of instantaneous kg/s, it sums the water_removed columns over the simulation.
+    
+    Expected columns in df (from history):
+        - kod1_h2_water_removed_kg_h (or similar naming convention)
+        - chiller_water_condensed_kg_h
+        - coalescer_water_removed_kg_h
+        - etc.
+    """
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Define what component types we're looking for
+    # The naming convention in history is: {component_id}_{metric}
+    water_cols = [c for c in df.columns if 'water_removed' in c.lower() or 'water_condensed' in c.lower()]
+    
+    if not water_cols:
+        ax.text(0.5, 0.5, 'No water removal data available.\n(Requires KOD, Chiller, Coalescer, etc.)',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12)
+        ax.set_title('Total Water Removal by Component', fontsize=12)
+        return fig
+    
+    # Calculate total removed per column (integrate over time)
+    # If kg/h is stored per minute timestep: total = sum(kg_h) * (1/60) hours
+    dt_hours = 1.0 / 60.0  # Default to 1-minute timestep
+    
+    component_totals = {}
+    for col in water_cols:
+        # Extract component name from column (e.g., 'kod1_h2_water_removed_kg_h' -> 'KOD1_H2')
+        parts = col.replace('_water_removed_kg_h', '').replace('_water_condensed_kg_h', '').upper()
+        total_kg = df[col].sum() * dt_hours
+        component_totals[parts] = total_kg
+    
+    # Sort by total for cleaner display
+    sorted_items = sorted(component_totals.items(), key=lambda x: x[1], reverse=True)
+    components = [item[0] for item in sorted_items]
+    totals = [item[1] for item in sorted_items]
+    
+    # Create bars
+    bars = ax.bar(components, totals, color=COLORS.get('kod', '#42A5F5'), edgecolor='black')
+    
+    # Add value labels
+    for bar, val in zip(bars, totals):
+        if val > 0.01:
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                    f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+    
+    ax.set_xlabel('Separation Component')
+    ax.set_ylabel('Total Water Removed (kg)')
+    ax.set_title('Total Water Removal by Component', fontsize=12)
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # Rotate labels if many components
+    if len(components) > 5:
+        plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
+    
+    return fig
+
+
+def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create multi-panel plot for discarded drains (Flow, T, P).
+    Migrated from plot_drenos_descartados.py.
+    
+    Shows properties for Coalescer, VSA, PSA (components that discard water).
+    Uses average Temperature and Pressure, and Total Mass Flow.
+    """
+    fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
+    gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 1])
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1], sharex=ax1)
+    ax3 = fig.add_subplot(gs[2], sharex=ax1)
+    
+    # Identify discarded drain components from history columns
+    # Looking for {comp}_water_removed_kg_h
+    # In legacy, this was hardcoded to ['Coalescer 1', 'VSA', 'PSA']
+    # We'll detect any component with _water_removed_kg_h available
+    
+    drain_cols = [c for c in df.columns if 'water_removed_kg_h' in c.lower()]
+    
+    components = []
+    total_mass = []
+    avg_temp = []
+    avg_press = []
+    
+    dt_hours = 1.0 / 60.0
+    
+    for col in drain_cols:
+        comp_name = col.replace('_water_removed_kg_h', '').upper()
+        
+        # Total Mass (Sum * dt)
+        mass_kg = df[col].sum() * dt_hours
+        
+        # Avg Temp (assume {comp}_temp_c exists or defaults)
+        temp_col = f"{col.split('_')[0]}_temp_c" # heuristic
+        # Try to find exact match or close match for temperature
+        possible_temp = [c for c in df.columns if comp_name.lower() in c.lower() and 'temp' in c.lower()]
+        t_avg = df[possible_temp[0]].mean() if possible_temp else 25.0 # default ambient
+        
+        # Avg Pressure
+        possible_press = [c for c in df.columns if comp_name.lower() in c.lower() and 'press' in c.lower()]
+        p_avg = df[possible_press[0]].mean() if possible_press else 1.0 # default atm
+        
+        if mass_kg > 0: # Only show active drains
+            components.append(comp_name)
+            total_mass.append(mass_kg)
+            avg_temp.append(t_avg)
+            avg_press.append(p_avg)
+            
+    if not components:
+        ax1.text(0.5, 0.5, 'No active discarded drains found.', ha='center', va='center')
+        return fig
+        
+    x = np.arange(len(components))
+    width = 0.6
+    
+    # 1. Total Mass
+    ax1.bar(x, total_mass, width, color='darkred', alpha=0.7)
+    ax1.set_ylabel('Total Mass Removed (kg)')
+    ax1.set_title('Discarded Drains Overview')
+    ax1.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # 2. Temperature
+    ax2.bar(x, avg_temp, width, color='orange', alpha=0.7)
+    ax2.set_ylabel('Avg Temperature (°C)')
+    ax2.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # 3. Pressure
+    ax3.bar(x, avg_press, width, color='purple', alpha=0.7)
+    ax3.set_ylabel('Avg Pressure (bar)')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(components, rotation=45, ha='right')
+    ax3.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    return fig
+
+
+# ==============================================================================
 # GRAPH REGISTRY - Extensible configuration for all available graphs
 # ==============================================================================
 # To add a new graph:
@@ -1400,6 +1548,17 @@ GRAPH_REGISTRY: Dict[str, Dict[str, Any]] = {
         'name': 'Module Statistics',
         'func': create_module_stats_figure,
         'description': 'Wear and cycle counts per SOEC module'
+    },
+    # --- DRAIN & WATER REMOVAL CHARTS ---
+    'water_removal_total': {
+        'name': 'Total Water Removal',
+        'func': create_water_removal_total_figure,
+        'description': 'Total liquid water removed by each separation component'
+    },
+    'drains_discarded': {
+        'name': 'Discarded Drains Overview',
+        'func': create_drains_discarded_figure,
+        'description': 'Multi-panel overview of discarded drain properties (Mass, T, P)'
     },
 }
 

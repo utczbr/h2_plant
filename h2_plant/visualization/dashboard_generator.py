@@ -201,7 +201,7 @@ class DashboardGenerator:
                 </div>
             </div>
 
-             <div class="grid">
+            <div class="grid">
                 <div class="card">
                     <h3>SOEC Active Modules</h3>
                     <iframe src="graphs/soec_active_modules_over_time.html" style="border:none; width:100%; height:500px;"></iframe>
@@ -209,6 +209,21 @@ class DashboardGenerator:
                 <div class="card">
                     <h3>Ramp Rate Stress</h3>
                     <iframe src="graphs/ramp_rate_stress_distribution.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+            </div>
+
+            <div class="header">
+                <h2>Thermal & Separation (Integrated)</h2>
+            </div>
+            <div class="grid">
+                 <div class="card">
+                    <h3>Total Water Removal</h3>
+                    <!-- Matplotlib generates PNGs, so we use img tag -->
+                    <img src="graphs/water_removal_total.png" alt="Total Water Removal" style="width:100%; height:auto;">
+                </div>
+                 <div class="card">
+                    <h3>Discarded Drains Overview</h3>
+                    <img src="graphs/drains_discarded.png" alt="Discarded Drains" style="width:100%; height:auto;">
                 </div>
             </div>
         </div>

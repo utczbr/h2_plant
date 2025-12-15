@@ -129,28 +129,53 @@ def run_scenario(scenario: dict) -> dict:
     # NOTE: We are not using the engine's dispatch now since we have specific
     # purification train logic. For simplicity, run manual timesteps.
     
+    from h2_plant.gui.core.plotter import generate_all_graphs_to_files
+    from h2_plant.visualization.dashboard_generator import DashboardGenerator
+    
     # 8. Manual simulation with stream propagation
     dt = context.simulation.timestep_hours
     num_steps = int(hours / dt)
     
-    # For purification train, we do manual stream propagation
-    # (The topology is already connected via receive_input/get_output)
-    
     # Initialize all components
     registry.initialize_all(dt)
+    
+    # History collection
+    history_records = []
     
     # Get topology order
     topo_order = [node.id for node in context.topology.nodes] if context.topology.nodes else []
     
     # Run one full timestep to generate outputs
-    for step in range(min(num_steps, 100)):  # Limit to 100 steps for speed
+    # LIMIT REMOVED: Run full duration or at least reasonable amount if hours is small
+    # If hours=168 (1 week), num_steps is huge (10k). Let's respect variable.
+    steps_to_run = num_steps 
+    
+    print(f"Running simulation for {steps_to_run} steps ({hours} hours)...")
+    
+    for step in range(steps_to_run):
         t = step * dt
+        
+        # Log progress every 10%
+        if step % max(1, steps_to_run // 10) == 0:
+             print(f"  Step {step}/{steps_to_run} ({step/steps_to_run*100:.0f}%)")
+        
+        record = {'minute': step, 'timestamp_hours': t}
         
         # Step each component in topology order
         for comp_id in topo_order:
             comp = components.get(comp_id)
             if comp:
                 comp.step(t)
+                
+                # Collect state for history
+                # Assuming component has some state or we extract from streams?
+                # For graph plots, we need specific keys like 'water_removed_kg_h'
+                # Attempt to extract state dict
+                if hasattr(comp, 'get_state'):
+                    state = comp.get_state()
+                    # Prefix keys with component name for flat history structure
+                    for k, v in state.items():
+                        record[f"{comp_id}_{k}"] = v
                 
                 # Propagate outputs to connected inputs
                 if context.topology.nodes:
@@ -166,10 +191,18 @@ def run_scenario(scenario: dict) -> dict:
                                             conn.target_port, output, conn.resource_type
                                         )
                                 except Exception as e:
-                                    pass  # Some ports may not exist
+                                    pass
+        
+        history_records.append(record)
+    
+    # Compile History
+    import pandas as pd
+    history_df = pd.DataFrame(history_records)
+    history_dict = history_df.to_dict(orient='list') # Plotter expects dict of lists
     
     # 9. Print Stream Summary Table
-    # First, detect primary gas by checking first component's output
+    # ... (Keep existing summary table code, omitted for brevity in search replacement if possible, but I need to replace block)
+    # Re-inserting check logic below...
     primary_gas = 'H2'  # Default
     for comp_id in topo_order:
         comp = components.get(comp_id)
@@ -186,7 +219,7 @@ def run_scenario(scenario: dict) -> dict:
                 except:
                     pass
             break
-    
+            
     # Set column headers based on primary gas
     if primary_gas == 'O2':
         col3_header = "O2 Purity"
@@ -252,17 +285,62 @@ def run_scenario(scenario: dict) -> dict:
     
     print("-" * 88)
 
-    # 10. Save History
+    # 10. Save History and Generate Graphs
     output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")
+    graphs_dir = os.path.join(output_dir, "graphs")
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(graphs_dir, exist_ok=True)
     
     history_path = os.path.join(output_dir, "simulation_history.csv")
+    history_df.to_csv(history_path, index=False)
     print(f"Saved history to {history_path}")
     
+    print("Generating graphs...")
+    try:
+        # Generate PNGs (Matplotlib)
+        generate_all_graphs_to_files(history_dict, graphs_dir)
+        
+        # Generate Dashboard (HTML)
+        # Note: Dashboard generator expects specific structure in 'results'
+        # We'll construct a minimal results dict
+        # Assuming DashboardGenerator expects 'metrics' and 'dashboard_data'
+        
+        # Minimal metrics placeholder
+        metrics = {
+            'total_production_kg': 0,
+            'total_demand_kg': 0,
+            'total_cost': 0,
+            'average_cost_per_kg': 0
+        }
+        
+        results_wrapper = {
+            'metrics': metrics,
+            'dashboard_data': {
+                'timeseries': {
+                    'hour': history_df['timestamp_hours'].tolist(),
+                    # Add dummy entries for dashboard required fields if needed
+                     'production': {'total_kg': [0]*len(history_df)},
+                     'demand': {'requested_kg': [0]*len(history_df)},
+                     'price': {'per_mwh': [0]*len(history_df)},
+                     'storage': {'lp_level_kg': [0]*len(history_df), 'hp_level_kg': [0]*len(history_df)},
+                     'flows': {'matrix': {'columns':[], 'rows':[], 'data':[]}, 'sankey': {'nodes':[], 'links':[]}}
+                }
+            }
+        }
+        
+        dash_gen = DashboardGenerator(Path(output_dir))
+        dash_gen.generate(results_wrapper)
+        print(f"Dashboard generated at {output_dir}/dashboard.html")
+        
+    except Exception as e:
+        print(f"Error generating graphs: {e}")
+        import traceback
+        traceback.print_exc()
+
     # Return summary metrics (simplified for purification train)
     return {
         "Scenario": name,
-        "H2 Produced (kg)": 0.0,  # Not applicable for purification train
+        "H2 Produced (kg)": 0.0,
         "SOEC H2 (kg)": 0.0,
         "PEM H2 (kg)": 0.0,
         "Energy Offered (MWh)": 0.0,

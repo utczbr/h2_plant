@@ -110,7 +110,7 @@ GRAPH_HIERARCHY = {
     "Resource Consumption": ["water_consumption", "cumulative_energy"],
     "Efficiency": ["efficiency_curve"],
     "Physics & Degradation": ["polarization", "degradation", "compressor_ts", "module_power"],
-    "Thermal & Separation": ["chiller_cooling", "coalescer_separation", "kod_separation"],
+    "Thermal & Separation": ["chiller_cooling", "coalescer_separation", "kod_separation", "water_removal_total", "drains_discarded"],
 }
 
 
@@ -1099,12 +1099,7 @@ class PlantEditorWindow(QMainWindow):
         run_action.triggered.connect(self.run_simulation)
         menubar.addAction(run_action)
 
-        # REPORTS MENU
-        reports_menu = menubar.addMenu("Reports")
-        
-        legacy_report_action = QAction("Generate Legacy PDF/Plots", self)
-        legacy_report_action.triggered.connect(self.generate_legacy_report)
-        reports_menu.addAction(legacy_report_action)
+
 
     def setup_toolbar(self):
         """Toolbar removed as requested."""
@@ -1354,50 +1349,4 @@ class PlantEditorWindow(QMainWindow):
             QMessageBox.critical(self, "Simulation Error", f"Failed to start simulation: {e}")
             QMessageBox.critical(self, "Simulation Error", f"Failed to start simulation: {e}")
 
-    def generate_legacy_report(self):
-        """Generate legacy plots/PDF using data from last simulation."""
-        if not hasattr(self, 'last_registry') or not self.last_registry:
-            QMessageBox.warning(self, "No Data", "Please run a simulation first.")
-            return
 
-        try:
-            from h2_plant.gui.plotting.legacy_adapter import LegacyDataAdapter
-            from h2_plant.gui.plotting.plot_manager import LegacyPlotManager
-            
-            # Ask user for output directory? Or default?
-            # Default to 'outputs/legacy_reports_<timestamp>'
-            # For simplicity, use standard folder and show in explorer
-            import datetime
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            output_dir = Path("outputs") / f"legacy_report_{timestamp}"
-            
-            progress = QProgressDialog("Generating Legacy Report...", None, 0, 0, self)
-            progress.setWindowModality(Qt.WindowModal)
-            progress.show()
-            QApplication.processEvents()
-            
-            adapter = LegacyDataAdapter(self.last_registry)
-            df_h2, df_o2 = adapter.generate_dataframes()
-            
-            manager = LegacyPlotManager(output_dir=str(output_dir))
-            manager.generate_all(df_h2, df_o2, self.last_registry)
-            
-            progress.close()
-            
-            # Open folder
-            import os
-            import platform
-            try:
-                if platform.system() == "Windows":
-                    os.startfile(output_dir)
-                elif platform.system() == "Darwin":
-                    os.system(f"open {output_dir}")
-                else:
-                    os.system(f"xdg-open {output_dir}")
-            except:
-                QMessageBox.information(self, "Report Generated", f"Saved to:\n{output_dir}")
-                
-        except Exception as e:
-            QMessageBox.critical(self, "Report Error", f"Failed to generate report: {e}")
-            import traceback
-            traceback.print_exc()

@@ -19,7 +19,7 @@ class ConfigLoader:
     def _load_yaml(self, filename: str) -> Dict[str, Any]:
         path = os.path.join(self.scenarios_dir, filename)
         try:
-            with open(path, 'r') as f:
+            with open(path, 'r', encoding='utf-8') as f:
                 return yaml.safe_load(f)
         except FileNotFoundError:
             logger.error(f"Config file not found: {path}")
@@ -44,7 +44,7 @@ class ConfigLoader:
         
         # Handle topology file - support absolute or relative paths
         if os.path.isabs(topology_file):
-            with open(topology_file, 'r') as f:
+            with open(topology_file, 'r', encoding='utf-8') as f:
                 topology_data = yaml.safe_load(f)
         else:
             topology_data = self._load_yaml(topology_file)

@@ -41,10 +41,14 @@ visualization:
     # Storage
     tank_storage_timeline: false
     compressor_power_stacked: false
+    
+    # Thermal & Separation (Matplotlib)
+    water_removal_total: true
+    drains_discarded: true
   
   # Export settings
   export:
-    enabled: false
+    enabled: true
     output_directory: "simulation_output/{simulation_name}/graphs"
     formats:
       - html  # Interactive Plotly graphs
@@ -74,21 +78,4 @@ visualization:
     # Use WebGL for large datasets
     use_webgl: false
 
-  # Legacy PEM purification line plots
-  # NOTE: Requires topology with purification components (KOD, Deoxo, PSA, etc.)
-  legacy_plots:
-    enabled: false  
-    output_directory: "simulation_output/{scenario}/legacy_plots"
-    
-    # Individual plot toggles
-    plots:
-      agua_removida_total: false
-      concentracao_dreno: false
-      fluxos_energia: false
-      propriedades_empilhadas: false
-      vazao_agua_separada: false
-      vazao_massica_total: false
-      deoxo_perfil: false
-      q_breakdown: false
-      impurezas_crossover: false
-      esquema_processo: false  # Requires networkx
+
