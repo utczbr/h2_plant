@@ -80,7 +80,7 @@ def run_scenario(scenario: dict) -> dict:
     loader = ConfigLoader(scenarios_dir)
     context = loader.load_context(topology_file=topology_file)
     
-    hours = 168  # 1 week
+    hours = context.simulation.duration_hours
     
     # 2. Build Component Graph
     builder = PlantGraphBuilder(context)
@@ -191,7 +191,7 @@ def run_scenario(scenario: dict) -> dict:
                                             conn.target_port, output, conn.resource_type
                                         )
                                 except Exception as e:
-                                    pass
+                                    print(f"Error propagating {comp_id} -> {target_comp.component_id}: {e}")
         
         history_records.append(record)
     
@@ -207,7 +207,7 @@ def run_scenario(scenario: dict) -> dict:
     for comp_id in topo_order:
         comp = components.get(comp_id)
         if comp:
-            for port in ['outlet', 'h2_out', 'fluid_out', 'gas_outlet']:
+            for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet']:
                 try:
                     stream = comp.get_output(port)
                     if stream and stream.composition:
@@ -218,6 +218,8 @@ def run_scenario(scenario: dict) -> dict:
                         break
                 except:
                     pass
+            else:
+                 continue
             break
             
     # Set column headers based on primary gas
@@ -240,12 +242,13 @@ def run_scenario(scenario: dict) -> dict:
         
         # Try to get output stream
         stream = None
-        for port in ['outlet', 'h2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out']:
+        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out']:
             try:
                 stream = comp.get_output(port)
                 if stream is not None:
                     break
-            except:
+            except Exception as e:
+                # print(f"Debug: {comp_id} port {port} error: {e}")
                 pass
         
         if stream is None:

@@ -229,6 +229,10 @@ class PlantGraphBuilder:
             from h2_plant.components.external.h2_source import ExternalH2Source
             return ExternalH2Source(config=node.params)
 
+        elif node.type == "ExternalOxygenSource":
+            from h2_plant.components.external.oxygen_source import ExternalOxygenSource
+            return ExternalOxygenSource(config=node.params)
+
         else:
             logger.warning(f"Unknown component type: {node.type} (ID: {node.id}) -> Instantiating PassiveComponent")
             return PassiveComponent()

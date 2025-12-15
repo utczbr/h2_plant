@@ -1,22 +1,21 @@
 # O2 Treatment Train Topology
-# Based on Legacy PEM Simulator (main_PEM_simulator.py)
+# Based on Legacy PEM Simulator
 # Flow: O2_Source → KOD_1 → DryCooler_1 → Chiller_1 (4°C) → KOD_2 → Coalescer_1 → Valve_1 (15 bar)
 
 nodes:
   # === O2 Source (PEM cathode output with H2 crossover and moisture) ===
-  # Mass flow: (5000 kW / 56.18 kWh/kg) / 3600 × (32/2.016) = 0.3923 kg/s = 1412.4 kg/h
+  # Mass flow: 1412.4 kg/h
   - id: "O2_Source"
-    type: "H2Source"  # Using H2Source with O2-dominant composition
+    type: "ExternalOxygenSource"  # Now supported
     params:
-      mass_flow_kg_h: 1412.4                    # From stoichiometry
-      pressure_bar: 40.0                         # P_IN_BAR = 40 bar
-      temperature_c: 60.0                        # T_IN_C = 60°C
-      composition:
-        O2: 0.946                                # 94.6% O2 (dominant)
-        H2: 0.00025                              # 4000 ppm molar → ~250 ppm mass
-        H2O: 0.0535                              # ~5.35% water content
+      mass_flow_kg_h: 1412.4
+      pressure_bar: 40.0
+      temperature_c: 60.0
+      o2_purity: 0.946
+      h2_impurity: 0.00025
+      h2o_impurity: 0.0535
     connections:
-      - source_port: "h2_out"
+      - source_port: "o2_out"  # Corrected from h2_out
         target_name: "KOD_1"
         target_port: "gas_inlet"
         resource_type: "gas"
@@ -25,19 +24,20 @@ nodes:
   - id: "KOD_1"
     type: "KnockOutDrum"
     params:
-      diameter_m: 1.0                            # DIAMETRO_VASO_M = 1.0 m
-      delta_p_bar: 0.05                          # DELTA_P_BAR = 0.05 bar
-      gas_species: "O2"                          # Primary gas is O2
+      diameter_m: 1.0
+      delta_p_bar: 0.05
+      gas_species: "O2"
     connections:
       - source_port: "gas_outlet"
         target_name: "DryCooler_1"
         target_port: "fluid_in"
-        resource_type: "stream"
+        resource_type: "gas"
 
   # === Dry Cooler 1 (Passive air cooling) ===
   - id: "DryCooler_1"
     type: "DryCooler"
-    params: {}
+    params:
+      component_id: "DryCooler_1"
     connections:
       - source_port: "fluid_out"
         target_name: "Chiller_1"
@@ -48,15 +48,16 @@ nodes:
   - id: "Chiller_1"
     type: "Chiller"
     params:
-      target_temp_k: 277.15                      # T_CHILLER_OUT_O2_C = 4°C = 277.15 K
-      cooling_capacity_kw: 200.0                 # Higher capacity for O2 flow
-      cop: 4.0                                   # Standard COP
-      pressure_drop_bar: 0.0                     # Legacy has no pressure drop
+      component_id: "Chiller_1"
+      target_temp_k: 277.15  # 4°C
+      cooling_capacity_kw: 200.0
+      cop: 4.0
+      pressure_drop_bar: 0.0
     connections:
       - source_port: "fluid_out"
         target_name: "KOD_2"
         target_port: "gas_inlet"
-        resource_type: "gas"
+        resource_type: "stream"
 
   # === Knock-Out Drum 2 (Post-chiller water separation) ===
   - id: "KOD_2"
@@ -74,7 +75,9 @@ nodes:
   # === Coalescer 1 (Mist elimination) ===
   - id: "Coalescer_1"
     type: "Coalescer"
-    params: {}
+    params:
+      component_id: "Coalescer_1"
+      gas_type: "O2"
     connections:
       - source_port: "outlet"
         target_name: "Valve_1"
@@ -85,6 +88,6 @@ nodes:
   - id: "Valve_1"
     type: "Valve"
     params:
-      P_out_pa: 1500000.0                        # 15 bar = 1.5 MPa = 1500000 Pa
-      fluid: "O2"                                # Oxygen for property lookups
-    connections: []  # Terminal component
+      P_out_pa: 1500000.0  # 15 bar
+      fluid: "O2"
+    connections: []
