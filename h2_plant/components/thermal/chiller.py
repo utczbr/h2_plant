@@ -363,6 +363,21 @@ class Chiller(Component):
             composition=outlet_comp
         )
 
+        # Calculate Latent Heat from condensation
+        # h_vap for water approx 2260 kJ/kg, or 2440 at 25C. 
+        # Precise way: h_gas - h_liq at T_outlet, but 2450 kJ/kg is good standard est.
+        # Q_latent (kW) = m_condensed (kg/s) * h_vap (kJ/kg)
+        h_vap_kj_kg = 2450.0 
+        self.latent_heat_kw = (self.water_condensed_kg_h / 3600.0) * h_vap_kj_kg
+        
+        # Sensible is remainder (Total - Latent)
+        # Note: cooling_load_kw is negative or positive? In this class:
+        # Q_dot < 0 implies cooling?
+        # step() says: Q_dot_W = mass * (h_in - h_target). If cooling, h_in > h_target -> Q > 0.
+        # But later: cooling_load_kw = Q_dot_W / 1000.0
+        # So positive means heat removed.
+        self.sensible_heat_kw = max(0.0, self.cooling_load_kw - self.latent_heat_kw)
+
         # Accumulate timestep totals
         self.timestep_cooling_load_kw += cooling_load_kw
         batch_heat_rejected = abs(cooling_load_kw) + batch_electrical_kw
@@ -500,6 +515,8 @@ class Chiller(Component):
             **super().get_state(),
             'component_id': self.component_id,
             'cooling_load_kw': self.cooling_load_kw,
+            'sensible_heat_kw': getattr(self, 'sensible_heat_kw', 0.0), # Safer access
+            'latent_heat_kw': getattr(self, 'latent_heat_kw', 0.0),
             'outlet_temp_k': self.outlet_stream.temperature_k,
             'outlet_pressure_bar': self.outlet_stream.pressure_pa / 1e5,
             'heat_rejected_kw': self.heat_rejected_kw,

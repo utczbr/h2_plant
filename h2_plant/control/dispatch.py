@@ -60,6 +60,7 @@ class DispatchInput:
     pem_h2_kwh_kg: float = 50.0
     ppa_price_eur_mwh: float = 50.0 # Default
     h2_price_eur_kg: float = 9.6    # Default
+    arbitrage_threshold_eur_mwh: Optional[float] = None  # Explicit override
 
 
 @dataclass
@@ -156,9 +157,12 @@ class ReferenceHybridStrategy(DispatchStrategy):
         if inputs.soec_capacity_mw <= 0 and inputs.pem_max_power_mw > 0:
             ref_h2_kwh_kg = inputs.pem_h2_kwh_kg
 
-        # Calculate arbitrage threshold price
-        h2_eq_price = (1000.0 / ref_h2_kwh_kg) * H2_PRICE_KG
-        arbitrage_limit = PPA_PRICE + h2_eq_price
+        # Calculate arbitrage threshold price (or use explicit override)
+        if inputs.arbitrage_threshold_eur_mwh is not None:
+            arbitrage_limit = inputs.arbitrage_threshold_eur_mwh
+        else:
+            h2_eq_price = (1000.0 / ref_h2_kwh_kg) * H2_PRICE_KG
+            arbitrage_limit = PPA_PRICE + h2_eq_price
 
         P_soec_prev = state.P_soec_prev
         force_sell = state.force_sell
@@ -258,8 +262,13 @@ class SoecOnlyStrategy(DispatchStrategy):
         H2_PRICE_KG = inputs.h2_price_eur_kg
 
         ref_h2_kwh_kg = inputs.soec_h2_kwh_kg
-        h2_eq_price = (1000.0 / ref_h2_kwh_kg) * H2_PRICE_KG
-        arbitrage_limit = PPA_PRICE + h2_eq_price
+        
+        # Calculate arbitrage threshold price (or use explicit override)
+        if inputs.arbitrage_threshold_eur_mwh is not None:
+            arbitrage_limit = inputs.arbitrage_threshold_eur_mwh
+        else:
+            h2_eq_price = (1000.0 / ref_h2_kwh_kg) * H2_PRICE_KG
+            arbitrage_limit = PPA_PRICE + h2_eq_price
 
         P_soec_prev = state.P_soec_prev
         force_sell = state.force_sell

@@ -334,7 +334,8 @@ class DeoxoReactor(Component):
             **super().get_state(),
             'conversion_o2_percent': self.last_conversion_o2 * 100.0,
             'peak_temperature_c': self.last_peak_temp_k - 273.15,
-            'pressure_drop_mbar': self.last_pressure_drop_bar * 1000.0
+            'pressure_drop_mbar': self.last_pressure_drop_bar * 1000.0,
+            'outlet_o2_ppm_mol': (self.output_stream.get_mole_frac('O2') * 1e6) if self.output_stream else 0.0
         }
 
     def get_last_profiles(self) -> Dict[str, np.ndarray]:

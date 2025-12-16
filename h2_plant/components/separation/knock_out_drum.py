@@ -29,12 +29,15 @@ References:
 
 from typing import Dict, Any, Optional, TYPE_CHECKING
 import math
+import logging
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
 from h2_plant.core.constants import GasConstants, HenryConstants
 from h2_plant.optimization.coolprop_lut import CoolPropLUT
 from h2_plant.optimization.numba_ops import solve_rachford_rice_single_condensable
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from h2_plant.core.component_registry import ComponentRegistry
@@ -52,6 +55,9 @@ Lower values are conservative; typical range 0.05-0.12 depending on demister typ
 
 R_UNIV: float = 8.31446
 """Universal gas constant (J/(mol·K))."""
+
+M_H2O: float = 0.018015
+"""Water molar mass (kg/mol) - matches CoalescerConstants.M_H2O."""
 
 
 class KnockOutDrum(Component):
@@ -86,7 +92,8 @@ class KnockOutDrum(Component):
         self,
         diameter_m: float = 1.0,
         delta_p_bar: float = 0.05,
-        gas_species: str = 'H2'
+        gas_species: str = 'H2',
+        separation_efficiency: float = 0.97
     ) -> None:
         """
         Initialize the Knock-Out Drum component.
@@ -103,6 +110,8 @@ class KnockOutDrum(Component):
             gas_species (str): Primary non-condensable gas species. Must be 'H2'
                 or 'O2'. This determines gas-phase physical properties (density,
                 compressibility). Default: 'H2'.
+            separation_efficiency (float): Fraction of liquid captured (0.0 to 1.0).
+                Default: 0.97 (legacy model value).
 
         Raises:
             ValueError: If diameter_m is not positive.
@@ -118,7 +127,11 @@ class KnockOutDrum(Component):
         self.diameter_m = diameter_m
         self.delta_p_bar = delta_p_bar
         self.gas_species = gas_species
-        self.separation_efficiency = 0.97 # Legacy: 0.97, was 0.98
+        self.separation_efficiency = separation_efficiency
+
+        # Molar mass of primary gas (kg/mol) - from GasConstants.SPECIES_DATA
+        # molecular_weight is in g/mol, divide by 1000 for kg/mol
+        self.M_gas = GasConstants.SPECIES_DATA[gas_species]['molecular_weight'] / 1000.0
 
         # Stream state: holds most recent input/output for current timestep
         self._input_stream: Optional[Stream] = None
@@ -132,6 +145,7 @@ class KnockOutDrum(Component):
         self._separation_status: str = "IDLE"
         self._power_consumption_w: float = 0.0
         self._dissolved_gas_kg_h: float = 0.0
+        self.total_drain_removed_kg: float = 0.0  # Cumulative drain tracking
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
@@ -153,6 +167,9 @@ class KnockOutDrum(Component):
 
         if self.diameter_m <= 0:
             raise ValueError("diameter_m must be positive")
+        
+        # Reset cumulative tracking
+        self.total_drain_removed_kg = 0.0
 
     def _calculate_dissolved_gas(self, temp_k: float, pressure_pa: float, gas_type: str) -> float:
         """
@@ -317,6 +334,14 @@ class KnockOutDrum(Component):
                 n_species[species] = n_i
                 n_total_mol_s += n_i
 
+        # FIX: Include H2O_liq as equivalent moles of water
+        # This fixes the bug where entrained liquid was ignored in flash calculation
+        h2o_liq_mass_frac = composition.get('H2O_liq', 0.0)
+        if h2o_liq_mass_frac > 0:
+            h2o_liq_mol_s = (h2o_liq_mass_frac * m_dot_in_kg_h / 3600.0) / M_H2O
+            n_species['H2O'] = n_species.get('H2O', 0.0) + h2o_liq_mol_s
+            n_total_mol_s += h2o_liq_mol_s
+
         if n_total_mol_s <= 0:
             self._separation_status = "NO_FLOW"
             self._gas_outlet_stream = None
@@ -359,6 +384,8 @@ class KnockOutDrum(Component):
         # Water is the only condensable; all other species remain in vapor phase.
         if z_H2O > 1e-12:
             beta = solve_rachford_rice_single_condensable(z_H2O, K_eq)
+            # Clamp beta to valid range [0, 1] for numerical stability
+            beta = max(0.0, min(1.0, beta))
         else:
             beta = 1.0  # No water → all vapor
 
@@ -391,11 +418,20 @@ class KnockOutDrum(Component):
         mw_h2o = GasConstants.SPECIES_DATA['H2O']['molecular_weight'] / 1000.0
         M_mix = y_gas * mw_gas + y_H2O * mw_h2o
 
-        # Real gas compressibility factor (Z) from equation of state
-        try:
-            Z = CoolPropLUT.PropsSI('Z', 'T', T_in, 'P', P_out, self.gas_species)
-        except Exception:
-            Z = 1.0  # Ideal gas approximation
+        # Real gas compressibility factor (Z) - use LUTManager for consistency
+        Z = 1.0  # Default ideal gas
+        if hasattr(self, 'registry') and self.registry is not None:
+            try:
+                lut_manager = self.registry.get('lut_manager')
+                if lut_manager is not None:
+                    Z = lut_manager.lookup(self.gas_species, 'Z', P_out, T_in)
+            except Exception:
+                pass
+        if Z == 1.0:  # Fallback to CoolPropLUT if LUTManager unavailable
+            try:
+                Z = CoolPropLUT.PropsSI('Z', 'T', T_in, 'P', P_out, self.gas_species)
+            except Exception:
+                Z = 1.0
 
         # Gas density: ρ = PM / (ZRT)
         if Z > 0 and T_in > 0:
@@ -480,25 +516,27 @@ class KnockOutDrum(Component):
             gas_comp['H2O'] = m_H2O_vap / m_gas_out_total
             
             # Add liquid carryover (mist)
-            gas_comp['H2O_liq'] = m_liq_carryover_kg_h / m_gas_out_total
+            liq_carryover_frac = m_liq_carryover_kg_h / m_gas_out_total
+            
+            # Composition cleanup: remove negligible H2O_liq to avoid floating-point dust
+            if liq_carryover_frac >= 1e-9:
+                gas_comp['H2O_liq'] = liq_carryover_frac
             
             # Normalize to ensure sum = 1.0 (floating point safety)
             total_comp = sum(gas_comp.values())
-            if total_comp > 0 and abs(total_comp - 1.0) > 1e-6:
+            if total_comp > 0:
                 gas_comp = {s: f / total_comp for s, f in gas_comp.items()}
+            
+            # Validate normalization
+            assert abs(sum(gas_comp.values()) - 1.0) < 1e-6, "Gas composition not normalized"
         else:
             gas_comp = {self.gas_species: 1.0}
 
-        self._gas_outlet_stream = Stream(
-            mass_flow_kg_h=m_gas_out_total,
-            temperature_k=T_in,
-            pressure_pa=P_out,
-            composition=gas_comp,
-            phase='gas'
-        )
-
-        # Calculate dissolved gas loss using Henry's Law
-        dissolved_gas_mg_kg = self._calculate_dissolved_gas(T_in, P_out, self.gas_species)
+        # Calculate dissolved gas loss using Henry's Law with PARTIAL PRESSURE
+        # y_gas * P_out gives partial pressure of gas for accurate solubility
+        y_gas_approx = 1.0 - y_H2O
+        p_gas_pa = P_out * y_gas_approx
+        dissolved_gas_mg_kg = self._calculate_dissolved_gas(T_in, p_gas_pa, self.gas_species)
         dissolved_gas_kg_h = (m_liq_removed_kg_h * dissolved_gas_mg_kg) / 1e6
         self._dissolved_gas_kg_h = dissolved_gas_kg_h
         
@@ -511,16 +549,39 @@ class KnockOutDrum(Component):
             temperature_k=T_in,
             pressure_pa=P_out,
             composition=gas_comp,
-            phase='gas'
+            phase='gas',
+            extra={'m_dot_H2O_liq_accomp_kg_s': m_liq_carryover_kg_h / 3600.0}
         )
 
+        # Drain stream: simplify composition if dissolved gas is negligible
+        m_drain_total = m_liq_removed_kg_h + dissolved_gas_kg_h
+        if dissolved_gas_kg_h < 1e-9 * m_liq_removed_kg_h or m_liq_removed_kg_h <= 0:
+            drain_comp = {'H2O': 1.0}
+        else:
+            h2o_frac = m_liq_removed_kg_h / m_drain_total
+            gas_frac = dissolved_gas_kg_h / m_drain_total
+            drain_comp = {'H2O': h2o_frac, self.gas_species: gas_frac}
+
         self._liquid_drain_stream = Stream(
-            mass_flow_kg_h=m_liq_removed_kg_h + dissolved_gas_kg_h,
+            mass_flow_kg_h=m_drain_total,
             temperature_k=T_in,
             pressure_pa=P_out,
-            composition={'H2O': 1.0, f'{self.gas_species}_dissolved': dissolved_gas_kg_h / (m_liq_removed_kg_h + dissolved_gas_kg_h + 1e-12)},
-            phase='liquid'
+            composition=drain_comp,
+            phase='liquid',
+            extra={'m_dot_H2O_liq_accomp_kg_s': 0.0}
         )
+
+        # Accumulate drain for tracking
+        self.total_drain_removed_kg += m_drain_total * self.dt
+
+        # Mass balance debug logging
+        mass_balance_error = m_dot_in_kg_h - m_gas_out_corrected - m_drain_total
+        if abs(mass_balance_error) > 1e-3:
+            logger.debug(
+                f"KOD Mass Bal: in={m_dot_in_kg_h:.3f}, "
+                f"out={m_gas_out_corrected:.3f}+{m_drain_total:.3f}, "
+                f"err={mass_balance_error/m_dot_in_kg_h*100:.3f}%"
+            )
 
         # Clear input buffer for next timestep
         self._input_stream = None
@@ -569,6 +630,12 @@ class KnockOutDrum(Component):
                 - gas_species (str): Primary gas species ('H2' or 'O2').
         """
         state = super().get_state()
+        
+        # Calculate liquid carryover (entrainment)
+        entrained_liq = 0.0
+        if self._gas_outlet_stream:
+             entrained_liq = self._gas_outlet_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+        
         state.update({
             'rho_g': self._rho_g,
             'v_max': self._v_max,
@@ -576,9 +643,17 @@ class KnockOutDrum(Component):
             'separation_status': self._separation_status,
             'power_consumption_w': self._power_consumption_w,
             'dissolved_gas_kg_h': self._dissolved_gas_kg_h,
+            'total_drain_removed_kg': self.total_drain_removed_kg,
             'diameter_m': self.diameter_m,
             'delta_p_bar': self.delta_p_bar,
             'gas_species': self.gas_species,
-            'water_removed_kg_h': self._liquid_drain_stream.mass_flow_kg_h if self._liquid_drain_stream else 0.0
+            'separation_efficiency': self.separation_efficiency,
+            'water_removed_kg_h': self._liquid_drain_stream.mass_flow_kg_h if self._liquid_drain_stream else 0.0,
+            'drain_temp_k': self._liquid_drain_stream.temperature_k if self._liquid_drain_stream else 0.0,
+            'drain_pressure_bar': self._liquid_drain_stream.pressure_pa / 1e5 if self._liquid_drain_stream else 0.0,
+            'dissolved_gas_ppm': (self._dissolved_gas_kg_h / self._liquid_drain_stream.mass_flow_kg_h * 1e6) 
+                                 if (self._liquid_drain_stream and self._liquid_drain_stream.mass_flow_kg_h > 0) else 0.0,
+            'm_dot_H2O_liq_accomp_kg_s': entrained_liq
         })
         return state
+

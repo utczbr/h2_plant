@@ -227,20 +227,42 @@ class ImageGenerationWorker(QThread):
     def run(self):
         """Generate all graphs as PNG files."""
         try:
-            from h2_plant.gui.core.plotter import generate_all_graphs_to_files
+            from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY, GraphLibrary
+            from h2_plant.visualization import static_graphs
+            import os
+            
+            result_paths = {}
+            total = len(self.graph_ids)
+            
+            # Prepare Data - Normalize once
+            norm_history = static_graphs.normalize_history(self.simulation_data)
             
             def on_progress(current, total, name):
                 self.progress.emit(current, total, name)
             
-            result = generate_all_graphs_to_files(
-                self.simulation_data,
-                self.output_dir,
-                graph_ids=self.graph_ids,
-                dpi=100,  # High quality
-                progress_callback=on_progress
-            )
+            for index, graph_id in enumerate(self.graph_ids):
+                metadata = GRAPH_REGISTRY.get(graph_id)
+                if not metadata:
+                    continue
+                
+                # Update progress
+                on_progress(index + 1, total, metadata.title)
+                
+                try:
+                    # Only support Matplotlib graphs for static PNG generation in specific GUI worker
+                    if metadata.library == GraphLibrary.MATPLOTLIB:
+                        fig = metadata.function(norm_history)
+                        if fig:
+                            filename = f"{graph_id}.png"
+                            filepath = os.path.join(self.output_dir, filename)
+                            fig.savefig(filepath, dpi=100)
+                            # plt.close(fig) # Optional cleanup
+                            result_paths[graph_id] = filepath
+                            
+                except Exception as g_err:
+                    print(f"Error generating graph {graph_id}: {g_err}")
             
-            self.finished_with_paths.emit(result)
+            self.finished_with_paths.emit(result_paths)
             
         except Exception as e:
             import traceback
@@ -447,7 +469,7 @@ class SimulationReportWidget(QWidget):
     
     def _populate_tree(self):
         """Populate tree with folder hierarchy."""
-        from h2_plant.gui.core.plotter import GRAPH_REGISTRY
+        from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY
         
         self.graph_tree.blockSignals(True)
         try:
@@ -465,12 +487,13 @@ class SimulationReportWidget(QWidget):
                 
                 for graph_id in graph_ids:
                     if graph_id in GRAPH_REGISTRY:
-                        graph_info = GRAPH_REGISTRY[graph_id]
-                        child_item = QTreeWidgetItem([graph_info['name']])
+                        # Use .get() method and attribute access
+                        metadata = GRAPH_REGISTRY.get(graph_id)
+                        child_item = QTreeWidgetItem([metadata.title])
                         child_item.setFlags(child_item.flags() | Qt.ItemIsUserCheckable)
                         child_item.setCheckState(0, folder_state)
                         child_item.setData(0, Qt.UserRole, graph_id)
-                        child_item.setToolTip(0, graph_info.get('description', ''))
+                        child_item.setToolTip(0, metadata.description)
                         folder_item.addChild(child_item)
                         self._tree_items[graph_id] = child_item
                 
@@ -629,7 +652,7 @@ class SimulationReportWidget(QWidget):
     def _display_selected_graphs(self):
         """Display all generated images for selected graphs."""
         from PySide6.QtGui import QPixmap
-        from h2_plant.gui.core.plotter import GRAPH_REGISTRY
+        from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY
         
         self._clear_layout()
         
@@ -658,8 +681,9 @@ class SimulationReportWidget(QWidget):
             frame_layout = QVBoxLayout(frame)
             
             # Graph title
-            graph_info = GRAPH_REGISTRY.get(graph_id, {})
-            title = QLabel(graph_info.get('name', graph_id))
+            metadata = GRAPH_REGISTRY.get(graph_id)
+            title_text = metadata.title if metadata else graph_id
+            title = QLabel(title_text)
             title.setStyleSheet("font-weight: bold; font-size: 14px; color: #eee;")
             title.setAlignment(Qt.AlignCenter)
             frame_layout.addWidget(title)

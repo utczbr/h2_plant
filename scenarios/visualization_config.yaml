@@ -45,6 +45,41 @@ visualization:
     # Thermal & Separation (Matplotlib)
     water_removal_total: true
     drains_discarded: true
+    chiller_cooling: true
+    coalescer_separation: true
+    kod_separation: true
+    dry_cooler_performance: true
+    
+    # Profile (Matplotlib) - Always recommended for purification trains
+    process_train_profile: true
+    
+    # Energy & Thermal Analysis (From Plots.csv)
+    energy_flows: true
+    q_breakdown: true
+    mixer_comparison: true
+    individual_drains: true
+    dissolved_gas_concentration: true
+    crossover_impurities: true
+    deoxo_profile: true
+    drain_line_properties: true
+    drain_line_concentration: true
+    recirculation_comparison: true
+    entrained_liquid_flow: true
+    
+    # Legacy dispatch/economics (enable as needed)
+    dispatch: false
+    arbitrage: false
+    h2_production: false
+    oxygen_production: false
+    water_consumption: false
+    energy_pie: false
+    price_histogram: false
+    dispatch_curve: false
+    cumulative_h2: false
+    cumulative_energy: false
+    efficiency_curve: false
+    revenue_analysis: false
+    temporal_averages: false
   
   # Export settings
   export:

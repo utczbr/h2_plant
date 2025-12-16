@@ -46,7 +46,7 @@ from h2_plant.core.component import Component
 
 logger = logging.getLogger(__name__)
 
-PropertyType = Literal['D', 'H', 'S', 'C']
+PropertyType = Literal['D', 'H', 'S', 'C', 'Z']
 
 
 @dataclass
@@ -78,7 +78,7 @@ class LUTConfig:
     entropy_min: float = 0.0
     entropy_max: float = 100000.0
     entropy_points: int = 500
-    properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C')
+    properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C', 'Z')
     fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O', 'Water')
     interpolation: Literal['linear', 'cubic'] = 'linear'
     cache_dir: Path = Path(__file__).resolve().parents[2] / '.h2_plant' / 'lut_cache'
@@ -233,6 +233,7 @@ class LUTManager(Component):
                 - 'H': Specific enthalpy (J/kg)
                 - 'S': Specific entropy (J/(kg·K))
                 - 'C': Heat capacity Cp (J/(kg·K))
+                - 'Z': Compressibility factor (dimensionless)
             pressure (float): Pressure in Pa.
             temperature (float): Temperature in K.
 

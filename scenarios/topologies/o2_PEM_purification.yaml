@@ -32,6 +32,10 @@ nodes:
         target_name: "DryCooler_1"
         target_port: "fluid_in"
         resource_type: "gas"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Collector"
+        target_port: "inlet_0"
+        resource_type: "water"
 
   # === Dry Cooler 1 (Passive air cooling) ===
   - id: "DryCooler_1"
@@ -71,6 +75,10 @@ nodes:
         target_name: "Coalescer_1"
         target_port: "inlet"
         resource_type: "gas_mixture"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Collector"
+        target_port: "inlet_1"
+        resource_type: "water"
 
   # === Coalescer 1 (Mist elimination) ===
   - id: "Coalescer_1"
@@ -83,6 +91,10 @@ nodes:
         target_name: "Valve_1"
         target_port: "inlet"
         resource_type: "gas"
+      - source_port: "drain"
+        target_name: "Drain_Collector"
+        target_port: "inlet_2"
+        resource_type: "water"
 
   # === Throttling Valve (Expansion to 15 bar) ===
   - id: "Valve_1"
@@ -91,3 +103,12 @@ nodes:
       P_out_pa: 1500000.0  # 15 bar
       fluid: "O2"
     connections: []
+
+  # === Drain Collector (Water Mixer) ===
+  - id: "Drain_Collector"
+    type: "WaterMixer"
+    params:
+      outlet_pressure_kpa: 101.325  # Atmospheric
+      max_inlet_streams: 5
+    connections: []
+    # Note: Inputs are connected from upstream components outputs, 

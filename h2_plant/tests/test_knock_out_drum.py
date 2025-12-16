@@ -131,7 +131,9 @@ class TestKnockOutDrumNoFlow(unittest.TestCase):
         kod.step(t=0)
         
         self.assertEqual(kod._separation_status, "NO_FLOW")
-        self.assertIsNone(kod.get_output('gas_outlet'))
+        # Note: get_output now returns Stream(0.0) instead of None
+        outlet = kod.get_output('gas_outlet')
+        self.assertEqual(outlet.mass_flow_kg_h, 0.0)
     
     def test_zero_flow_stream(self):
         """Verify graceful handling of zero-flow stream."""
@@ -329,8 +331,8 @@ class TestKnockOutDrumOutputStreams(unittest.TestCase):
         self.assertIn('H2O', outlet.composition)
         self.assertGreater(outlet.composition['H2'], 0)
     
-    def test_liquid_drain_is_pure_water(self):
-        """Verify liquid drain is 100% H2O."""
+    def test_liquid_drain_is_mostly_water(self):
+        """Verify liquid drain is predominantly H2O (with trace dissolved gas)."""
         inlet = Stream(
             mass_flow_kg_h=100.0,
             temperature_k=300.0,
@@ -343,7 +345,8 @@ class TestKnockOutDrumOutputStreams(unittest.TestCase):
         
         drain = self.kod.get_output('liquid_drain')
         
-        self.assertEqual(drain.composition.get('H2O', 0), 1.0)
+        # Drain is mostly water (>99.9%) with trace dissolved gas
+        self.assertGreater(drain.composition.get('H2O', 0), 0.999)
         self.assertEqual(drain.phase, 'liquid')
     
     def test_isothermal_operation(self):

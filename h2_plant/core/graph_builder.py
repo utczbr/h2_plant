@@ -117,9 +117,14 @@ class PlantGraphBuilder:
             return Pump(target_pressure_bar=target_p, eta_is=eta_is, eta_m=eta_m, capacity_kg_h=capacity)
             
         elif node.type == "Mixer":
-            # Extract volume explicitly
             vol = float(node.params.get('volume_m3', 10.0))
             return Mixer(volume_m3=vol)
+
+        elif node.type == "WaterMixer":
+            from h2_plant.components.mixing.water_mixer import WaterMixer
+            p_out = float(node.params.get('outlet_pressure_kpa', 200.0))
+            max_in = int(node.params.get('max_inlet_streams', 10))
+            return WaterMixer(outlet_pressure_kpa=p_out, max_inlet_streams=max_in)
 
         elif node.type == "Chiller":
             from h2_plant.components.thermal.chiller import Chiller

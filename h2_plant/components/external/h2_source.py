@@ -200,19 +200,40 @@ class ExternalH2Source(Component):
         else:
             self.pressure_pa = self.DEFAULTS['pressure_bar'] * 1e5
         
-        # Composition
-        if 'composition' in config:
-            self.composition = config['composition']
-        else:
-            h2 = float(config.get('h2_purity', self.DEFAULTS['h2_purity']))
-            o2 = float(config.get('o2_impurity', self.DEFAULTS['o2_impurity']))
-            h2o = float(config.get('h2o_impurity', self.DEFAULTS['h2o_impurity']))
-            n2 = float(config.get('n2_impurity', self.DEFAULTS['n2_impurity']))
-            self.composition = {'H2': h2, 'O2': o2, 'H2O': h2o, 'N2': n2}
-        
+        # Composition and Phase
         self.phase = config.get('phase', self.DEFAULTS['phase'])
         self.enthalpy_kj_kg = config.get('enthalpy_kj_kg', None)
         self.time_profile = config.get('time_profile', None)
+
+        if 'composition' in config:
+            self.composition = config['composition']
+        else:
+            # Inputs are molar fractions (purity/impurity)
+            y_h2 = float(config.get('h2_purity', self.DEFAULTS['h2_purity']))
+            y_o2 = float(config.get('o2_impurity', self.DEFAULTS['o2_impurity']))
+            y_h2o = float(config.get('h2o_impurity', self.DEFAULTS['h2o_impurity']))
+            y_n2 = float(config.get('n2_impurity', self.DEFAULTS['n2_impurity']))
+            
+            # Convert Molar -> Mass Fractions
+            # x_i = (y_i * MW_i) / sum(y_j * MW_j)
+            from h2_plant.core.constants import GasConstants
+            MW = {s: GasConstants.SPECIES_DATA[s]['molecular_weight'] for s in ['H2', 'O2', 'H2O', 'N2']}
+            
+            w_h2 = y_h2 * MW['H2']
+            w_o2 = y_o2 * MW['O2']
+            w_h2o = y_h2o * MW['H2O']
+            w_n2 = y_n2 * MW['N2']
+            w_total = w_h2 + w_o2 + w_h2o + w_n2
+            
+            if w_total > 0:
+                self.composition = {
+                    'H2': w_h2 / w_total,
+                    'O2': w_o2 / w_total,
+                    'H2O': w_h2o / w_total,
+                    'N2': w_n2 / w_total
+                }
+            else:
+                self.composition = {'H2': 1.0}  # Fallback
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Prepare the component for simulation."""
@@ -342,7 +363,9 @@ class ExternalH2Source(Component):
             'cumulative_h2_kg': self.cumulative_h2_kg,
             'h2_purity': self.composition.get('H2', 0.0),
             'o2_impurity': self.composition.get('O2', 0.0),
-            'h2o_impurity': self.composition.get('H2O', 0.0)
+            'h2o_impurity': self.composition.get('H2O', 0.0),
+            # Calculate molar ppm for cross-checking
+            'o2_impurity_ppm_mol': (Stream(mass_flow_kg_h=1, composition=self.composition).get_mole_frac('O2') * 1e6)
         }
 
     @classmethod

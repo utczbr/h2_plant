@@ -180,7 +180,13 @@ class CoalescerConstants:
     # Physics / Performance coefficients
     # Recalibrated to match legacy 0.1500 bar drop at nominal flow (previously 0.5e6)
     K_PERDA: Final[float] = 1.996271e+10    # Permeability resistance factor
-    ETA_LIQUID_REMOVAL: Final[float] = 0.98  # Legacy separation efficiency (98%)
+    ETA_LIQUID_REMOVAL: Final[float] = 0.98  # separation efficiency (98%)
+
+    # Molar masses (kg/mol) - from modelo_coalescedor.py
+    
+    M_H2O: Final[float] = 0.018015
+    M_H2: Final[float] = 0.002016
+    M_O2: Final[float] = 0.031998
 
     # Reference properties for Sutherland viscosity model
     MU_REF_H2_PA_S: Final[float] = 9.0e-6

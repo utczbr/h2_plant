@@ -130,18 +130,33 @@ class GraphCatalog:
         self._enabled_graphs.clear()
         for metadata in self._registry.values():
             metadata.enabled = False
-        logger.info("Disabled all graphs")
-    
+        
     def get(self, graph_id: str) -> Optional[GraphMetadata]:
         """Get metadata for a specific graph."""
         return self._registry.get(graph_id)
-    
+        
+    def __contains__(self, graph_id: str) -> bool:
+        """Check if graph exists in registry."""
+        return graph_id in self._registry
+
     def get_enabled(self) -> List[GraphMetadata]:
-        """Get list of all enabled graphs."""
-        return [
-            metadata for graph_id, metadata in self._registry.items()
-            if metadata.enabled
-        ]
+        """
+        Get list of all enabled graph metadata.
+        
+        Returns:
+            List of GraphMetadata objects for enabled graphs, sorted by priority.
+        """
+        enabled = [self._registry[gid] for gid in self._enabled_graphs if gid in self._registry]
+        
+        # Sort by priority (CRITICAL -> LOW)
+        priority_order = {
+            GraphPriority.CRITICAL: 0,
+            GraphPriority.HIGH: 1,
+            GraphPriority.MEDIUM: 2,
+            GraphPriority.LOW: 3
+        }
+        
+        return sorted(enabled, key=lambda m: priority_order.get(m.priority, 99))
     
     def get_by_category(self, category: str) -> List[GraphMetadata]:
         """Get all graphs in a specific category."""
@@ -183,7 +198,9 @@ class GraphCatalog:
         """Load default graph registry with placeholder functions."""
         # Import placeholder functions (will be defined in plotly_graphs.py)
         from h2_plant.visualization import plotly_graphs as pg
+        from h2_plant.visualization import static_graphs as sg
         
+        # --- PLOTLY GRAPHS ---
         # Production & Performance
         self.register(GraphMetadata(
             graph_id='pem_h2_production_over_time',
@@ -394,6 +411,355 @@ class GraphCatalog:
             category='storage',
             enabled=False
         ))
+
+        # --- MATPLOTLIB GRAPHS (Merged from plotter.py) ---
+        self.register(GraphMetadata(
+            graph_id='dispatch',
+            title='Power Dispatch',
+            description='Stacked power consumption and grid sales',
+            function=sg.create_dispatch_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='arbitrage',
+            title='Price Scenario',
+            description='Spot prices, PPA, and H2 breakeven',
+            function=sg.create_arbitrage_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='h2_production',
+            title='H2 Production Rate',
+            description='Hydrogen production rates by source',
+            function=sg.create_h2_production_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='oxygen_production',
+            title='O2 Production',
+            description='Oxygen co-production rates',
+            function=sg.create_oxygen_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.LOW,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='water_consumption',
+            title='Water Consumption',
+            description='Total water usage including losses',
+            function=sg.create_water_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='energy_pie',
+            title='Energy Distribution',
+            description='Donut chart of energy breakdown',
+            function=sg.create_energy_pie_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.LOW,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='price_histogram',
+            title='Price Histogram',
+            description='Distribution of spot prices',
+            function=sg.create_histogram_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.LOW,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='dispatch_curve',
+            title='Dispatch Curve',
+            description='H2 output vs power input scatter',
+            function=sg.create_dispatch_curve_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.LOW,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='cumulative_h2',
+            title='Cumulative H2',
+            description='Total hydrogen produced over time',
+            function=sg.create_cumulative_h2_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='cumulative_energy',
+            title='Cumulative Energy',
+            description='Total energy consumed and sold',
+            function=sg.create_cumulative_energy_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='efficiency_curve',
+            title='Efficiency Curve',
+            description='System efficiency (LHV) over time',
+            function=sg.create_efficiency_curve_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='revenue_analysis',
+            title='Revenue Analysis',
+            description='Grid revenue vs H2 value comparison',
+            function=sg.create_revenue_analysis_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='legacy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='temporal_averages',
+            title='Temporal Averages',
+            description='Hourly aggregated price, power, H2 data',
+            function=sg.create_temporal_averages_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='legacy',
+            enabled=True
+        ))
+        
+        # Thermal & Separation (Static)
+        self.register(GraphMetadata(
+            graph_id='chiller_cooling',
+            title='Chiller Cooling Load',
+            description='Cooling load and electrical consumption',
+            function=sg.create_chiller_cooling_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='coalescer_separation',
+            title='Coalescer Separation',
+            description='Pressure drop and liquid removal',
+            function=sg.create_coalescer_separation_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='kod_separation',
+            title='Knock-Out Drum',
+            description='Gas density, velocity, and liquid drainage',
+            function=sg.create_kod_separation_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='dry_cooler_performance',
+            title='Dry Cooler Performance',
+            description='Heat rejection, fan power, and outlet temperature',
+            function=sg.create_dry_cooler_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='water_removal_total',
+            title='Total Water Removal',
+            description='Total liquid water removed by each separation component',
+            function=sg.create_water_removal_total_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='drains_discarded',
+            title='Discarded Drains Overview',
+            description='Multi-panel overview of discarded drain properties (Mass, T, P)',
+            function=sg.create_drains_discarded_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='individual_drains',
+            title='Individual Drain Properties',
+            description='Mass Flow, T, P for each drain - plot_drenos_individuais',
+            function=sg.create_individual_drains_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='dissolved_gas_concentration',
+            title='Dissolved Gas Concentration',
+            description='PPM (mg/kg) of dissolved gas in drains - plot_concentracao_dreno',
+            function=sg.create_dissolved_gas_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='crossover_impurities',
+            title='Crossover Impurities',
+            description='O2 in H2 / H2 in O2 tracking (ppm molar) - plot_impurezas_crossover',
+            function=sg.create_crossover_impurities_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='quality',
+            enabled=True
+        ))
+        
+        # Profile Plot (New - Process Train)
+        self.register(GraphMetadata(
+            graph_id='process_train_profile',
+            title='Process Train Profile',
+            description='Temperature, Entropy, Enthalpy profile along the train',
+            function=sg.create_process_train_profile_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['profile_data'],
+            priority=GraphPriority.CRITICAL,
+            category='profile',
+            enabled=True
+        ))
+        # Energy & Thermal Analysis (From Plots.csv)
+        self.register(GraphMetadata(
+            graph_id='energy_flows',
+            title='Energy Flows & Consumption',
+            description='Heat (Q) and Work (W) by component - plot_fluxos_energia',
+            function=sg.create_energy_flows_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='energy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='q_breakdown',
+            title='Thermal Load Breakdown',
+            description='Cooling load by component - plot_q_breakdown',
+            function=sg.create_thermal_load_breakdown_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='mixer_comparison',
+            title='Drain Mixer Comparison',
+            description='Mixer T/P/Flow properties - plot_drenos_mixer',
+            function=sg.create_mixer_comparison_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='deoxo_profile',
+            title='Deoxo Reactor Profile',
+            description='Temperature and Conversion along reactor length - plot_deoxo_perfil',
+            function=sg.create_deoxo_profile_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['deoxo_profiles'], # Custom marker
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='drain_line_properties',
+            title='Drain Line Properties',
+            description='Mixed drain stream properties (Mass, T, P) - plot_propriedades_linha_dreno',
+            function=sg.create_drain_line_properties_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='drain_line_concentration',
+            title='Drain Line Concentration',
+            description='Dissolved gas PPM in drain line - plot_concentracao_linha_dreno',
+            function=sg.create_drain_concentration_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='recirculation_comparison',
+            title='Recirculation Comparison',
+            description='Water recovery vs recirculation properties - plot_recirculacao_mixer',
+            function=sg.create_recirculation_comparison_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='entrained_liquid_flow',
+            title='Entrained Liquid Flow',
+            description='Liquid carryover in gas streams - plot_vazao_liquida_acompanhante',
+            function=sg.create_entrained_liquid_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+
         
         logger.info(f"Loaded {len(self._registry)} default graphs")
 

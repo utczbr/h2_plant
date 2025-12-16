@@ -271,7 +271,8 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             soec_h2_kwh_kg=soec_kwh_kg,
             pem_h2_kwh_kg=pem_kwh_kg,
             ppa_price_eur_mwh=getattr(self._context.economics, 'ppa_price_eur_mwh', 50.0),
-            h2_price_eur_kg=getattr(self._context.economics, 'h2_price_eur_kg', 9.6)
+            h2_price_eur_kg=getattr(self._context.economics, 'h2_price_eur_kg', 9.6),
+            arbitrage_threshold_eur_mwh=getattr(self._context.economics, 'arbitrage_threshold_eur_mwh', None)
         )
 
         d_state = DispatchState(

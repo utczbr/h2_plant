@@ -1,3 +1,7 @@
 h2_price_eur_kg: 9.6
 ppa_price_eur_mwh: 50.0
 arbitrage_enabled: true
+
+# Optional: Set explicit threshold (EUR/MWh). If set, overrides calculated threshold.
+# Calculated default: PPA + (1000/η) × H2_price ≈ 306 EUR/MWh for SOEC
+# arbitrage_threshold_eur_mwh: 300.0

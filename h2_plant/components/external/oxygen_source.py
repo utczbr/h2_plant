@@ -189,10 +189,28 @@ class ExternalOxygenSource(Component):
         if 'composition' in config:
             self.composition = config['composition']
         else:
-            o2 = float(config.get('o2_purity', self.DEFAULTS['o2_purity']))
-            h2o = float(config.get('h2o_impurity', self.DEFAULTS['h2o_impurity']))
-            h2 = float(config.get('h2_impurity', self.DEFAULTS['h2_impurity']))
-            self.composition = {'O2': o2, 'H2O': h2o, 'H2': h2}
+            # Inputs are molar fractions (purity/impurity)
+            y_o2 = float(config.get('o2_purity', self.DEFAULTS['o2_purity']))
+            y_h2o = float(config.get('h2o_impurity', self.DEFAULTS['h2o_impurity']))
+            y_h2 = float(config.get('h2_impurity', self.DEFAULTS['h2_impurity']))
+            
+            # Convert Molar -> Mass Fractions
+            from h2_plant.core.constants import GasConstants
+            MW = {s: GasConstants.SPECIES_DATA[s]['molecular_weight'] for s in ['O2', 'H2O', 'H2']}
+            
+            w_o2 = y_o2 * MW['O2']
+            w_h2o = y_h2o * MW['H2O']
+            w_h2 = y_h2 * MW['H2']
+            w_total = w_o2 + w_h2o + w_h2
+            
+            if w_total > 0:
+                self.composition = {
+                    'O2': w_o2 / w_total,
+                    'H2O': w_h2o / w_total,
+                    'H2': w_h2 / w_total
+                }
+            else:
+                self.composition = {'O2': 1.0}
         
         self.phase = config.get('phase', self.DEFAULTS['phase'])
         self.enthalpy_kj_kg = config.get('enthalpy_kj_kg', None)
@@ -285,5 +303,7 @@ class ExternalOxygenSource(Component):
             'temperature_k': self.temperature_k,
             'pressure_bar': self.pressure_pa / 1e5,
             'o2_output_kg': self.o2_output_kg,
-            'cumulative_o2_kg': self.cumulative_o2_kg
+            'cumulative_o2_kg': self.cumulative_o2_kg,
+            # Molar impurities
+            'h2_impurity_ppm_mol': (Stream(mass_flow_kg_h=1, composition=self.composition).get_mole_frac('H2') * 1e6)
         }

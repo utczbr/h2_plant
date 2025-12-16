@@ -29,9 +29,9 @@ class TestCoalescerPhysics:
         
         coalescer.receive_input('inlet', inlet)
         
-        # ΔP should be small for clean filter (< 0.01 bar typically)
+        # ΔP should be around 0.15-0.20 bar for calibrated K_PERDA (legacy model)
         assert coalescer.current_delta_p_bar > 0
-        assert coalescer.current_delta_p_bar < 0.1  # Sanity check
+        assert coalescer.current_delta_p_bar < 0.25  # Sanity check, legacy ~0.15 bar
         
     def test_pressure_drop_o2_nominal(self):
         """Verify O2 stream uses different viscosity reference."""
@@ -93,7 +93,7 @@ class TestCoalescerSeparation:
     """Test liquid removal efficiency."""
     
     def test_liquid_removal_efficiency(self):
-        """Verify 99.99% liquid water removal."""
+        """Verify 98% liquid water removal (legacy modelo_coalescedor.py)."""
         coalescer = Coalescer()
         coalescer.initialize(dt=1.0, registry=None)
         
@@ -110,12 +110,13 @@ class TestCoalescerSeparation:
         drain = coalescer.get_output('drain')
         
         # Inlet liquid = 100 * 0.01 = 1.0 kg/h
-        # Removed = 1.0 * 0.9999 = 0.9999 kg/h
-        assert drain.mass_flow_kg_h == pytest.approx(0.9999, rel=1e-4)
+        # Removed = 1.0 * 0.98 = 0.98 kg/h (legacy 98% efficiency)
+        # Plus small amount of dissolved gas
+        assert drain.mass_flow_kg_h == pytest.approx(0.98, rel=0.01)  # Allow 1% for dissolved gas
         
-        # Remaining liquid = 0.0001 kg/h
+        # Remaining liquid = 0.02 kg/h
         remaining = outlet.mass_flow_kg_h * outlet.composition.get('H2O_liq', 0)
-        assert remaining == pytest.approx(0.0001, rel=0.05)  # 5% tolerance for normalization
+        assert remaining == pytest.approx(0.02, rel=0.1)  # 10% tolerance for normalization
         
     def test_mass_balance(self):
         """Verify inlet = outlet + drain."""
@@ -173,8 +174,8 @@ class TestCoalescerInterface:
         
         state = coalescer.get_state()
         
-        # 0.9999 kg/h * 3 hours = 2.9997 kg
-        assert state['total_liquid_removed_kg'] == pytest.approx(2.9997, rel=1e-3)
+        # 0.98 kg/h * 3 hours = 2.94 kg (using 98% efficiency)
+        assert state['total_liquid_removed_kg'] == pytest.approx(2.94, rel=1e-2)
         
     def test_zero_flow(self):
         """Verify handling of zero inlet flow."""

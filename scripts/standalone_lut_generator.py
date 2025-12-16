@@ -73,7 +73,7 @@ def worker_compute_chunk(fluid: str, output: str, name1: str, val1_chunk: np.nda
 # Configuration
 # ==========================================
 
-PropertyType = Literal['D', 'H', 'S', 'C']
+PropertyType = Literal['D', 'H', 'S', 'C', 'Z']
 
 @dataclass
 class LUTConfig:
@@ -101,7 +101,7 @@ class LUTConfig:
     saturation_points: int = 10000        # 1D saturation curve (High Res)
     
     # Properties to pre-compute
-    properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C')
+    properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C', 'Z')
     
     # Fluids to support
     fluids: Tuple[str, ...] = ('H2', 'O2', 'H2O', 'N2', 'CO2', 'CH4')
@@ -321,6 +321,6 @@ if __name__ == "__main__":
     config = LUTConfig()
     generator = StandaloneGenerator(config)
     # Generate ONLY saturation LUT to save time/space since others exist
-    generator.generate_all(skip_fluids=True)
+    generator.generate_all(skip_fluids=False)
     
     print("\nGeneration Complete.")

@@ -86,7 +86,7 @@ nodes:
     type: "HeatExchanger"
     params:
       max_heat_removal_kw: 50.0  # per Key Parameters Table
-      target_outlet_temp_c: 25.0 # per Key Parameters Table
+      target_outlet_temp_c: 40.0 # per Key Parameters Table
     connections:
       - source_port: "h2_out"
         target_name: "Deoxo1"

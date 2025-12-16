@@ -309,6 +309,20 @@ class WaterMixer(Component):
         # Mixed enthalpy
         h_out_kJ_kg = total_energy_in / total_mass_in
 
+        # Composition Mixing (Mass Weighted)
+        mixed_composition = {}
+        for stream in active_streams:
+            m_stream = stream.mass_flow_kg_h
+            for species, frac in stream.composition.items():
+                mixed_composition[species] = mixed_composition.get(species, 0.0) + (frac * m_stream)
+        
+        # Normalize by total mass
+        total_mass_h = total_mass_in * 3600.0
+        if total_mass_h > 0:
+             mixed_composition = {k: v / total_mass_h for k, v in mixed_composition.items()}
+        else:
+             mixed_composition = {'H2O': 1.0}
+
         # Inverse lookup: T from (H, P)
         h_out_J_kg = h_out_kJ_kg * 1000.0
         P_out_Pa = self.outlet_pressure_pa
@@ -342,7 +356,7 @@ class WaterMixer(Component):
             mass_flow_kg_h=total_mass_in * 3600.0,
             temperature_k=T_out_K,
             pressure_pa=P_out_Pa,
-            composition={'H2O': 1.0},
+            composition=mixed_composition,
             phase='liquid'
         )
 
@@ -359,8 +373,19 @@ class WaterMixer(Component):
                 - outlet_mass_flow_kg_h (float): Mixed outlet flow rate.
                 - outlet_temperature_k (float): Mixed outlet temperature.
                 - outlet_enthalpy_j_kg (float): Mixed outlet specific enthalpy.
+                - dissolved_gas_ppm (float): Concentration of non-water species.
         """
         num_inlets = len([s for s in self.inlet_streams.values() if s is not None])
+        
+        # Calculate PPM
+        ppm = 0.0
+        if self.outlet_stream:
+            # Sum all non-water species
+            non_water_mass_frac = sum(
+                frac for sp, frac in self.outlet_stream.composition.items() 
+                if sp not in ('H2O', 'H2O_liq')
+            )
+            ppm = non_water_mass_frac * 1e6
 
         return {
             **super().get_state(),
@@ -373,6 +398,7 @@ class WaterMixer(Component):
             'outlet_temperature_c': float(self.last_temperature_k - 273.15),
             'outlet_enthalpy_j_kg': float(self.last_enthalpy_j_kg),
             'outlet_enthalpy_kj_kg': float(self.last_enthalpy_j_kg / 1000.0),
+            'dissolved_gas_ppm': float(ppm)
         }
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:

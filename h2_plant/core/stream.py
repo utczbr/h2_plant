@@ -24,6 +24,7 @@ class Stream:
     pressure_pa: float = StandardConditions.PRESSURE_PA
     composition: Dict[str, float] = field(default_factory=lambda: {'H2': 1.0})
     phase: str = 'gas'  # 'gas', 'liquid', 'mixed'
+    extra: Dict[str, float] = field(default_factory=dict)
     
     def __post_init__(self):
         """Validate composition."""
@@ -32,6 +33,37 @@ class Stream:
             # Normalize if not summing to 1 (unless empty)
             for k in self.composition:
                 self.composition[k] /= total_fraction
+
+    @property
+    def entrained_liq_kg_s(self) -> float:
+        """Entrained H2O liquid carryover (kg/s); 0 if pure vapor/gas."""
+        return self.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+
+    @property
+    def mole_fractions(self) -> Dict[str, float]:
+        """
+        Compute mole fractions from mass fractions.
+        y_i = (x_i / MW_i) / sum(x_j / MW_j)
+        """
+        moles_rel = {}
+        total_moles = 0.0
+        
+        for s, mass_frac in self.composition.items():
+            if mass_frac <= 0:
+                continue
+            mw = GasConstants.SPECIES_DATA.get(s, {}).get('molecular_weight', 28.0) # Default to N2 if unknown
+            moles = mass_frac / mw
+            moles_rel[s] = moles
+            total_moles += moles
+            
+        if total_moles <= 0:
+            return {}
+            
+        return {s: m / total_moles for s, m in moles_rel.items()}
+
+    def get_mole_frac(self, species: str) -> float:
+        """Helper to get mole fraction of a specific species."""
+        return self.mole_fractions.get(species, 0.0)
 
     @property
     def specific_enthalpy_j_kg(self) -> float:
@@ -59,21 +91,91 @@ class Stream:
                             C * t**3 / 3 + 
                             D * t**4 / 4 - 
                             E / t) 
-                # Wait, Shomate equation usually gives J/mol/K for Cp, so integral is J/mol.
-                # Need to convert to J/kg.
-                # Let's verify units. Standard NIST Shomate gives J/mol*K.
-                # So result is J/mol. Divide by MW (g/mol) -> J/g -> *1000 -> J/kg.
-                # Actually GasConstants usually stores MW in g/mol.
-                
-                # Correction: GasConstants.SPECIES_DATA usually has MW in g/mol.
-                # Result of integral is J/mol.
-                # J/mol / (g/mol) = J/g.
-                # J/g * 1000 = J/kg.
                 
                 h_species_j_kg = (integral_cp(self.temperature_k) - integral_cp(t_ref)) * 1000.0 / data['molecular_weight']
                 h_total += fraction * h_species_j_kg
                 
         return h_total
+
+    @property
+    def specific_entropy_j_kgK(self) -> float:
+        """
+        Calculate specific entropy (J/kg·K) relative to reference state (298.15K, 1 atm).
+        Includes mixing entropy term.
+        
+        s_mix_molar = sum(yi * s_i_molar(T, P)) - R * sum(yi * ln(yi))
+        Where s_i_molar(T, P) = s_i_standard(T) - R * ln(P/Pref)
+        
+        Final s_specific = s_mix_molar / M_mix
+        """
+        if self.mass_flow_kg_h <= 0:
+            return 0.0
+
+        t_calc = max(self.temperature_k, 1.0)
+        t_ref = StandardConditions.TEMPERATURE_K
+        p_ref = StandardConditions.PRESSURE_PA
+        r_gas = GasConstants.R_UNIVERSAL_J_PER_MOL_K
+        
+        # 1. Calculate Mole Fractions and M_mix
+        moles_relative = {}
+        total_moles_rel = 0.0
+        
+        # Identify valid species
+        valid_species = []
+        for species, mass_frac in self.composition.items():
+            if mass_frac > 0 and species in GasConstants.SPECIES_DATA:
+                mw = GasConstants.SPECIES_DATA[species]['molecular_weight'] # g/mol
+                moles = mass_frac / mw
+                moles_relative[species] = moles
+                total_moles_rel += moles
+                valid_species.append(species)
+        
+        if total_moles_rel <= 0:
+            return 0.0
+            
+        m_mix_g_mol = 1.0 / total_moles_rel
+        
+        # 2. Calculate Molar Entropy
+        s_mix_molar = 0.0
+        
+        # Pressure correction term (ideal gas: -R ln(P/Pref)) applies to all
+        
+        pressure_term = -r_gas * np.log(self.pressure_pa / p_ref)
+        mix_term = 0.0
+        standard_term = 0.0
+        
+        for species in valid_species:
+            yi = moles_relative[species] / total_moles_rel
+            data = GasConstants.SPECIES_DATA[species]
+            coeffs = data.get('cp_coeffs', [0, 0, 0, 0, 0])
+            A, B, C, D, E = coeffs
+            
+            # Integral Cp/T dT from Tref to T
+            # Cp/T = A/T + B + C*T + D*T^2 + E/T^3
+            # Int = A ln(T) + B*T + C*T^2/2 + D*T^3/3 - E/(2*T^2)
+            def integral_cp_t(t):
+                return (A * np.log(t) + 
+                        B * t + 
+                        C * t**2 / 2 + 
+                        D * t**3 / 3 - 
+                        E / (2 * t**2))
+            
+            ds_standard = integral_cp_t(t_calc) - integral_cp_t(t_ref)
+            
+            standard_term += yi * ds_standard
+            mix_term -= yi * np.log(yi) # - sum yi ln yi
+
+        # Total Molar Entropy (J/mol·K)
+        # Note: We are calculating DELTA S from reference T_ref, P_ref.
+        # Absolute entropy would need S_ref values. 
+        # For trend plotting, Delta S is fine.
+        s_molar_total = standard_term + pressure_term + (r_gas * mix_term)
+        
+        # Convert to specific entropy (J/kg·K)
+        # J/mol·K / (g/mol / 1000) = J/kg·K
+        s_specific = s_molar_total * 1000.0 / m_mix_g_mol
+        
+        return s_specific
 
     @property
     def density_kg_m3(self) -> float:
@@ -84,13 +186,16 @@ class Stream:
         if self.phase == 'liquid':
             # Attempt LUTManager lookup for accurate water density
             try:
-                from h2_plant.core.component_registry import ComponentRegistry
-                registry = ComponentRegistry.get_instance() if hasattr(ComponentRegistry, 'get_instance') else None
-                if registry:
-                    lut_mgr = registry.get('LUT_MANAGER')
-                    if lut_mgr and 'H2O' in self.composition:
-                        # Lookup water density at T, P
-                        return lut_mgr.lookup('Water', 'D', self.pressure_pa, self.temperature_k)
+                try:
+                    from h2_plant.core.component_registry import ComponentRegistry
+                    registry = ComponentRegistry.get_instance() if hasattr(ComponentRegistry, 'get_instance') else None
+                    if registry:
+                        lut_mgr = registry.get('LUT_MANAGER')
+                        if lut_mgr and 'H2O' in self.composition:
+                            # Lookup water density at T, P
+                            return lut_mgr.lookup('Water', 'D', self.pressure_pa, self.temperature_k)
+                except ImportError:
+                     pass # Registry not available (standalone mode)
             except Exception:
                 pass  # Fallback to hardcoded value
             
@@ -142,6 +247,14 @@ class Stream:
             m2 = other.mass_flow_kg_h * other.composition.get(s, 0.0)
             new_comp[s] = (m1 + m2) / total_mass
             
+        # Extra (metadata) mixing - weighted average
+        new_extra = {}
+        all_extra = set(self.extra.keys()) | set(other.extra.keys())
+        for k in all_extra:
+             v1 = self.extra.get(k, 0.0) * self.mass_flow_kg_h
+             v2 = other.extra.get(k, 0.0) * other.mass_flow_kg_h
+             new_extra[k] = (v1 + v2) / total_mass
+            
         # Enthalpy conservation
         # H_mix = H1 + H2
         # m_mix * h_mix = m1 * h1 + m2 * h2
@@ -183,7 +296,8 @@ class Stream:
             temperature_k=t_mix,
             pressure_pa=final_pressure,
             composition=new_comp,
-            phase=self.phase # Assume phase matches for now
+            phase=self.phase, # Assume phase matches for now
+            extra=new_extra
         )
 
     def compress_isentropic(self, outlet_pressure_pa: float, isentropic_efficiency: float) -> Tuple['Stream', float]:

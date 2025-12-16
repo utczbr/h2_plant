@@ -109,9 +109,18 @@ class Coalescer(Component):
         # Pre-calculate geometric constant
         self.area_shell = (math.pi / 4) * (self.d_shell ** 2)
 
+        # Molar mass of primary gas (kg/mol) for rho_mix calculation
+        if gas_type == 'H2':
+            self.M_gas = CoalescerConstants.M_H2
+        elif gas_type == 'O2':
+            self.M_gas = CoalescerConstants.M_O2
+        else:
+            self.M_gas = CoalescerConstants.M_H2  # Default to H2
+
         # State variables
         self.pressure_drop_bar = 0.0
         self.total_liquid_removed_kg: float = 0.0
+        self.total_drain_removed_kg: float = 0.0  # Cumulative drain (liquid + dissolved gas)
         self.current_delta_p_bar: float = 0.0
         self.current_power_loss_w: float = 0.0
         self.output_stream: Optional[Stream] = None
@@ -132,6 +141,7 @@ class Coalescer(Component):
         """
         super().initialize(dt, registry)
         self.total_liquid_removed_kg = 0.0
+        self.total_drain_removed_kg = 0.0
         self._step_liq_removed = 0.0
         self._step_gas_dissolved = 0.0
 
@@ -218,8 +228,32 @@ class Coalescer(Component):
         t_ratio = in_stream.temperature_k / CoalescerConstants.T_REF_K
         mu_g = mu_ref * (t_ratio ** 0.7)
 
-        # Calculate Density
-        rho_mix = in_stream.density_kg_m3
+        # Calculate Mixture Density using modelo_coalescedor.py formula
+        # rho_mix = (P * M_avg) / (Z * R * T)
+        y_H2O_vapor = in_stream.composition.get('H2O', 0.0)  # Mass fraction vapor water
+        h2o_liq_frac = in_stream.composition.get('H2O_liq', 0.0)
+        y_gas_resto = 1.0 - y_H2O_vapor - h2o_liq_frac  # Mass fraction of primary gas
+        
+        # Average molar mass of gas phase (kg/mol)
+        M_avg = y_gas_resto * self.M_gas + y_H2O_vapor * CoalescerConstants.M_H2O
+        
+        # Get compressibility factor Z from LUT or fallback to Z=1 (ideal gas)
+        R_UNIV = 8.31446  # J/(mol·K)
+        Z = 1.0  # Default ideal gas assumption
+        if hasattr(self, 'registry') and self.registry is not None:
+            try:
+                lut_manager = self.registry.get('lut_manager')
+                if lut_manager is not None:
+                    Z = lut_manager.lookup(self.gas_type, 'Z', in_stream.pressure_pa, in_stream.temperature_k)
+            except Exception:
+                pass  # Use Z=1 fallback
+        
+        # Compute mixture density via equation of state
+        if in_stream.temperature_k > 0 and M_avg > 0:
+            rho_mix = (in_stream.pressure_pa * M_avg) / (Z * R_UNIV * in_stream.temperature_k)
+        else:
+            rho_mix = in_stream.density_kg_m3  # Fallback to stream property
+        
         if rho_mix <= 0:
             self._reset_outputs()
             return 0.0
@@ -238,18 +272,19 @@ class Coalescer(Component):
         self.current_delta_p_bar = delta_p_pa * ConversionFactors.PA_TO_BAR
         self.current_power_loss_w = q_v_m3_s * delta_p_pa
 
-        # Perform Liquid Separation
-        h2o_liq_frac = in_stream.composition.get('H2O_liq', 0.0)
+        # Perform Liquid Separation (note: h2o_liq_frac already extracted above for rho_mix)
         m_dot_liq_in = in_stream.mass_flow_kg_h * h2o_liq_frac
 
         m_dot_liq_removed = m_dot_liq_in * CoalescerConstants.ETA_LIQUID_REMOVAL
         m_dot_liq_remaining = m_dot_liq_in - m_dot_liq_removed
         
-        # Calculate Dissolved Gas Loss (Henry's Law)
-        # Justification: High pressure increases gas solubility in condensate
+        # Calculate Dissolved Gas Loss (Henry's Law with partial pressure)
+        # Justification: modelo_coalescedor.py uses p_gas = P_total * (1 - y_H2O)
+        y_gas_approx = 1.0 - y_H2O_vapor
+        p_gas_pa = in_stream.pressure_pa * y_gas_approx
         solubility_mg_kg = self._calculate_dissolved_gas(
             in_stream.temperature_k, 
-            in_stream.pressure_pa, 
+            p_gas_pa,  # Use partial pressure, not total
             self.gas_type
         )
         
@@ -260,15 +295,23 @@ class Coalescer(Component):
         out_mass = in_stream.mass_flow_kg_h - m_dot_liq_removed - m_dot_gas_dissolved
         out_pressure = max(in_stream.pressure_pa - delta_p_pa, 1e4)
 
-        # Update Composition
+        # Update Composition with cleanup and validation
         new_comp = in_stream.composition.copy()
-        if out_mass > 0 and h2o_liq_frac > 0:
-            new_comp['H2O_liq'] = m_dot_liq_remaining / out_mass
+        if out_mass > 0:
+            liq_frac_new = m_dot_liq_remaining / out_mass
+            # Remove H2O_liq key if negligible to avoid floating-point dust
+            if liq_frac_new < 1e-9:
+                new_comp.pop('H2O_liq', None)
+            else:
+                new_comp['H2O_liq'] = liq_frac_new
+            
             # Renormalize composition
             total_frac = sum(new_comp.values())
             if total_frac > 0:
-                for k in new_comp:
-                    new_comp[k] /= total_frac
+                new_comp = {k: v / total_frac for k, v in new_comp.items()}
+            
+            # Validate normalization
+            assert abs(sum(new_comp.values()) - 1.0) < 1e-6, "Composition not normalized"
 
         self.output_stream = Stream(
             mass_flow_kg_h=out_mass,
@@ -327,6 +370,8 @@ class Coalescer(Component):
         super().step(t)
         # Integrate removed liquid flow over timestep to get total mass
         self.total_liquid_removed_kg += self._step_liq_removed * self.dt
+        # Integrate total drain (liquid + dissolved gas) for mass balance tracking
+        self.total_drain_removed_kg += (self._step_liq_removed + self._step_gas_dissolved) * self.dt
         self._step_liq_removed = 0.0
 
     def get_output(self, port_name: str) -> Any:
@@ -385,9 +430,15 @@ class Coalescer(Component):
             "l_elem_m": self.l_elem,
             "gas_type": self.gas_type,
             "total_liquid_removed_kg": self.total_liquid_removed_kg,
+            "total_drain_removed_kg": self.total_drain_removed_kg,
+            "step_gas_dissolved_kg_h": self._step_gas_dissolved,  # Expose for loss tracking
             "delta_p_bar": self.current_delta_p_bar,
             "power_loss_w": self.current_power_loss_w,
             "outlet_flow_kg_h": self.output_stream.mass_flow_kg_h if self.output_stream else 0.0,
-            "drain_flow_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0
+            "drain_flow_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0,
+            "drain_temp_k": self.drain_stream.temperature_k if self.drain_stream else 0.0,
+            "drain_pressure_bar": self.drain_stream.pressure_pa / 1e5 if self.drain_stream else 0.0,
+            "dissolved_gas_ppm": (self._step_gas_dissolved / (self.drain_stream.mass_flow_kg_h * self.dt) * 1e6) 
+                                 if (self.drain_stream and self.drain_stream.mass_flow_kg_h > 0) else 0.0
         })
         return state
