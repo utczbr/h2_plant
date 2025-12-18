@@ -65,6 +65,62 @@ class Stream:
         """Helper to get mole fraction of a specific species."""
         return self.mole_fractions.get(species, 0.0)
 
+    def get_total_mole_frac(self, species: str) -> float:
+        """
+        Get mole fraction including extra liquid water in total moles.
+        
+        This matches the calculation used in the Stream Summary Table,
+        which includes entrained liquid water from the 'extra' dict.
+        
+        Args:
+            species: Species name (e.g., 'O2', 'H2', 'H2O')
+            
+        Returns:
+            Mole fraction of the species including all water in denominator.
+        """
+        # Molecular weights (g/mol)
+        MW_H2 = 2.016
+        MW_H2O = 18.015
+        MW_O2 = 32.0
+        
+        m_dot_main = self.mass_flow_kg_h
+        if m_dot_main <= 0:
+            return 0.0
+        
+        # Mass of each species (kg/h)
+        m_h2 = self.composition.get('H2', 0.0) * m_dot_main
+        m_o2 = self.composition.get('O2', 0.0) * m_dot_main
+        
+        # Water: vapor + liquid (from composition) + extra liquid
+        m_h2o_vapor = self.composition.get('H2O', 0.0) * m_dot_main
+        m_h2o_liq_comp = self.composition.get('H2O_liq', 0.0) * m_dot_main
+        
+        # Extra liquid water (convert kg/s to kg/h)
+        m_dot_extra_liq = self.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+        
+        # Total water: ALWAYS include all sources (vapor + composition liquid + extra liquid)
+        m_h2o_total = m_h2o_vapor + m_h2o_liq_comp + m_dot_extra_liq
+        
+        # Convert to moles
+        n_h2 = m_h2 / MW_H2
+        n_h2o = m_h2o_total / MW_H2O
+        n_o2 = m_o2 / MW_O2
+        n_total = n_h2 + n_h2o + n_o2
+        
+        if n_total <= 0:
+            return 0.0
+        
+        # Return mole fraction of requested species
+        if species == 'H2':
+            return n_h2 / n_total
+        elif species == 'O2':
+            return n_o2 / n_total
+        elif species in ('H2O', 'H2O_liq'):
+            return n_h2o / n_total
+        else:
+            # Fallback to the basic mole_fractions for other species
+            return self.mole_fractions.get(species, 0.0)
+
     @property
     def specific_enthalpy_j_kg(self) -> float:
         """

@@ -6,12 +6,12 @@ nodes:
   - id: "H2_Source"
     type: "H2Source"
     params:
-      mass_flow_kg_h: 93.3  # Legacy: 0.02591 kg/s × 3600
-      pressure_bar: 40.0     # Legacy inlet
-      temperature_c: 60.0    # Legacy inlet
-      h2_purity: 0.9417      # Adjusted for new O2 mass fraction
-      o2_impurity: 0.00316   # ~3160 ppm mass → ~199 ppm molar (M_O2/M_H2=15.87)
-      h2o_impurity: 0.0549   # 5.49% (Legacy value)
+      mass_flow_kg_h: 93.3  #0.02591 kg/s × 3600
+      pressure_bar: 40.0     
+      temperature_c: 60.0    
+      h2_purity: 0.999583      
+      o2_impurity: 0.000199   
+      h2o_impurity: 0.000218   
     connections:
       - source_port: "h2_out"
         target_name: "KOD_1"
@@ -95,7 +95,47 @@ nodes:
     type: "DeoxoReactor"
     params: {}
     connections:
-      - source_port: "outlet"
+      - source_port: "outlet" # Correct Deoxo output port name
+        target_name: "Chiller_2"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  #== Chiller 2 (Deep cooling to 4°C = 277.15 K) ===
+  - id: "Chiller_2"
+    type: "Chiller"
+    params:
+      target_temp_k: 277.15
+      cooling_capacity_kw: 100.0
+      cop: 4.0
+      pressure_drop_bar: 0.0  # Legacy Chiller has no pressure drop
+    connections:
+      - source_port: "fluid_out"
+        target_name: "KOD_3"
+        target_port: "gas_inlet"
+        resource_type: "gas"
+    
+
+  # === Knock-Out Drum 3 (Secondary water separation after chilling) ===
+  - id: "KOD_3"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05  # Legacy: 0.05 bar
+      gas_species: "H2"
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "HeatExchanger_2"
+        target_port: "h2_in"
+        resource_type: "stream"
+
+  # === Heat Exchanger 2 (Final cooling to 4°C = 277.15 K) ===
+  - id: "HeatExchanger_2"
+    type: "HeatExchanger"
+    params: 
+      max_heat_removal_kw: 100.0
+      target_outlet_temp_c: 30.0  # ← Use Celsius (40°C = 313.15K)
+    connections:
+      - source_port: "h2_out"
         target_name: "PSA_1"
         target_port: "gas_in"
         resource_type: "gas"
@@ -108,9 +148,9 @@ nodes:
       recovery_rate: 0.90
       power_consumption_kw: 10.0
     connections: 
-      - source_port: "outlet"
+      - source_port: "purified_gas_out"
         target_name: "Compressor_1"
-        target_port: "gas_in"
+        target_port: "h2_in"
         resource_type: "gas"
 
   # === Compressor (initial Compressor to 70 bar) ===

@@ -37,6 +37,43 @@ logger = logging.getLogger("ScenarioRunner")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Molecular weights (kg/mol)
+MW_SPECIES = {
+    'H2': 2.016e-3,
+    'O2': 32.0e-3,
+    'H2O': 18.015e-3,
+    'H2O_liq': 18.015e-3,
+    'N2': 28.0e-3,
+    'CO2': 44.0e-3,
+    'CH4': 16.0e-3,
+}
+
+def mass_frac_to_mole_frac(composition: dict) -> dict:
+    """
+    Convert mass fractions to mole fractions.
+    
+    Args:
+        composition: Dictionary of {species: mass_fraction}
+        
+    Returns:
+        Dictionary of {species: mole_fraction}
+    """
+    # Calculate relative moles: n_i = x_i / M_i
+    n_species = {}
+    n_total = 0.0
+    for species, mass_frac in composition.items():
+        mw = MW_SPECIES.get(species, 28.0e-3)  # Default to N2 MW for unknowns
+        if mass_frac > 0 and mw > 0:
+            n = mass_frac / mw
+            n_species[species] = n
+            n_total += n
+    
+    # Convert to mole fractions
+    if n_total > 0:
+        return {s: n / n_total for s, n in n_species.items()}
+    return composition.copy()
+
+
 def load_enabled_graphs() -> list:
     """
     Load visualization configuration and return list of enabled graph IDs.
@@ -134,109 +171,92 @@ def run_scenario(scenario: dict) -> dict:
     )
     total_steps = len(prices)
     
-    # 5. Create Dispatch Strategy (for stream summary printing)
+    # 5. Create Dispatch Strategy
     dispatch_strategy = HybridArbitrageEngineStrategy()
+
+    # 6. Create and Configure SimulationEngine
+    output_path = Path(BASE_DIR) / f"simulation_output/{name}"
     
-    # 7. Create SimulationEngine
-    engine_config = {
-        'simulation': {
-            'timestep_hours': context.simulation.timestep_hours,
-            'duration_hours': hours,
-            'start_hour': context.simulation.start_hour,
-        }
-    }
+    # Import ConnectionConfig for proper object construction
+    from h2_plant.config.plant_config import ConnectionConfig, IndexedConnectionConfig
     
-    class MinimalPlant:
-        """Adapter to provide plant interface for SimulationEngine."""
-        def __init__(self, components, registry):
-            self.components = components
-            self.registry = registry
-            self.graph_builder = type('obj', (object,), {
-                'components': components,
-                'get_component': lambda cid: components.get(cid)
-            })()
+    # Derive connections from topology nodes as proper ConnectionConfig objects
+    topology_connections = []
+    indexed_connections = []
+    if context.topology and context.topology.nodes:
+        for node in context.topology.nodes:
+            for conn in node.connections:
+                # Create proper ConnectionConfig object
+                topology_connections.append(ConnectionConfig(
+                    source_id=node.id,
+                    source_port=conn.source_port,
+                    target_id=conn.target_name,
+                    target_port=conn.target_port,
+                    resource_type=conn.resource_type
+                ))
     
-    plant = MinimalPlant(components, registry)
-    engine = SimulationEngine(plant, engine_config)
-    
-    # NOTE: We are not using the engine's dispatch now since we have specific
-    # purification train logic. For simplicity, run manual timesteps.
-    
+    engine = SimulationEngine(
+        registry=registry,
+        config=context.simulation,
+        output_dir=output_path,
+        topology=topology_connections,
+        indexed_topology=indexed_connections,
+        dispatch_strategy=dispatch_strategy
+    )
+
+    # 7. Set up history collection and run the simulation
+    component_history_records = []
+    def collect_component_states(hour: float):
+        """Callback to collect detailed state from all components at each step."""
+        # The engine runs at 1-minute steps.
+        step_idx = int(round(hour * 60))
+        record = {'minute': step_idx}
+        for comp_id, comp in registry.list_components():
+             if hasattr(comp, 'get_state'):
+                try:
+                    state = comp.get_state()
+                    if state: # Ensure state is not None
+                        for k, v in state.items():
+                            record[f"{comp_id}_{k}"] = v
+                except Exception:
+                    pass # Ignore components that fail get_state
+        component_history_records.append(record)
+
+    engine.set_dispatch_data(prices, wind)
+    engine.initialize()
+    engine.initialize_dispatch_strategy(context=context, total_steps=total_steps)
+    engine.set_callbacks(post_step=collect_component_states)
+
+    print(f"Running simulation for {hours} hours ({total_steps} steps)...")
+    engine.run()
+    print("Simulation finished.")
+
+    # 8. Merge dispatch history with detailed component history
+    dispatch_history_df = pd.DataFrame(dispatch_strategy.get_history())
+    component_history_df = pd.DataFrame(component_history_records)
+
+    # Merge dataframes to create a comprehensive history
+    if not component_history_df.empty:
+        # Ensure 'minute' column is of the same type for merging
+        dispatch_history_df['minute'] = dispatch_history_df['minute'].astype(int)
+        component_history_df['minute'] = component_history_df['minute'].astype(int)
+        history_df = pd.merge(dispatch_history_df, component_history_df, on='minute', how='outer')
+    else:
+        history_df = dispatch_history_df
+
+    history_dict = history_df.to_dict(orient='list')
+
     from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY, GraphLibrary
     from h2_plant.visualization import static_graphs
     from h2_plant.visualization.dashboard_generator import DashboardGenerator
     
-    # 8. Manual simulation with stream propagation
-    dt = context.simulation.timestep_hours
-    num_steps = int(hours / dt)
-    
-    # Initialize all components
-    registry.initialize_all(dt)
-    
-    # History collection
-    history_records = []
-    
-    # Get topology order
-    topo_order = [node.id for node in context.topology.nodes] if context.topology.nodes else []
-    
-    # Run one full timestep to generate outputs
-    # LIMIT REMOVED: Run full duration or at least reasonable amount if hours is small
-    # If hours=168 (1 week), num_steps is huge (10k). Let's respect variable.
-    steps_to_run = num_steps 
-    
-    print(f"Running simulation for {steps_to_run} steps ({hours} hours)...")
-    
-    for step in range(steps_to_run):
-        t = step * dt
-        
-        # Log progress every 10%
-        if step % max(1, steps_to_run // 10) == 0:
-             print(f"  Step {step}/{steps_to_run} ({step/steps_to_run*100:.0f}%)")
-        
-        record = {'minute': step, 'timestamp_hours': t}
-        
-        # Step each component in topology order
-        for comp_id in topo_order:
-            comp = components.get(comp_id)
-            if comp:
-                comp.step(t)
-                
-                # Collect state for history
-                # Assuming component has some state or we extract from streams?
-                # For graph plots, we need specific keys like 'water_removed_kg_h'
-                # Attempt to extract state dict
-                if hasattr(comp, 'get_state'):
-                    state = comp.get_state()
-                    # Prefix keys with component name for flat history structure
-                    for k, v in state.items():
-                        record[f"{comp_id}_{k}"] = v
-                
-                # Propagate outputs to connected inputs
-                if context.topology.nodes:
-                    node = next((n for n in context.topology.nodes if n.id == comp_id), None)
-                    if node:
-                        for conn in node.connections:
-                            target_comp = components.get(conn.target_name)
-                            if target_comp:
-                                try:
-                                    output = comp.get_output(conn.source_port)
-                                    if output is not None:
-                                        target_comp.receive_input(
-                                            conn.target_port, output, conn.resource_type
-                                        )
-                                except Exception as e:
-                                    print(f"Error propagating {comp_id} -> {target_comp.component_id}: {e}")
-        
-        history_records.append(record)
-    
-    # Compile History
-    import pandas as pd
-    history_df = pd.DataFrame(history_records)
-    history_dict = history_df.to_dict(orient='list') # Plotter expects dict of lists
-    
+    # Get topology order for summary table generation
+    topo_order = [node.id for node in context.topology.nodes] if context.topology and context.topology.nodes else []
+
     # 9. Print Stream Summary Table
-    # ... (Keep existing summary table code, omitted for brevity in search replacement if possible, but I need to replace block)
-    # Re-inserting check logic below...
+    # The detailed summary is now handled by the dispatch strategy's print_summary()
+    # but we can still print the specific table format requested previously.
+    
     primary_gas = 'H2'  # Default
     for comp_id in topo_order:
         comp = components.get(comp_id)
@@ -258,16 +278,16 @@ def run_scenario(scenario: dict) -> dict:
             
     # Set column headers based on primary gas
     if primary_gas == 'O2':
-        col3_header = "O2 Purity"
-        col5_header = "H2"
+        purity_label = "O2"
+        impurity_label = "H2"
     else:
-        col3_header = "H2 Purity"
-        col5_header = "O2"
+        purity_label = "H2"
+        impurity_label = "O2"
     
-    print(f"\n### Stream Summary Table (Topology Order) - {primary_gas} Train")
-    print("-" * 88)
-    print(f"{'Component':<18} | {'T_out':>10} | {'P_out':>12} | {col3_header:>10} | {'H2O':>12} | {'Mass Flow':>10} | {col5_header:>10}")
-    print("-" * 88)
+    print(f"\n### Stream Summary Table (Topology Order) - {primary_gas} Train (ppm = molar)")
+    print("-" * 180)
+    print(f"{'Component':<18} | {'T_out':>8} | {'P_out':>10} | {purity_label+' %':>8} | {purity_label+' mol ppm':>10} | {purity_label+' kg/h':>10} | {'H2O %':>7} | {'H2O mol ppm':>11} | {'H2O kg/h':>9} | {'Mass Flow':>10} | {impurity_label+' %':>7} | {impurity_label+' mol ppm':>12} | {impurity_label+' kg/h':>10}")
+    print("-" * 180)
     
     profile_data = []
 
@@ -281,10 +301,10 @@ def run_scenario(scenario: dict) -> dict:
         for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out']:
             try:
                 stream = comp.get_output(port)
-                if stream is not None:
+                if stream is not None and stream.mass_flow_kg_h > 1e-6:
                     break
+                stream = None
             except Exception as e:
-                # print(f"Debug table: {comp_id} port {port} error: {e}")
                 pass
         
         if stream is None:
@@ -296,7 +316,11 @@ def run_scenario(scenario: dict) -> dict:
         h2o_frac = stream.composition.get('H2O', 0.0) + stream.composition.get('H2O_liq', 0.0)
         o2_frac = stream.composition.get('O2', 0.0)
         
-        # Collect for plotting
+        mass_flow_total = stream.mass_flow_kg_h
+        h2_mass_kg_h = h2_frac * mass_flow_total
+        o2_mass_kg_h = o2_frac * mass_flow_total
+        h2o_mass_kg_h = h2o_frac * mass_flow_total
+        
         try:
              s_val = stream.specific_entropy_j_kgK / 1000.0
         except:
@@ -313,33 +337,43 @@ def run_scenario(scenario: dict) -> dict:
             'MassFrac_H2O': h2o_frac
         })
 
-        # Format H2O display
-        if h2o_frac >= 0.01:
-            h2o_str = f"{h2o_frac*100:.2f}%"
-        elif h2o_frac > 0:
-            h2o_str = f"{h2o_frac*1e6:.0f} ppm"
-        else:
-            h2o_str = "0 ppm"
-        
-        # Determine purity and impurity based on primary gas
         if primary_gas == 'O2':
-            purity_frac = o2_frac
-            impurity_frac = h2_frac
+            purity_frac, impurity_frac = o2_frac, h2_frac
+            purity_mass_kg_h, impurity_mass_kg_h = o2_mass_kg_h, h2_mass_kg_h
         else:
-            purity_frac = h2_frac
-            impurity_frac = o2_frac
+            purity_frac, impurity_frac = h2_frac, o2_frac
+            purity_mass_kg_h, impurity_mass_kg_h = h2_mass_kg_h, o2_mass_kg_h
         
-        # Format impurity display
-        if impurity_frac >= 0.01:
-            impurity_str = f"{impurity_frac*100:.2f}%"
-        elif impurity_frac > 0:
-            impurity_str = f"{impurity_frac*1e6:.0f} ppm"
+        # Convert to MOLAR ppm (more physically meaningful for gas-phase equilibrium)
+        mole_fracs = mass_frac_to_mole_frac(stream.composition)
+        h2_mol = mole_fracs.get('H2', 0.0)
+        o2_mol = mole_fracs.get('O2', 0.0)
+        h2o_mol = mole_fracs.get('H2O', 0.0) + mole_fracs.get('H2O_liq', 0.0)
+        
+        if primary_gas == 'O2':
+            purity_mol, impurity_mol = o2_mol, h2_mol
         else:
-            impurity_str = "0 ppm"
+            purity_mol, impurity_mol = h2_mol, o2_mol
         
-        print(f"{comp_id:<18} | {T_c:>8.1f}°C | {P_bar:>10.2f} bar | {purity_frac*100:>9.2f}% | {h2o_str:>12} | {stream.mass_flow_kg_h:>8.2f} | {impurity_str:>10}")
+        purity_ppm = purity_mol * 1e6
+        impurity_ppm = impurity_mol * 1e6
+        h2o_ppm = h2o_mol * 1e6
+        
+        purity_pct_str = f"{purity_frac*100:.4f}"
+        purity_ppm_str = f"{purity_ppm:.0f}"
+        purity_mass_str = f"{purity_mass_kg_h:.4f}"
+        
+        h2o_pct_str = f"{h2o_frac*100:.4f}"
+        h2o_ppm_str = f"{h2o_ppm:.0f}"
+        h2o_mass_str = f"{h2o_mass_kg_h:.4f}"
+        
+        impurity_pct_str = f"{impurity_frac*100:.4f}"
+        impurity_ppm_str = f"{impurity_ppm:.0f}"
+        impurity_mass_str = f"{impurity_mass_kg_h:.6f}"
+        
+        print(f"{comp_id:<18} | {T_c:>6.1f}°C | {P_bar:>8.2f} bar | {purity_pct_str:>7}% | {purity_ppm_str:>10} | {purity_mass_str:>10} | {h2o_pct_str:>6}% | {h2o_ppm_str:>9} | {h2o_mass_str:>9} | {mass_flow_total:>8.2f} | {impurity_pct_str:>6}% | {impurity_ppm_str:>10} | {impurity_mass_str:>10}")
     
-    print("-" * 88)
+    print("-" * 180)
 
     # 10. Save History and Generate Graphs
     output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")
@@ -365,10 +399,7 @@ def run_scenario(scenario: dict) -> dict:
              print("  No visualization config found. Using default enabled graphs.")
 
         # 2. Prepare Data Contexts
-        # Matplotlib graphs expect normalized DataFrame
         norm_history_df = static_graphs.normalize_history(history_dict)
-        
-        # Profile graphs expect specific DF with metadata
         profile_df_obj = pd.DataFrame(profile_data)
         profile_df_obj.attrs['scenario_name'] = name
 
@@ -378,24 +409,29 @@ def run_scenario(scenario: dict) -> dict:
         
         for metadata in enabled_metadata:
              try:
-                 # Determine Data Source
                  if metadata.graph_id == 'process_train_profile':
                       data = profile_df_obj
                  elif metadata.graph_id == 'deoxo_profile':
-                      # Find Deoxo component
-                      # Assume Deoxo component class name or ID pattern
-                      # Try to find by ID containing 'Deoxo' or 'deoxo'
-                      deoxo_comp = None
-                      for cid, c in components.items():
-                          if 'deoxo' in cid.lower() or 'deoxo' in c.__class__.__name__.lower():
-                              deoxo_comp = c
-                              break
-                              
-                      if deoxo_comp and hasattr(deoxo_comp, 'get_last_profiles'):
-                          data = deoxo_comp.get_last_profiles()
+                      deoxo_comp = next((c for cid, c in components.items() if 'deoxo' in cid.lower() or 'deoxo' in c.__class__.__name__.lower()), None)
+                      data = deoxo_comp.get_last_profiles() if deoxo_comp and hasattr(deoxo_comp, 'get_last_profiles') else {'L': [], 'T': [], 'X': []}
+                 elif metadata.graph_id == 'crossover_impurities':
+                      # Build component state data for crossover impurities
+                      # Collect ppm values from component get_state()
+                      crossover_data = {}
+                      for cid, comp in components.items():
+                          try:
+                              state = comp.get_state()
+                              for key, val in state.items():
+                                  if 'ppm' in key.lower() and ('o2' in key.lower() or 'h2' in key.lower()):
+                                      col_name = f"{cid}_{key}"
+                                      crossover_data[col_name] = [val]  # Single row with final value
+                          except Exception:
+                              pass
+                      if crossover_data:
+                          data = pd.DataFrame(crossover_data)
+                          data['minute'] = [0]  # Dummy minute column
                       else:
-                          # Fallback empty
-                          data = {'L': [], 'T': [], 'X': []}
+                          data = norm_history_df
                  elif metadata.library == GraphLibrary.MATPLOTLIB:
                       data = norm_history_df
                  elif metadata.library == GraphLibrary.PLOTLY:
@@ -403,55 +439,48 @@ def run_scenario(scenario: dict) -> dict:
                  else:
                       continue
 
-                 # Generate Figure
                  fig = metadata.function(data)
                  
-                 # Save Figure
-                 if metadata.library == GraphLibrary.MATPLOTLIB:
-                      if fig:
-                           # Matplotlib
-                           out_path = os.path.join(graphs_dir, f"{metadata.graph_id}.png")
-                           fig.savefig(out_path, dpi=100)
-                           # Explicitly close to free memory, though Figure() avoids pyplot state
-                           pass 
-                 elif metadata.library == GraphLibrary.PLOTLY:
-                      # Plotly (HTML)
-                      out_path = os.path.join(graphs_dir, f"{metadata.graph_id}.html")
-                      try:
-                          fig.write_html(out_path)
-                      except Exception as e:
-                          pass # Plotly write might fail if no kaleido/etc, ignore for now
-
+                 if fig:
+                     if metadata.library == GraphLibrary.MATPLOTLIB:
+                          out_path = os.path.join(graphs_dir, f"{metadata.graph_id}.png")
+                          fig.savefig(out_path, dpi=100)
+                     elif metadata.library == GraphLibrary.PLOTLY:
+                          out_path = os.path.join(graphs_dir, f"{metadata.graph_id}.html")
+                          fig.write_html(out_path, include_plotlyjs='cdn')
              except Exception as g_err:
                  print(f"  Failed to generate {metadata.graph_id}: {g_err}")
 
-        # 4. Generate Dashboard
-        # ... (Dashboard logic remains similar, simplified here)
-        metrics = {
-            'total_production_kg': 0, 'total_demand_kg': 0, 'total_cost': 0, 'average_cost_per_kg': 0
-        }
-        results_wrapper = {
-            'metrics': metrics,
-            'dashboard_data': {'timeseries': {'hour': history_df['timestamp_hours'].tolist()}}
-        }
-        # dash_gen = DashboardGenerator(Path(output_dir))
-        # dash_gen.generate(results_wrapper)
-        # print(f"Dashboard generated.")
-        
     except Exception as e:
         print(f"Error in graph generation workflow: {e}")
         import traceback
         traceback.print_exc()
 
-    # Return summary metrics (simplified for purification train)
+    # Return summary metrics
+    hist = history_dict
+    dt = context.simulation.timestep_hours
+    
+    total_h2 = np.sum(hist.get('h2_kg', [0]))
+    soec_h2 = np.sum(hist.get('H2_soec_kg', [0]))
+    pem_h2 = np.sum(hist.get('H2_pem_kg', [0]))
+    
+    e_offered = np.sum(hist.get('P_offer', [0])) * dt
+    e_sold = np.sum(hist.get('P_sold', [0])) * dt
+    
+    e_consumed_soec = np.sum(hist.get('P_soec_actual', [0])) * dt
+    e_consumed_pem = np.sum(hist.get('P_pem', [0])) * dt
+    e_consumed_total = e_consumed_soec + e_consumed_pem
+    
+    efficiency = (e_consumed_total * 1000) / total_h2 if total_h2 > 0 else 0
+    
     return {
         "Scenario": name,
-        "H2 Produced (kg)": 0.0,
-        "SOEC H2 (kg)": 0.0,
-        "PEM H2 (kg)": 0.0,
-        "Energy Offered (MWh)": 0.0,
-        "Energy Sold (MWh)": 0.0,
-        "Efficiency (kWh/kg)": 0.0
+        "H2 Produced (kg)": total_h2,
+        "SOEC H2 (kg)": soec_h2,
+        "PEM H2 (kg)": pem_h2,
+        "Energy Offered (MWh)": e_offered,
+        "Energy Sold (MWh)": e_sold,
+        "Efficiency (kWh/kg)": efficiency
     }
 
 

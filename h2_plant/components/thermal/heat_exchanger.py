@@ -224,6 +224,8 @@ class HeatExchanger(Component):
                     'enthalpy': self.output_stream.specific_enthalpy_j_kg
                 }
             }
+        
+        state['outlet_o2_ppm_mol'] = (self.output_stream.get_total_mole_frac('O2') * 1e6) if self.output_stream else 0.0
         return state
 
     def get_output(self, port_name: str) -> Any:

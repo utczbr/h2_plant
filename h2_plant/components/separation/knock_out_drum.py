@@ -334,13 +334,26 @@ class KnockOutDrum(Component):
                 n_species[species] = n_i
                 n_total_mol_s += n_i
 
-        # FIX: Include H2O_liq as equivalent moles of water
-        # This fixes the bug where entrained liquid was ignored in flash calculation
+        # IMPORTANT: Capture entrained H2O_liq SEPARATELY from flash calculation.
+        # Entrained liquid from upstream (e.g., chiller or PEM) should be directly captured,
+        # not re-added to flash equilibrium. The KOD physically separates droplets.
         h2o_liq_mass_frac = composition.get('H2O_liq', 0.0)
-        if h2o_liq_mass_frac > 0:
-            h2o_liq_mol_s = (h2o_liq_mass_frac * m_dot_in_kg_h / 3600.0) / M_H2O
-            n_species['H2O'] = n_species.get('H2O', 0.0) + h2o_liq_mol_s
-            n_total_mol_s += h2o_liq_mol_s
+        m_entrained_liq_kg_h = h2o_liq_mass_frac * m_dot_in_kg_h
+        
+        # ALSO CHECK Stream.extra for entrained liquid from PEM electrolyzer
+        # The PEM outputs liquid mist as 'm_dot_H2O_liq_accomp_kg_s' in extra dict
+        if hasattr(inlet, 'extra') and inlet.extra:
+            m_liq_from_extra_kg_s = inlet.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+            if m_liq_from_extra_kg_s > 0:
+                m_entrained_liq_kg_h += m_liq_from_extra_kg_s * 3600.0
+                # Store for tracking
+                self._entrained_liq_from_upstream_kg_h = m_liq_from_extra_kg_s * 3600.0
+            else:
+                self._entrained_liq_from_upstream_kg_h = 0.0
+        else:
+            self._entrained_liq_from_upstream_kg_h = 0.0
+        
+        # Do NOT add H2O_liq to molar count for flash - it's already liquid!
 
         if n_total_mol_s <= 0:
             self._separation_status = "NO_FLOW"
@@ -413,10 +426,25 @@ class KnockOutDrum(Component):
         n_vap_mol_s = beta * n_total_mol_s
         n_liq_mol_s = (1.0 - beta) * n_total_mol_s
 
-        # Mixture molar mass for gas phase
-        mw_gas = GasConstants.SPECIES_DATA[self.gas_species]['molecular_weight'] / 1000.0
+        # Mixture molar mass for gas phase - compute from ALL species (not just H2+H2O)
+        # M_mix = Σ(y_i × M_i) where y_i is vapor mole fraction
         mw_h2o = GasConstants.SPECIES_DATA['H2O']['molecular_weight'] / 1000.0
-        M_mix = y_gas * mw_gas + y_H2O * mw_h2o
+        M_mix = 0.0
+        for species, z_i in z_species.items():
+            if species in GasConstants.SPECIES_DATA:
+                mw_i = GasConstants.SPECIES_DATA[species]['molecular_weight'] / 1000.0
+                # For non-condensables, vapor mole fraction = feed mole fraction
+                # For water, vapor mole fraction = y_H2O (saturated)
+                if species == 'H2O':
+                    y_i = y_H2O
+                else:
+                    # Scale non-condensables to fill remaining vapor composition
+                    # y_i = z_i × (1 - y_H2O) / (1 - z_H2O) when z_H2O ≠ 1
+                    if z_H2O < 1.0:
+                        y_i = z_i * (1.0 - y_H2O) / (1.0 - z_H2O)
+                    else:
+                        y_i = 0.0
+                M_mix += y_i * mw_i
 
         # Real gas compressibility factor (Z) - use LUTManager for consistency
         Z = 1.0  # Default ideal gas
@@ -482,18 +510,23 @@ class KnockOutDrum(Component):
 
         # Mass flow rates with separation efficiency applied.
         # Efficiency < 1.0 means some liquid is carried over as mist.
-        m_liquid_total_kg_h = n_liq_mol_s * mw_h2o * 3600.0
+        # m_flash_liquid: liquid formed by flash condensation in KOD
+        # m_entrained_liq_kg_h: liquid droplets already present in inlet (from upstream chiller)
+        m_flash_liquid_kg_h = n_liq_mol_s * mw_h2o * 3600.0
+        m_total_liquid_kg_h = m_flash_liquid_kg_h + m_entrained_liq_kg_h
 
-        m_liq_removed_kg_h = m_liquid_total_kg_h * self.separation_efficiency
-        m_liq_carryover_kg_h = m_liquid_total_kg_h - m_liq_removed_kg_h
+        m_liq_removed_kg_h = m_total_liquid_kg_h * self.separation_efficiency
+        m_liq_carryover_kg_h = m_total_liquid_kg_h - m_liq_removed_kg_h
 
         m_dot_vap_kg_h = m_vap_kg_s * 3600.0
 
         # Gas outlet includes vapor and any liquid carryover as mist
         m_gas_out_total = m_dot_vap_kg_h + m_liq_carryover_kg_h
         
-        # Calculate vapor-phase water mass flow from mole fraction and vapor flow
-        m_H2O_vap = y_H2O * m_dot_vap_kg_h
+        # Calculate vapor-phase water mass flow from molar basis
+        # y_H2O is mole fraction, so: m_H2O_vap = n_vap × y_H2O × MW_H2O
+        n_H2O_vap_mol_s = n_vap_mol_s * y_H2O
+        m_H2O_vap = n_H2O_vap_mol_s * mw_h2o * 3600.0  # kg/h
 
         gas_comp = {}
         if m_gas_out_total > 0:
@@ -653,7 +686,8 @@ class KnockOutDrum(Component):
             'drain_pressure_bar': self._liquid_drain_stream.pressure_pa / 1e5 if self._liquid_drain_stream else 0.0,
             'dissolved_gas_ppm': (self._dissolved_gas_kg_h / self._liquid_drain_stream.mass_flow_kg_h * 1e6) 
                                  if (self._liquid_drain_stream and self._liquid_drain_stream.mass_flow_kg_h > 0) else 0.0,
-            'm_dot_H2O_liq_accomp_kg_s': entrained_liq
+            'm_dot_H2O_liq_accomp_kg_s': entrained_liq,
+            'outlet_o2_ppm_mol': (self._gas_outlet_stream.get_total_mole_frac('O2') * 1e6) if self._gas_outlet_stream else 0.0
         })
         return state
 

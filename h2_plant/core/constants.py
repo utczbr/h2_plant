@@ -204,7 +204,7 @@ class DeoxoConstants:
     - Legacy Model: modleo_do_deoxo.pdf / deoxo-dim.py
     """
     # Reactor Geometry
-    L_REACTOR_M: Final[float] = 1.334      # Derived from V=0.11, D=0.324
+    L_REACTOR_M: Final[float] = 1.333    # Derived from V=0.11, D=0.324
     D_REACTOR_M: Final[float] = 0.324
     AREA_REACTOR_M2: Final[float] = 0.0824  # pi * D^2 / 4
     CATALYST_POROSITY: Final[float] = 0.4
@@ -228,8 +228,18 @@ class DeoxoConstants:
     DESIGN_DP_BAR: Final[float] = 0.05
     
     # Operational Limits/Safety
-    MAX_ALLOWED_O2_OUT_MOLE_FRAC: Final[float] = 5.0e-6 # 5 ppm
+    MAX_ALLOWED_O2_OUT_MOLE_FRAC: Final[float] = 0 # 5 ppm
     CRITICAL_INLET_T_K: Final[float] = 277.15           # 4°C Min Inlet
+    T_CAT_MAX_K: Final[float] = 423.15                  # Catalyst limit (~150°C for Pd/Al₂O₃)
+    DELTA_T_AD_MAX_K: Final[float] = 150.0              # Adiabatic ΔT warning threshold
+    
+    # Zoned PFR Parameters (Froment/Bischoff Literature Alignment)
+    # Zone fractions: Hotspot (front), Cooling (mid), Polish (rear)
+    L_ZONE_FRAC: Final[tuple[float, ...]] = (0.2, 0.6, 0.2)
+    # Heat transfer: Low→high (lit: 50-500 W/m³K for packed-bed wall-cooled)
+    U_A_ZONE_W_M3_K: Final[tuple[float, ...]] = (50.0, 250.0, 300.0)
+    # Effectiveness: η=1,1,0.8 for Zone 3 diffusion limit
+    K0_ZONE_MULT: Final[tuple[float, ...]] = (1.0, 1.0, 0.8)
 
 class DryCoolerConstants:
     """

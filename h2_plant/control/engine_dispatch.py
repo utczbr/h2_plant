@@ -43,7 +43,18 @@ if TYPE_CHECKING:
     from h2_plant.core.component_registry import ComponentRegistry
     from h2_plant.config.plant_config import SimulationContext
 
+from h2_plant.components.thermal.chiller import Chiller
+from h2_plant.components.separation.coalescer import Coalescer
+from h2_plant.components.purification.deoxo_reactor import DeoxoReactor
+from h2_plant.components.separation.psa import PSA
+from h2_plant.components.separation.knock_out_drum import KnockOutDrum
+from h2_plant.components.compression.compressor_single import CompressorSingle
+from h2_plant.components.cooling.dry_cooler import DryCooler
+from h2_plant.components.thermal.heat_exchanger import HeatExchanger
+
 logger = logging.getLogger(__name__)
+
+
 
 
 @dataclass
@@ -117,7 +128,7 @@ class EngineDispatchStrategy(ABC):
         pass
 
 
-class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
+class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
     """
     Hybrid SOEC/PEM arbitrage strategy integrated with SimulationEngine.
 
@@ -136,7 +147,6 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
     Example:
         >>> strategy = HybridArbitrageEngineStrategy()
         >>> strategy.initialize(registry, context, total_steps=525600)
-        >>> strategy.decide_and_apply(t=0.0, prices=prices, wind=wind)
         >>> # ... engine calls component.step() ...
         >>> strategy.record_post_step()
     """
@@ -153,6 +163,7 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
         # Component references
         self._soec = None
         self._pem = None
+        self._chillers: list['Chiller'] = []
 
         # Capacity cache
         self._soec_capacity: float = 0.0
@@ -186,6 +197,40 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
         # Detect topology and select inner strategy
         self._soec = self._find_soec(registry)
         self._pem = self._find_pem(registry)
+        
+        # Identify auxiliary components for tracking
+        self._chillers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, Chiller)
+        ]
+        self._coalescers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, Coalescer)
+        ]
+        self._deoxos = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, DeoxoReactor)
+        ]
+        self._psas = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, PSA)
+        ]
+        self._kods = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, KnockOutDrum)
+        ]
+        self._compressors = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, CompressorSingle)
+        ]
+        self._dry_coolers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, DryCooler)
+        ]
+        self._heat_exchangers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, HeatExchanger)
+        ]
 
         if self._soec and not self._pem:
             logger.info("Topology detected: SOEC Only. Using SoecOnlyStrategy.")
@@ -197,6 +242,7 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
         # Cache component capacities
         if self._soec:
             spec = context.physics.soec_cluster
+            # Calculate SOEC capacity: Modules * Nominal Power * Limit
             self._soec_capacity = spec.num_modules * spec.max_power_nominal_mw * spec.optimal_limit
 
         if self._pem:
@@ -226,6 +272,60 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             'compressor_power_kw': np.zeros(total_steps, dtype=np.float64),
             'sell_decision': np.zeros(total_steps, dtype=np.int8),
         }
+        
+        # Add history tracks for each chiller
+        for chiller in self._chillers:
+            cid = chiller.component_id
+            self._history[f"{cid}_cooling_load_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_electrical_power_kw"] = np.zeros(total_steps, dtype=np.float64)
+
+        for coal in self._coalescers:
+            cid = coal.component_id
+            self._history[f"{cid}_delta_p_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_drain_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for each deoxo
+        for deoxo in self._deoxos:
+            cid = deoxo.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for PSA
+        for psa in self._psas:
+            cid = psa.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for KOD
+        for kod in self._kods:
+            cid = kod.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for Compressor
+        for comp in self._compressors:
+            cid = comp.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for DryCooler
+        for dc in self._dry_coolers:
+            cid = dc.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for HeatExchanger
+        for hx in self._heat_exchangers:
+            cid = hx.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for Chiller impurity (already tracked for cooling load/power)
+        for chiller in self._chillers:
+            cid = chiller.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history track for PEM impurity if present
+        if self._pem:
+            # Using generic name 'PEM' + suffix, or component id
+            # Graph plotter looks for suffix '_o2_impurity_ppm_mol'
+            cid = self._pem.component_id if hasattr(self._pem, 'component_id') else 'PEM'
+            self._history[f"{cid}_o2_impurity_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
 
         self._state = IntegratedDispatchState()
 
@@ -405,6 +505,75 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
         self._history['tank_level_kg'][step_idx] = getattr(tank_main, 'current_level_kg', 0.0) if tank_main else 0.0
         self._history['tank_pressure_bar'][step_idx] = getattr(tank_main, 'pressure_bar', 0.0) if tank_main else 0.0
         self._history['compressor_power_kw'][step_idx] = getattr(comp_main, 'power_kw', 0.0) if comp_main else 0.0
+        
+        # Record Chiller states
+        for chiller in self._chillers:
+            cid = chiller.component_id
+            state = chiller.get_state()
+            self._history[f"{cid}_cooling_load_kw"][step_idx] = state.get('cooling_load_kw', 0.0)
+            self._history[f"{cid}_electrical_power_kw"][step_idx] = state.get('electrical_power_kw', 0.0)
+
+        # Record Coalescer states
+        for coal in self._coalescers:
+            cid = coal.component_id
+            state = coal.get_state()
+            self._history[f"{cid}_delta_p_bar"][step_idx] = state.get('delta_p_bar', 0.0)
+            self._history[f"{cid}_drain_flow_kg_h"][step_idx] = state.get('drain_flow_kg_h', 0.0)
+
+        # Record Deoxo states
+        for deoxo in self._deoxos:
+            cid = deoxo.component_id
+            state = deoxo.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record PSA states
+        for psa in self._psas:
+            cid = psa.component_id
+            state = psa.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            
+        # Record KOD states
+        for kod in self._kods:
+            cid = kod.component_id
+            state = kod.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record Compressor states
+        for comp in self._compressors:
+            cid = comp.component_id
+            state = comp.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record Coalescer impurity (added later so manual update here)
+        for coal in self._coalescers:
+            cid = coal.component_id
+            state = coal.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record DryCooler impurity
+        for dc in self._dry_coolers:
+            cid = dc.component_id
+            state = dc.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record HeatExchanger impurity
+        for hx in self._heat_exchangers:
+            cid = hx.component_id
+            state = hx.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record Chiller impurity
+        for chiller in self._chillers:
+            cid = chiller.component_id
+            state = chiller.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+        # Record PEM impurity
+        if self._pem:
+            cid = self._pem.component_id if hasattr(self._pem, 'component_id') else 'PEM'
+            state = self._pem.get_state()
+            # Default to 0 if not yet exposed (handled by get() returning None/default)
+            self._history[f"{cid}_o2_impurity_ppm_mol"][step_idx] = state.get('o2_impurity_ppm_mol', 0.0)
 
         self._state.step_idx += 1
 
@@ -561,15 +730,21 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             print("\n### Chillers (Active Cooling)")
             for comp_id, comp in components_by_type['chiller']:
                 state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                heat_duty_w = state.get('heat_duty_w', state.get('Q_dot_fluxo_W', 0.0))
-                heat_duty_kw = heat_duty_w / 1000.0
-                power_kw = state.get('power_kw', state.get('electrical_power_kw', 0.0))
-                temp_out_k = state.get('outlet_temperature_k', state.get('T_out_k', 0.0))
-                temp_out_c = temp_out_k - 273.15 if temp_out_k > 0 else 0.0
-                water_condensed = state.get('water_condensed_kg_h', 0.0) * duration_hours
+                cooling_kw = state.get('cooling_load_kw', 0.0)
+                power_kw = state.get('electrical_power_kw', 0.0)
+                # Get outlet temp from state OR from outlet stream
+                temp_out_c = state.get('outlet_temp_k', 0.0) - 273.15 if state.get('outlet_temp_k', 0.0) > 0 else 0.0
+                if temp_out_c <= -273:
+                    # Try 'outlet_temp_c' or get from stream
+                    outlet_stream = getattr(comp, 'outlet_stream', None)
+                    if outlet_stream and hasattr(outlet_stream, 'temperature_k'):
+                        temp_out_c = outlet_stream.temperature_k - 273.15
+                # Water condensed is stored directly in the component
+                water_condensed_kg_h = getattr(comp, 'water_condensed_kg_h', 0.0)
+                water_condensed = water_condensed_kg_h * duration_hours
                 
                 print(f"   [{comp_id}]")
-                print(f"   * Heat Duty: {heat_duty_kw:.2f} kW | Elec. Power: {power_kw:.2f} kW")
+                print(f"   * Cooling: {cooling_kw:.2f} kW | Elec. Power: {power_kw:.2f} kW")
                 print(f"   * Outlet Temp: {temp_out_c:.1f}°C | Water Condensed: {water_condensed:.4f} kg")
                 
                 # Get output stream
@@ -591,13 +766,14 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             print("\n### Dry Coolers (Passive Cooling)")
             for comp_id, comp in components_by_type['dry_cooler']:
                 state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                heat_duty_w = state.get('heat_duty_w', state.get('Q_dot_fluxo_W', 0.0))
-                heat_duty_kw = heat_duty_w / 1000.0
-                fan_power_kw = state.get('fan_power_kw', state.get('power_kw', 0.0))
-                temp_out_k = state.get('outlet_temperature_k', 0.0)
-                temp_out_c = temp_out_k - 273.15 if temp_out_k > 0 else 0.0
+                # DryCooler returns 'tqc_duty_kw' and 'dc_duty_kw' for heat duties
+                tqc_duty_kw = state.get('tqc_duty_kw', 0.0)
+                dc_duty_kw = state.get('dc_duty_kw', 0.0)
+                fan_power_kw = state.get('fan_power_kw', 0.0)
+                # DryCooler returns 'outlet_temp_c' directly (not in Kelvin!)
+                temp_out_c = state.get('outlet_temp_c', 0.0)
                 
-                print(f"   [{comp_id}] Heat Duty: {heat_duty_kw:.2f} kW | Fan: {fan_power_kw:.2f} kW | T_out: {temp_out_c:.1f}°C")
+                print(f"   [{comp_id}] Heat Duty: {tqc_duty_kw:.2f} kW | Fan: {fan_power_kw:.2f} kW | T_out: {temp_out_c:.1f}°C")
                 
                 # Get output stream
                 gas_outlet = None
@@ -630,10 +806,12 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             print("\n### Compressors")
             for comp_id, comp in components_by_type['compressor']:
                 state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                power_kw = state.get('power_kw', state.get('electrical_power_kw', 0.0))
-                total_energy_kwh = power_kw * duration_hours
-                eta_isen = state.get('isentropic_efficiency', state.get('eta_isentropic', 0.0)) * 100
-                p_out_bar = state.get('outlet_pressure_bar', state.get('P_out_bar', 0.0))
+                # Compressor stores energy in timestep_energy_kwh, cumulative in cumulative_energy_kwh
+                total_energy_kwh = state.get('cumulative_energy_kwh', 0.0)
+                # Power = energy / time
+                power_kw = total_energy_kwh / duration_hours if duration_hours > 0 else 0.0
+                eta_isen = state.get('isentropic_efficiency', 0.65) * 100
+                p_out_bar = state.get('outlet_pressure_bar', 0.0)
                 
                 print(f"   [{comp_id}] Power: {power_kw:.2f} kW | Energy: {total_energy_kwh:.2f} kWh | η_isen: {eta_isen:.1f}%")
         
@@ -642,9 +820,10 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             print("\n### Deoxidizer Reactors")
             for comp_id, comp in components_by_type['deoxo']:
                 state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                o2_conversion = state.get('conversion', state.get('X_O2', 0.0)) * 100
-                temp_max = state.get('T_max_C', state.get('max_temperature_c', 0.0))
-                o2_out_ppm = state.get('o2_outlet_ppm', 0.0)
+                # DeoxoReactor returns 'conversion_o2_percent' (already in %), 'peak_temperature_c', 'outlet_o2_ppm_mol'
+                o2_conversion = state.get('conversion_o2_percent', 0.0)  # Already in %
+                temp_max = state.get('peak_temperature_c', state.get('t_peak_total_c', 0.0))
+                o2_out_ppm = state.get('outlet_o2_ppm_mol', 0.0)
                 
                 print(f"   [{comp_id}] O2 Conversion: {o2_conversion:.1f}% | T_max: {temp_max:.1f}°C | O2 out: {o2_out_ppm:.1f} ppm")
                 
@@ -667,11 +846,27 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             print("\n### Adsorption Units (PSA/VSA)")
             for comp_id, comp in components_by_type['adsorption']:
                 state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                h2_loss = state.get('h2_purge_loss_kg_h', 0.0) * duration_hours
-                water_removed = state.get('water_removed_kg_h', 0.0) * duration_hours
-                power_kw = state.get('power_kw', 0.0)
                 
-                print(f"   [{comp_id}] Water Removed: {water_removed:.4f} kg | H2 Loss: {h2_loss:.4f} kg | Power: {power_kw:.2f} kW")
+                # PSA returns: product_flow_kg_h, tail_gas_flow_kg_h, power_consumption_kw
+                product_flow = state.get('product_flow_kg_h', 0.0)
+                tail_gas_flow = state.get('tail_gas_flow_kg_h', 0.0)  # This IS the H2 loss!
+                power_kw = state.get('power_consumption_kw', 0.0)
+                
+                # Calculate totals over duration
+                h2_loss_total = tail_gas_flow * duration_hours
+                
+                # Get inlet stream to calculate water removed
+                inlet_stream = getattr(comp, 'inlet_stream', None)
+                product_stream = getattr(comp, 'product_outlet', None)
+                water_removed = 0.0
+                if inlet_stream and product_stream:
+                    inlet_h2o = inlet_stream.composition.get('H2O', 0.0) * inlet_stream.mass_flow_kg_h
+                    outlet_h2o = product_stream.composition.get('H2O', 0.0) * product_stream.mass_flow_kg_h
+                    water_removed = (inlet_h2o - outlet_h2o) * duration_hours
+                
+                print(f"   [{comp_id}]")
+                print(f"   * Tail Gas Loss: {tail_gas_flow:.3f} kg/h (Total: {h2_loss_total:.3f} kg)")
+                print(f"   * Water Removed: {water_removed:.4f} kg | Power: {power_kw:.2f} kW")
                 
                 # Get output stream (PSA uses 'purified_gas_out' port)
                 gas_outlet = None
@@ -900,51 +1095,103 @@ class HybridArbitrageEngineStrategy(EngineDispatchStrategy):
             
             if stream and hasattr(stream, 'mass_flow_kg_h') and stream.mass_flow_kg_h > 0:
                 T_c = stream.temperature_k - 273.15
-                P_bar = stream.pressure_pa / 1e5
+                P_bar = (stream.pressure_pa / 1e5) if hasattr(stream, 'pressure_pa') else 1.01325
                 
-                # Get H2, H2O, and O2 fractions
-                h2_frac = stream.composition.get('H2', 0.0)
-                h2o_frac = stream.composition.get('H2O', 0.0) + stream.composition.get('H2O_liq', 0.0)
-                o2_frac = stream.composition.get('O2', 0.0)
+                # Molecular weights (g/mol)
+                MW_H2 = 2.016    # g/mol
+                MW_H2O = 18.015  # g/mol
+                MW_O2 = 32.0     # g/mol
                 
-                # Format H2O display
-                if h2o_frac >= 0.01:
-                    h2o_str = f"{h2o_frac*100:.2f}%"
-                elif h2o_frac > 0:
-                    h2o_str = f"{h2o_frac*1e6:.0f} ppm"
+                # --- Calculate Total Species Mass (including 'extra' liquid) ---
+                m_dot_main = stream.mass_flow_kg_h
+                
+                # 1. Check for accompanying liquid in 'extra' (e.g. from PEM or Separators)
+                m_dot_extra_liq = 0.0
+                if hasattr(stream, 'extra') and stream.extra:
+                    # Convert kg/s from extra to kg/h
+                    m_dot_extra_liq = stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+                
+                # 2. Calculate mass of each species
+                # H2 mass
+                m_h2 = stream.composition.get('H2', 0.0) * m_dot_main
+                
+                # Total Water Mass = Vapor (comp) + Liquid (comp) + Liquid (extra)
+                m_h2o_vapor = stream.composition.get('H2O', 0.0) * m_dot_main
+                m_h2o_liq_comp = stream.composition.get('H2O_liq', 0.0) * m_dot_main
+                
+                # Total water: ALWAYS sum all sources. 'extra' contains entrained liquid 
+                # (e.g., from PEM mist) which is separate from composition-tracked water.
+                m_h2o_total = m_h2o_vapor + m_h2o_liq_comp + m_dot_extra_liq
+                
+                # O2 mass
+                m_o2 = stream.composition.get('O2', 0.0) * m_dot_main
+                
+                # 3. Convert to Moles
+                n_h2 = m_h2 / MW_H2
+                n_h2o = m_h2o_total / MW_H2O
+                n_o2 = m_o2 / MW_O2
+                n_total = n_h2 + n_h2o + n_o2
+                
+                # 4. Calculate Molar fractions (TOTAL including all water)
+                y_h2 = n_h2 / n_total if n_total > 0 else 0
+                y_h2o = n_h2o / n_total if n_total > 0 else 0
+                y_o2 = n_o2 / n_total if n_total > 0 else 0
+                
+                # Format H2O display (TOTAL MOLAR - vapor + liquid)
+                if y_h2o >= 0.01:
+                    h2o_str = f"{y_h2o*100:.2f}%"
+                elif y_h2o > 0:
+                    h2o_str = f"{y_h2o*1e6:.0f} ppm"
                 else:
                     h2o_str = "0 ppm"
                 
-                # Format O2 display
-                if o2_frac >= 0.01:
-                    o2_str = f"{o2_frac*100:.2f}%"
-                elif o2_frac > 0:
-                    o2_str = f"{o2_frac*1e6:.0f} ppm"
+                # Format O2 display (MOLAR ppm)
+                if y_o2 >= 0.01:
+                    o2_str = f"{y_o2*100:.2f}%"
+                elif y_o2 > 0:
+                    o2_str = f"{y_o2*1e6:.0f} ppm"
                 else:
                     o2_str = "0 ppm"
+                
+                # Calculate liquid vs vapor percentage of total water
+                if m_h2o_total > 1e-9:
+                    # Vapor comes only from composition['H2O'], rest is liquid
+                    m_vap_only = stream.composition.get('H2O', 0.0) * m_dot_main
+                    m_liq_only = m_h2o_total - m_vap_only  # Composition liquid + extra liquid
+                    
+                    pct_liq = (m_liq_only / m_h2o_total) * 100.0 if m_h2o_total > 0 else 0.0
+                    pct_vap = 100.0 - pct_liq
+                else:
+                    pct_liq = 0.0
+                    pct_vap = 0.0
                 
                 rows.append({
                     'id': comp_id,
                     'T_c': T_c,
                     'P_bar': P_bar,
-                    'H2_purity': h2_frac * 100,
+                    'H2_purity': y_h2 * 100,  # Molar purity
+                    'H2_kg_h': m_h2,           # H2 mass flow (kg/h)
                     'H2O': h2o_str,
-                    'O2': o2_str
+                    'H2O_kg_h': m_h2o_total,   # Total H2O mass flow (kg/h)
+                    'O2': o2_str,
+                    'O2_kg_h': m_o2,           # O2 mass flow (kg/h)
+                    'pct_liq': pct_liq,
+                    'pct_vap': pct_vap
                 })
         
         if not rows:
             return
         
-        # Print table
-        print("\n### Stream Summary Table (Topology Order)")
-        print("-" * 88)
-        print(f"{'Component':<18} | {'T_out':>8} | {'P_out':>9} | {'H2 Purity':>10} | {'H2O':>10} | {'O2':>10}")
-        print("-" * 88)
+        # Print table (TOTAL Molar - includes entrained liquid)
+        print("\n### Stream Summary Table (Topology Order) - TOTAL MOLAR (Vapor + Liquid)")
+        print("-" * 160)
+        print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>8} | {'H2%':>6} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'%Liq':>5} | {'%Vap':>5}")
+        print("-" * 160)
         
         for row in rows:
-            print(f"{row['id']:<18} | {row['T_c']:>6.1f}°C | {row['P_bar']:>7.2f} bar | {row['H2_purity']:>8.2f}% | {row['H2O']:>10} | {row['O2']:>10}")
+            print(f"{row['id']:<18} | {row['T_c']:>5.1f}°C | {row['P_bar']:>6.2f} bar | {row['H2_purity']:>5.2f}% | {row['H2_kg_h']:>8.3f} | {row['H2O']:>9} | {row['H2O_kg_h']:>9.4f} | {row['O2']:>9} | {row['O2_kg_h']:>8.5f} | {row['pct_liq']:>4.1f}% | {row['pct_vap']:>4.1f}%")
         
-        print("-" * 88)
+        print("-" * 160)
 
     def _get_topology_order(self) -> list:
         """

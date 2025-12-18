@@ -335,32 +335,72 @@ class Chiller(Component):
                 condensation_fraction = 1.0 - (y_H2O_sat / y_H2O_in) if y_H2O_in > 0 else 0.0
                 condensation_fraction = max(0.0, min(1.0, condensation_fraction))
                 
-                # Mass of water condensed
-                m_H2O_in = x_H2O_in * self.inlet_stream.mass_flow_kg_h
-                m_condensed_kg_h = m_H2O_in * condensation_fraction
+                # Mass of water condensed from VAPOR
+                m_H2O_vapor_in = x_H2O_in * self.inlet_stream.mass_flow_kg_h
+                m_condensed_kg_h = m_H2O_vapor_in * condensation_fraction
                 
-                # Update outlet composition
-                m_total_out = self.inlet_stream.mass_flow_kg_h - m_condensed_kg_h
+                # Check for existing LIQUID in inlet from TWO sources:
+                # 1. Composition-tracked liquid (H2O_liq in composition)
+                # 2. Extra liquid (m_dot_H2O_liq_accomp_kg_s in extra dict)
+                x_H2O_liq_in = inlet_comp.get('H2O_liq', 0.0)
+                m_H2O_liq_comp_in = x_H2O_liq_in * self.inlet_stream.mass_flow_kg_h
+                
+                # Extra liquid from upstream (e.g., DryCooler, KOD carryover)
+                m_H2O_liq_extra_in = 0.0
+                if hasattr(self.inlet_stream, 'extra') and self.inlet_stream.extra:
+                    m_H2O_liq_extra_in = self.inlet_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+                
+                # Total inlet liquid = composition + extra
+                m_H2O_liq_in = m_H2O_liq_comp_in + m_H2O_liq_extra_in
+                
+                # Update outlet composition - PASS WATER DOWNSTREAM
+                # We DO NOT remove mass from the stream, just change phase
+                m_total_out = self.inlet_stream.mass_flow_kg_h
+                
                 if m_total_out > 0:
                     # Recalculate mass fractions
-                    m_H2O_out = m_H2O_in - m_condensed_kg_h
-                    outlet_comp['H2O'] = m_H2O_out / m_total_out
+                    m_H2O_vapor_out = m_H2O_vapor_in - m_condensed_kg_h
                     
-                    # Scale up other species proportionally
-                    for species in outlet_comp:
+                    # Total liquid out = Newly Condensed + Inlet Liquid
+                    m_H2O_liq_total_out = m_condensed_kg_h + m_H2O_liq_in
+                    
+                    # Vapor phase water
+                    outlet_comp['H2O'] = m_H2O_vapor_out / m_total_out
+                    
+                    # Liquid phase water (passed to next component)
+                    outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_out
+                    
+                    # Other species (mass conserved, just fraction changes if total mass changed, 
+                    # but here total mass is constant so fractions are effectively constant relative to total)
+                    # Only H2O splits into H2O + H2O_liq
+                    for species in inlet_comp:
                         if species not in ('H2O', 'H2O_liq'):
-                            m_species = inlet_comp[species] * self.inlet_stream.mass_flow_kg_h
-                            outlet_comp[species] = m_species / m_total_out
-        
-        # Track condensation for state reporting
+                            outlet_comp[species] = inlet_comp[species]
+
+        # Track condensation for state reporting (only new condensation counts for latent heat)
         self.water_condensed_kg_h = m_condensed_kg_h
-        outlet_mass_flow = self.inlet_stream.mass_flow_kg_h - m_condensed_kg_h
         
+        # Outlet mass flow is SAME as inlet (water is carried over)
+        outlet_mass_flow = self.inlet_stream.mass_flow_kg_h
+        
+        # Total liquid for 'extra' (consistency)
+        # Re-calculate total liquid in case we skipped the condensation block (e.g. no condensation)
+        x_liq_final = outlet_comp.get('H2O_liq', 0.0)
+        m_liq_final_kg_h = x_liq_final * outlet_mass_flow
+        
+        # If block skipped (no new condensation), we still need to preserve inlet liquid!
+        if 'H2O_liq' not in outlet_comp and 'H2O_liq' in inlet_comp:
+             outlet_comp['H2O_liq'] = inlet_comp['H2O_liq']
+             m_liq_final_kg_h = inlet_comp['H2O_liq'] * outlet_mass_flow
+
         self.outlet_stream = Stream(
             mass_flow_kg_h=outlet_mass_flow,
             temperature_k=final_temp_k,
             pressure_pa=outlet_pressure_pa,
             composition=outlet_comp
+            # NOTE: Do NOT set extra['m_dot_H2O_liq_accomp_kg_s'] here!
+            # Liquid is already tracked in composition['H2O_liq'].
+            # Setting both would cause double-counting in get_total_mole_frac.
         )
 
         # Calculate Latent Heat from condensation
@@ -524,5 +564,6 @@ class Chiller(Component):
             'timestep_energy_kwh': self.electrical_power_kw * self.dt,
             'cooling_water_flow_kg_h': self.cooling_water_flow_kg_h,
             'cop': self.cop,
-            'pressure_drop_bar': self.pressure_drop_bar
+            'pressure_drop_bar': self.pressure_drop_bar,
+            'outlet_o2_ppm_mol': (self.outlet_stream.get_total_mole_frac('O2') * 1e6) if hasattr(self, 'outlet_stream') and self.outlet_stream else 0.0
         }

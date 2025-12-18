@@ -4,43 +4,43 @@
 visualization:
   # Enable/disable entire categories
   categories:
-    production: false
-    performance: false
-    economics: false
-    soec_ops: false
-    storage: false 
+    production: true
+    performance: true
+    economics: true
+    soec_ops: true
+    storage: true 
   
   # Override individual graphs (takes precedence over category settings)
   graphs:
     # Production graphs
-    pem_h2_production_over_time: false
-    soec_h2_production_over_time: false
-    total_h2_production_stacked: false
-    cumulative_h2_production: false
-    oxygen_production_stacked: false
-    water_consumption_stacked: false
+    pem_h2_production_over_time: true
+    soec_h2_production_over_time: true
+    total_h2_production_stacked: true
+    cumulative_h2_production: true
+    oxygen_production_stacked: true
+    water_consumption_stacked: true
     
     # Performance graphs
-    pem_cell_voltage_over_time: false
-    pem_efficiency_over_time: false
-    dispatch_curve_scatter: false
+    pem_cell_voltage_over_time: true
+    pem_efficiency_over_time: true
+    dispatch_curve_scatter: true
     
     # Economics graphs
-    energy_price_over_time: false
-    dispatch_strategy_stacked: false
-    dispatch_detailed_overlay: false
-    power_consumption_breakdown_pie: false
-    price_histogram: false
-    arbitrage_scatter: false
+    energy_price_over_time: true
+    dispatch_strategy_stacked: true
+    dispatch_detailed_overlay: true
+    power_consumption_breakdown_pie: true
+    price_histogram: true
+    arbitrage_scatter: true
     
     # SOEC operations
-    soec_active_modules_over_time: false
-    soec_modules_temporal: false
-    soec_modules_stats: false
+    soec_active_modules_over_time: true
+    soec_modules_temporal: true
+    soec_modules_stats: true
     
     # Storage
-    tank_storage_timeline: false
-    compressor_power_stacked: false
+    tank_storage_timeline: true
+    compressor_power_stacked: true
     
     # Thermal & Separation (Matplotlib)
     water_removal_total: true
@@ -59,6 +59,7 @@ visualization:
     mixer_comparison: true
     individual_drains: true
     dissolved_gas_concentration: true
+    dissolved_gas_efficiency: true  # NEW: IN vs OUT bar chart with removal %
     crossover_impurities: true
     deoxo_profile: true
     drain_line_properties: true
@@ -66,20 +67,27 @@ visualization:
     recirculation_comparison: true
     entrained_liquid_flow: true
     
-    # Legacy dispatch/economics (enable as needed)
-    dispatch: false
-    arbitrage: false
-    h2_production: false
-    oxygen_production: false
-    water_consumption: false
-    energy_pie: false
-    price_histogram: false
-    dispatch_curve: false
-    cumulative_h2: false
-    cumulative_energy: false
-    efficiency_curve: false
-    revenue_analysis: false
-    temporal_averages: false
+    # NEW: Plant Balance & Flow Tracking
+    plant_balance: true  # Control volume schematic
+    water_vapor_tracking: true  # Vapor flow with PPM labels
+    total_mass_flow: true  # Gas + Vapor + Liquid comparison
+
+    
+    # Legacy dispatch/economics (disabled - these are aliases for modern names above)
+    # Enable these ONLY if you disable the corresponding modern name
+    dispatch: false  # Same as dispatch_strategy_stacked
+    arbitrage: false  # Same as arbitrage_scatter
+    h2_production: false  # Same as total_h2_production_stacked
+    oxygen_production: false  # Same as oxygen_production_stacked
+    water_consumption: false  # Same as water_consumption_stacked
+    energy_pie: false  # Same as power_consumption_breakdown_pie
+    price_histogram: true  # Unique - no alias
+    dispatch_curve: false  # Same as dispatch_curve_scatter
+    cumulative_h2: false  # Same as cumulative_h2_production
+    cumulative_energy: true  # Unique - no alias
+    efficiency_curve: true  # Unique - no alias
+    revenue_analysis: true  # Unique - no alias
+    temporal_averages: true  # Unique - no alias
   
   # Export settings
   export:
@@ -92,7 +100,7 @@ visualization:
     
     # Dashboard generation
     dashboard:
-      enabled: false
+      enabled: true
       filename: "dashboard.html"
       title: "H2 Plant Simulation Dashboard"
       include_graphs:  # Specify order (empty = all enabled)
@@ -111,6 +119,6 @@ visualization:
     downsample_factor: 10  # Keep every Nth point
     
     # Use WebGL for large datasets
-    use_webgl: false
+    use_webgl: true
 
 

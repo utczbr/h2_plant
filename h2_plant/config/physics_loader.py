@@ -26,7 +26,9 @@ def load_physics_parameters(config_path: str = None) -> Dict[str, Any]:
         # Default locations
         root_dir = Path(__file__).parent.parent.parent
         paths_to_try = [
+            root_dir / "scenarios" / "physics_parameters.yaml",  # User's location
             root_dir / "configs" / "physics_parameters.yaml",
+            Path("scenarios/physics_parameters.yaml"),
             Path("configs/physics_parameters.yaml"),
             Path("physics_parameters.yaml")
         ]

@@ -436,9 +436,11 @@ class Coalescer(Component):
             "power_loss_w": self.current_power_loss_w,
             "outlet_flow_kg_h": self.output_stream.mass_flow_kg_h if self.output_stream else 0.0,
             "drain_flow_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0,
+            "water_removed_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0,  # Alias for graph plotter
             "drain_temp_k": self.drain_stream.temperature_k if self.drain_stream else 0.0,
             "drain_pressure_bar": self.drain_stream.pressure_pa / 1e5 if self.drain_stream else 0.0,
             "dissolved_gas_ppm": (self._step_gas_dissolved / (self.drain_stream.mass_flow_kg_h * self.dt) * 1e6) 
-                                 if (self.drain_stream and self.drain_stream.mass_flow_kg_h > 0) else 0.0
+                                 if (self.drain_stream and self.drain_stream.mass_flow_kg_h > 0) else 0.0,
+            "outlet_o2_ppm_mol": (self.output_stream.get_total_mole_frac('O2') * 1e6) if self.output_stream else 0.0
         })
         return state

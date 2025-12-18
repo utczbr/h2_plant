@@ -653,8 +653,65 @@ class DetailedPEMElectrolyzer(Component):
             "state": self.state,
             "cumulative_h2_kg": self.cumulative_h2_kg,
             "cumulative_o2_kg": self.cumulative_o2_kg,
-            "cumulative_energy_kwh": self.cumulative_energy_kwh
+            "cumulative_energy_kwh": self.cumulative_energy_kwh,
+            "o2_impurity_ppm_mol": self._calculate_o2_ppm_total_molar()  # Use table-consistent calculation
         }
+
+    def _calculate_o2_ppm_total_molar(self) -> float:
+        """
+        Calculate O2 molar ppm using same method as Stream Summary Table.
+        
+        Includes entrained liquid water in total moles denominator for
+        consistency with the table output.
+        """
+        # This mirrors the calculation in _print_stream_summary_table
+        MW_H2 = 2.016    # g/mol
+        MW_H2O = 18.015  # g/mol
+        MW_O2 = 32.0     # g/mol
+        
+        # Get gas phase composition (from get_output logic)
+        y_H2 = CONST.h2_purity_molar
+        y_O2 = CONST.o2_crossover_ppm_molar / 1e6
+        y_H2O = CONST.h2o_vapor_ppm_molar / 1e6
+        
+        # Normalize
+        y_total = y_H2 + y_O2 + y_H2O
+        y_H2 /= y_total
+        y_O2 /= y_total
+        y_H2O /= y_total
+        
+        # Convert to mass fractions
+        MH2, MO2, MH2O = CONST.MH2, CONST.MO2, CONST.MH2O
+        sum_yMW = y_H2 * MH2 + y_O2 * MO2 + y_H2O * MH2O
+        x_H2 = y_H2 * MH2 / sum_yMW
+        x_O2 = y_O2 * MO2 / sum_yMW
+        x_H2O = y_H2O * MH2O / sum_yMW
+        
+        # Gas mass flow
+        m_gas_kg_s = self.m_H2_kg_s / x_H2 if x_H2 > 0 and self.m_H2_kg_s > 0 else 0.0
+        if m_gas_kg_s <= 0:
+            return 0.0
+        
+        # Entrained liquid water
+        water_fraction = CONST.entrained_water_fraction
+        m_H2O_liq_kg_s = m_gas_kg_s * water_fraction / (1.0 - water_fraction)
+        
+        # Mass rates (kg/s)
+        m_h2 = m_gas_kg_s * x_H2
+        m_o2 = m_gas_kg_s * x_O2
+        m_h2o_vapor = m_gas_kg_s * x_H2O
+        m_h2o_total = m_h2o_vapor + m_H2O_liq_kg_s
+        
+        # Convert to moles
+        n_h2 = m_h2 / MW_H2
+        n_h2o = m_h2o_total / MW_H2O
+        n_o2 = m_o2 / MW_O2
+        n_total = n_h2 + n_h2o + n_o2
+        
+        if n_total <= 0:
+            return 0.0
+        
+        return (n_o2 / n_total) * 1e6
 
     def get_output(self, port_name: str) -> Any:
         """
@@ -674,28 +731,72 @@ class DetailedPEMElectrolyzer(Component):
             ValueError: If port_name is not a valid output port.
 
         Note:
-            H₂ output includes unreacted water vapor (mist) based on the
-            unreacted_water_fraction constant.
+            H₂ output gas phase has trace impurities from membrane crossover:
+            - O₂: ~199 ppm molar (membrane crossover)
+            - H₂O vapor: ~218 ppm molar (saturation at outlet conditions)
+            
+            SEPARATELY, entrained liquid water (~15% mass) accompanies the
+            gas stream and is tracked in Stream.extra['m_dot_H2O_liq_accomp_kg_s'].
+            This liquid is removed by downstream KODs and coalescers.
         """
         if port_name == 'h2_out':
-            water_fraction = CONST.unreacted_water_fraction
-            m_H2O_carryover_kg_s = self.m_H2_kg_s * water_fraction / (1.0 - water_fraction)
-            m_total_out_kg_s = self.m_H2_kg_s + m_H2O_carryover_kg_s
-
+            # === GAS PHASE COMPOSITION (MOLAR FRACTIONS FROM YAML) ===
+            # All values are configurable in physics_parameters.yaml under pem_system
+            y_H2 = CONST.h2_purity_molar           # ~0.999583 (99.96% molar)
+            y_O2 = CONST.o2_crossover_ppm_molar / 1e6  # 199 ppm molar → 0.000199
+            y_H2O = CONST.h2o_vapor_ppm_molar / 1e6    # 218 ppm molar → 0.000218
+            
+            # Normalize to ensure sum = 1
+            y_total = y_H2 + y_O2 + y_H2O
+            y_H2 /= y_total
+            y_O2 /= y_total
+            y_H2O /= y_total
+            
+            # Convert molar fractions to mass fractions
+            MH2, MO2, MH2O = CONST.MH2, CONST.MO2, CONST.MH2O
+            sum_yMW = y_H2 * MH2 + y_O2 * MO2 + y_H2O * MH2O
+            x_H2 = y_H2 * MH2 / sum_yMW
+            x_O2 = y_O2 * MO2 / sum_yMW
+            x_H2O = y_H2O * MH2O / sum_yMW
+            
+            # Gas phase mass flow (H2 + trace O2 + trace H2O vapor)
+            # Total gas = m_H2 / x_H2 (since H2 is the dominant component)
+            m_gas_kg_s = self.m_H2_kg_s / x_H2 if x_H2 > 0 else self.m_H2_kg_s
+            
+            # === ENTRAINED LIQUID WATER (SEPARATE FROM GAS PHASE) ===
+            # The entrained_water_fraction (0.15) is the mass ratio of entrained
+            # liquid water to gas mass (legacy: 15% of total stream is liquid H2O)
+            water_fraction = CONST.entrained_water_fraction  # From YAML (default 0.15)
+            m_H2O_liq_kg_s = m_gas_kg_s * water_fraction / (1.0 - water_fraction)
+            
+            # Total stream mass (gas + entrained liquid)
+            m_total_kg_s = m_gas_kg_s + m_H2O_liq_kg_s
+            
             return Stream(
-                mass_flow_kg_h=m_total_out_kg_s * 3600.0,
-                temperature_k=353.15,
+                mass_flow_kg_h=m_total_kg_s * 3600.0,
+                temperature_k=CONST.output_temperature_k,  # From YAML (60°C default)
                 pressure_pa=self.out_pressure_pa,
                 composition={
-                    'H2': self.m_H2_kg_s / m_total_out_kg_s if m_total_out_kg_s > 0 else 0.0,
-                    'H2O': m_H2O_carryover_kg_s / m_total_out_kg_s if m_total_out_kg_s > 0 else 0.0
+                    # Gas phase mass fractions (normalized to gas phase only)
+                    'H2': x_H2,
+                    'H2O': x_H2O,  # Vapor only (~1939 ppm mass)
+                    'O2': x_O2     # ~3144 ppm mass
                 },
-                phase='gas'
+                phase='mixed',  # Indicates both vapor and entrained liquid
+                extra={
+                    # Entrained liquid tracked separately
+                    'm_dot_H2O_liq_accomp_kg_s': m_H2O_liq_kg_s,
+                    'H2O_liq_mass_fraction': m_H2O_liq_kg_s / m_total_kg_s if m_total_kg_s > 0 else 0.0,
+                    # Molar ppm values for downstream components
+                    'o2_ppm_molar': CONST.o2_crossover_ppm_molar,
+                    'h2o_vapor_ppm_molar': CONST.h2o_vapor_ppm_molar,
+                    'water_reuse_fraction': CONST.water_reuse_fraction
+                }
             )
         elif port_name == 'oxygen_out':
             return Stream(
                 mass_flow_kg_h=self.m_O2_kg_s * 3600.0,
-                temperature_k=353.15,
+                temperature_k=CONST.output_temperature_k,  # 60°C
                 pressure_pa=101325.0,
                 composition={'O2': 1.0},
                 phase='gas'

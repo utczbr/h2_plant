@@ -59,9 +59,21 @@ class PlantGraphBuilder:
         """Factory method to create component based on type."""
         
         if node.type == "PEM":
-            # Inject PEM Physics Spec directly
-            physics_spec = self.context.physics.pem_system
-            return DetailedPEMElectrolyzer(physics_spec)
+            # Inject PEM Physics Spec AND merge with node.params for overrides
+            # Convert physics_spec Pydantic model to dict, then merge node.params
+            if hasattr(self.context.physics, 'pem_system'):
+                physics_dict = self.context.physics.pem_system.model_dump() if hasattr(self.context.physics.pem_system, 'model_dump') else dict(self.context.physics.pem_system)
+            else:
+                physics_dict = {}
+            
+            # Merge node.params to allow YAML overrides (e.g., out_pressure_pa)
+            if node.params:
+                physics_dict.update(node.params)
+            
+            # Add component_id from node.id
+            physics_dict['component_id'] = node.id
+            
+            return DetailedPEMElectrolyzer(physics_dict)
             
         elif node.type == "SOEC":
             # Inject SOEC Physics Spec directly
@@ -213,6 +225,14 @@ class PlantGraphBuilder:
                 max_heat_removal_kw=float(node.params.get('max_heat_removal_kw', 50.0)),
                 target_outlet_temp_c=float(node.params.get('target_outlet_temp_c', 25.0))
             )
+            
+        elif node.type == "ElectricBoiler":
+            from h2_plant.components.thermal.electric_boiler import ElectricBoiler
+            return ElectricBoiler(config={
+                'max_power_kw': float(node.params.get('max_power_kw', 1000.0)),
+                'efficiency': float(node.params.get('efficiency', 0.99)),
+                'design_pressure_bar': float(node.params.get('design_pressure_bar', 10.0))
+            })
             
         elif node.type == "Coalescer":
             from h2_plant.components.separation.coalescer import Coalescer

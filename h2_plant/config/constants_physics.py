@@ -85,14 +85,51 @@ class PEMConstants:
     j_nom: float = _get_val('pem', 'j_nom', 2.91)                # Nominal current density (A/cm²)
     
     # Operating Conditions
-    T_default: float = _get_val('pem', 'T_default', 333.15)      # Default temperature (K)
-    P_op_default: float = _get_val('pem', 'P_op_default', 40.0e5)  # Default pressure (Pa)
+    T_default: float = _get_val('pem_system', 'T_default', 333.15)      # Default temperature (K)
+    P_op_default: float = _get_val('pem_system', 'P_op_default', 40.0e5)  # Default pressure (Pa)
     
     # Balance of Plant (BoP) and System Power
-    floss: float = _get_val('pem', 'floss', 0.02)                          # Fluid loss factor
-    k_bop_var: float = _get_val('pem', 'k_bop_var', 0.04)                  # Variable BoP power fraction
-    unreacted_water_fraction: float = _get_val('pem', 'unreacted_water_fraction', 0.03)
-    P_nominal_sistema_kW: float = _get_val('pem', 'P_nominal_sistema_kW', 5000.0)
+    floss: float = _get_val('pem_system', 'floss', 0.02)                          # Fluid loss factor
+    k_bop_var: float = _get_val('pem_system', 'k_bop_var', 0.04)                  # Variable BoP power fraction
+    water_excess_factor: float = _get_val('pem_system', 'water_excess_factor', 0.02)
+    P_nominal_sistema_kW: float = _get_val('pem_system', 'P_nominal_sistema_kW', 5000.0)
+    
+    # === Output Stream Conditions (from physics_parameters.yaml) ===
+    # Temperature and pressure at PEM outlet
+    output_temperature_c: float = _get_val('pem_system', 'output_temperature_c', 60.0)
+    output_pressure_bar: float = _get_val('pem_system', 'output_pressure_bar', 40.0)
+    
+    @property
+    def output_temperature_k(self) -> float:
+        """Output temperature in Kelvin."""
+        return self.output_temperature_c + 273.15
+    
+    @property
+    def output_pressure_pa(self) -> float:
+        """Output pressure in Pascals."""
+        return self.output_pressure_bar * 1e5
+    
+    # === Gas Phase Composition (MOLAR PPM / fractions) ===
+    h2_purity_molar: float = _get_val('pem_system', 'h2_purity_molar', 0.999583)
+    o2_crossover_ppm_molar: float = _get_val('pem_system', 'o2_crossover_ppm_molar', 199.0)
+    h2o_vapor_ppm_molar: float = _get_val('pem_system', 'h2o_vapor_ppm_molar', 218.0)
+    
+    # === Entrained Liquid Water ===
+    entrained_water_fraction: float = _get_val('pem_system', 'entrained_water_fraction', 0.15)
+    water_reuse_fraction: float = _get_val('pem_system', 'water_reuse_fraction', 0.95)  # 95% reused
+    demister_limit_mg_nm3: float = _get_val('pem_system', 'demister_limit_mg_nm3', 20.0)
+    
+    # Legacy aliases for backward compatibility
+    @property
+    def unreacted_water_fraction(self) -> float:
+        """Alias for entrained_water_fraction (deprecated name)."""
+        return self.entrained_water_fraction
+    
+    @property
+    def o2_crossover_molar_ppm(self) -> float:
+        """Alias for o2_crossover_ppm_molar."""
+        return self.o2_crossover_ppm_molar
+    
     
     @property
     def P_nominal_sistema_W(self) -> float:

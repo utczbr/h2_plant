@@ -647,6 +647,18 @@ class GraphCatalog:
             enabled=True
         ))
         self.register(GraphMetadata(
+            graph_id='dissolved_gas_efficiency',
+            title='Dissolved Gas Removal Efficiency',
+            description='IN vs OUT concentration with removal % - plot_concentracao_dreno (bar chart)',
+            function=sg.create_dissolved_gas_efficiency_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='separation',
+            enabled=True
+        ))
+
+        self.register(GraphMetadata(
             graph_id='crossover_impurities',
             title='Crossover Impurities',
             description='O2 in H2 / H2 in O2 tracking (ppm molar) - plot_impurezas_crossover',
@@ -670,7 +682,6 @@ class GraphCatalog:
             category='profile',
             enabled=True
         ))
-        # Energy & Thermal Analysis (From Plots.csv)
         self.register(GraphMetadata(
             graph_id='energy_flows',
             title='Energy Flows & Consumption',
@@ -680,6 +691,17 @@ class GraphCatalog:
             data_required=['history'],
             priority=GraphPriority.HIGH,
             category='energy',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='plant_balance',
+            title='Plant Balance Schematic',
+            description='Control volume diagram showing mass/energy balance - replaces plot_esquema_planta_completa',
+            function=sg.create_plant_balance_schematic,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.CRITICAL,
+            category='summary',
             enabled=True
         ))
         self.register(GraphMetadata(
@@ -757,6 +779,28 @@ class GraphCatalog:
             data_required=['history'],
             priority=GraphPriority.MEDIUM,
             category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='water_vapor_tracking',
+            title='Water Vapor Tracking',
+            description='Water vapor flow with PPM labels - plot_vazao_agua_separada',
+            function=sg.create_water_vapor_tracking_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='separation',
+            enabled=True
+        ))
+        self.register(GraphMetadata(
+            graph_id='total_mass_flow',
+            title='Total Mass Flow Comparison',
+            description='Gas + Vapor + Liquid mass flow - plot_vazao_massica_total_e_removida',
+            function=sg.create_total_mass_flow_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='flow',
             enabled=True
         ))
 

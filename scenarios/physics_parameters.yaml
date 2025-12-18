@@ -3,9 +3,26 @@ pem_system:
   base_efficiency: 0.65
   kwh_per_kg: 56.16
   use_polynomials: true
-  degradation_rate_per_1000h: 0.001 # Example
-  water_excess_factor: 0.02 # 2% extra water consumption
-
+  water_excess_factor: 0.02 # 2% extra water consumption for cooling
+  
+  # Outlet Stream Conditions (configurable)
+  output_temperature_c: 60.0      # °C (exit temperature before first KOD)
+  output_pressure_bar: 40.0       # bar (operating pressure)
+  
+  # Gas Phase Impurities (MOLAR PPM - saturated vapor + crossover)
+  # H2O: Saturated at 60°C, 40 bar → y_H2O = P_sat/P_total = 0.199/40 ≈ 0.00498
+  h2o_vapor_ppm_molar: 4986.0     # ~4986 ppm molar (saturation at 60°C, 40 bar)
+  o2_crossover_ppm_molar: 200.0   # O2 crossover through membrane (molar ppm)
+  # H2 = 1.0 - y_H2O - y_O2 = 1.0 - 0.004986 - 0.0002 = 0.994814
+  h2_purity_molar: 0.994814       # ~99.48% H2 molar fraction (balance)
+  
+  # Entrained Liquid Water (separate from gas phase)
+  entrained_water_fraction: 0.15  # 15% of total stream mass is entrained liquid H2O
+  water_reuse_fraction: 0.95      # 95% of drained water is reused (only 5% is lost)
+  demister_limit_mg_nm3: 20.0     # Max liquid mist after demister (mg/Nm³)
+  
+  # Degradation: Uses polynomial interpolation from V-years table (see constants_physics.py)
+  # The degradation_rate_per_1000h is DEPRECATED - kept for backward compatibility only
 soec_cluster:
   max_power_nominal_mw: 2.4
   optimal_limit: 0.80

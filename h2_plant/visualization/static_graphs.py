@@ -6,6 +6,7 @@ It replaces the legacy `h2_plant/gui/core/plotter.py` and `h2_plant/visualizatio
 """
 
 from matplotlib.figure import Figure
+import matplotlib.patches as mpatches
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
@@ -100,9 +101,42 @@ def downsample_for_plot(data, max_points: int = 500):
     stride = max(1, len(data) // max_points)
     return data[::stride]
 
+
 # ==============================================================================
 # DATA NORMALIZATION
 # ==============================================================================
+
+def _detect_component_stream_type(df: pd.DataFrame, comp_name: str) -> str:
+    """
+    Detect if component processes primarily H2 or O2 based on history composition.
+    
+    Args:
+        df: History DataFrame
+        comp_name: Component name (e.g., 'KOD_1')
+        
+    Returns:
+        'H2', 'O2', or 'Mixed'
+    """
+    # Try molar fractions
+    h2_cols = [c for c in df.columns if comp_name in c and ('molar_fraction_H2' in c or 'MassFrac_H2' in c)]
+    o2_cols = [c for c in df.columns if comp_name in c and ('molar_fraction_O2' in c or 'MassFrac_O2' in c)]
+    
+    if not h2_cols and not o2_cols:
+        return 'Mixed'
+        
+    # Calculate average composition
+    h2_mean = df[h2_cols].mean().mean() if h2_cols else 0.0
+    o2_mean = df[o2_cols].mean().mean() if o2_cols else 0.0
+    
+    if h2_mean > 0.5:
+        return 'H2'
+    elif o2_mean > 0.5:
+        return 'O2'
+        
+    # If no dominant species found by composition (e.g. water line), try inference from upstream/downstream
+    # For now, return Mixed
+    return 'Mixed'
+
 def normalize_history(history: Dict[str, Any]) -> pd.DataFrame:
     """
     Normalizes the history dictionary to ensure consistent keys for plotting.
@@ -409,7 +443,7 @@ def create_revenue_analysis_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     revenue_per_min = (df['P_sold'] * df['Spot']) / 60.0
     cumulative_revenue_full = revenue_per_min.cumsum()
     
-    cumulative_h2_value_full = ((df['H2_soec'] + df['H2_pem']) * H2_PRICE_EUR_KG).cumsum()
+    cumulative_h2_value_full = ((df['H2_soec'] + df['H2_pem']) * get_config(df, 'h2_price_eur_kg', 9.6)).cumsum()
     
     final_revenue = cumulative_revenue_full.iloc[-1] if not cumulative_revenue_full.empty else 0
     final_h2_value = cumulative_h2_value_full.iloc[-1] if not cumulative_h2_value_full.empty else 0
@@ -472,8 +506,13 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
 # I will include the critical ones requested/verified recently: Water charts
 
 def create_water_removal_total_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
-    """Create water removal bar chart."""
-    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    """
+    Create Water Removal Bar Chart (Cumulative).
+    
+    Enhanced to show H2 vs O2 stream sources separately,
+    replicating legacy behavior while keeping cumulative mass metric.
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
     
     water_cols = [c for c in df.columns if 'water_removed' in c.lower() or 'water_condensed' in c.lower()]
@@ -483,23 +522,74 @@ def create_water_removal_total_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> 
         return fig
     
     dt_hours = 1.0 / 60.0
-    component_totals = {}
+    
+    # Organize data by stream type
+    data = {
+        'H2': {},
+        'O2': {},
+        'Mixed': {}
+    }
+    
     for col in water_cols:
-        parts = col.replace('_water_removed_kg_h', '').replace('_water_condensed_kg_h', '').upper()
-        component_totals[parts] = df[col].sum() * dt_hours
+        # Extract component name
+        # Heuristic: Remove standard suffixes
+        parts = col.replace('_water_removed_kg_h', '').replace('_water_condensed_kg_h', '')
+        # Handle cases where component name has underscores (e.g. KOD_1)
+        # Usually checking exact column name logic is better
+        # Let's try to extract standard component ID which is usually at start
+        # Assume format: {ComponentID}_{Property}
+        # But here properties are long.
+        comp_name = parts # Simplification for now, works if property is suffix
+        
+        # Calculate total mass
+        total_kg = df[col].sum() * dt_hours
+        
+        if total_kg > 0.01:
+            stream_type = _detect_component_stream_type(df, comp_name)
+            data[stream_type][comp_name] = total_kg
     
-    sorted_items = sorted(component_totals.items(), key=lambda x: x[1], reverse=True)
-    components = [x[0] for x in sorted_items]
-    totals = [x[1] for x in sorted_items]
+    # Flatten for plotting
+    groups = []
     
-    bars = ax.bar(components, totals, color=COLORS.get('kod', '#42A5F5'), edgecolor='black')
-    for bar, val in zip(bars, totals):
-        if val > 0.01:
-            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01, f'{val:.2f}', ha='center', va='bottom', fontsize=9)
+    for stream, items in data.items():
+        if items:
+            sorted_items = sorted(items.items(), key=lambda x: x[1], reverse=True)
+            for comp, val in sorted_items:
+                groups.append({
+                    'comp': comp,
+                    'val': val,
+                    'type': stream,
+                    'color': 'tab:blue' if stream == 'H2' else 'tab:red' if stream == 'O2' else 'tab:gray'
+                })
+    
+    if not groups:
+        ax.text(0.5, 0.5, 'No significant water removal (> 0.01 kg).', ha='center', va='center')
+        return fig
+        
+    # Plotting
+    names = [g['comp'] for g in groups]
+    values = [g['val'] for g in groups]
+    colors = [g['color'] for g in groups]
+    
+    bars = ax.bar(names, values, color=colors, edgecolor='black', alpha=0.8)
+    
+    # Legend
+    legend_elements = [
+        mpatches.Rectangle((0,0),1,1, color='tab:blue', label='H2 Stream'),
+        mpatches.Rectangle((0,0),1,1, color='tab:red', label='O2 Stream'),
+        mpatches.Rectangle((0,0),1,1, color='tab:gray', label='Combined/Other')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+    
+    # Annotations
+    for bar, val in zip(bars, values):
+         ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.05, 
+                 f'{val:.1f}', ha='center', va='bottom', fontsize=9, fontweight='bold')
             
     ax.set_ylabel('Total Water Removed (kg)')
-    ax.set_title('Total Water Removal by Component', fontsize=12)
+    ax.set_title('Cumulative Water Removal by Component', fontsize=12, pad=15)
     ax.grid(axis='y', linestyle='--', alpha=0.5)
+    
     return fig
 
 def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
@@ -638,6 +728,112 @@ def create_energy_flows_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     return fig
 
 
+def create_plant_balance_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Plant Balance Diagram (Control Volume).
+    
+    Replaces legacy `plot_esquema_planta_completa.py`.
+    Shows aggregated mass/energy balance as a system-level schematic.
+    Dynamically shows inputs/outputs based on available data.
+    """
+    fig = Figure(figsize=(14, 10), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.axis('off')
+    
+    dt_hours = 1.0 / 60.0  # Minutes to hours
+    
+    # --- Aggregate Metrics ---
+    # H2 Product (sum of all H2 production columns)
+    h2_cols = [c for c in df.columns if 'h2_production_kg' in c.lower() or 'h2_soec' in c.lower() or 'h2_pem' in c.lower()]
+    h2_total = sum(df[c].sum() for c in h2_cols) if h2_cols else 0.0
+    
+    # O2 Product (from external O2 sources or O2 stream finals)
+    o2_cols = [c for c in df.columns if 'o2_production' in c.lower() or 'outlet_mass' in c.lower() and 'o2' in c.lower()]
+    o2_total = sum(df[c].sum() * dt_hours for c in o2_cols) if o2_cols else 0.0
+    
+    # Electric Power (SOEC + PEM consumption)
+    power_cols = [c for c in df.columns if 'p_soec' in c.lower() or 'p_pem' in c.lower()]
+    power_total = sum(df[c].sum() * dt_hours / 60.0 for c in power_cols) if power_cols else 0.0  # MWh
+    
+    # Heat Rejected
+    heat_cols = [c for c in df.columns if 'cooling_load_kw' in c.lower() or 'heat_removed_kw' in c.lower()]
+    heat_total = sum(df[c].sum() * dt_hours for c in heat_cols) if heat_cols else 0.0  # kWh
+    
+    # Water Makeup (from water source or tank inlet)
+    water_in_cols = [c for c in df.columns if 'makeup' in c.lower() or 'water_source' in c.lower()]
+    water_makeup = sum(df[c].sum() * dt_hours for c in water_in_cols) if water_in_cols else 0.0
+    
+    # Water Removed (condensed)
+    water_out_cols = [c for c in df.columns if 'water_removed' in c.lower() or 'water_condensed' in c.lower()]
+    water_removed = sum(df[c].sum() * dt_hours for c in water_out_cols) if water_out_cols else 0.0
+    
+    # --- Draw Control Volume ---
+    cv_rect = mpatches.FancyBboxPatch((15, 25), 70, 55, boxstyle='round,pad=0.02',
+                                       edgecolor='black', facecolor='#f0f8ff', linewidth=3)
+    ax.add_patch(cv_rect)
+    ax.text(50, 78, 'PLANT CONTROL VOLUME', ha='center', fontsize=14, fontweight='bold')
+    
+    # --- Inputs (Left Side) ---
+    input_y = 65
+    
+    # Power Input
+    if power_total > 0:
+        ax.annotate('', xy=(15, input_y), xytext=(2, input_y),
+                    arrowprops=dict(arrowstyle='->', color='gold', lw=2))
+        ax.text(2, input_y + 2, f'Power: {power_total:.1f} MWh', fontsize=10, color='darkorange', fontweight='bold')
+        input_y -= 12
+    
+    # Water Makeup
+    if water_makeup > 0:
+        ax.annotate('', xy=(15, input_y), xytext=(2, input_y),
+                    arrowprops=dict(arrowstyle='->', color='cyan', lw=2))
+        ax.text(2, input_y + 2, f'Makeup: {water_makeup:.1f} kg', fontsize=10, color='darkcyan', fontweight='bold')
+    
+    # --- Outputs (Right Side) ---
+    output_y = 65
+    
+    # H2 Product
+    if h2_total > 0:
+        ax.annotate('', xy=(98, output_y), xytext=(85, output_y),
+                    arrowprops=dict(arrowstyle='->', color='blue', lw=3))
+        ax.text(86, output_y + 2, f'H₂: {h2_total:.1f} kg', fontsize=11, color='darkblue', fontweight='bold')
+        output_y -= 12
+    
+    # O2 Product
+    if o2_total > 0:
+        ax.annotate('', xy=(98, output_y), xytext=(85, output_y),
+                    arrowprops=dict(arrowstyle='->', color='red', lw=3))
+        ax.text(86, output_y + 2, f'O₂: {o2_total:.1f} kg', fontsize=11, color='darkred', fontweight='bold')
+        output_y -= 12
+    
+    # --- Bottom Outputs ---
+    # Heat Rejected
+    if heat_total > 0:
+        ax.annotate('', xy=(35, 10), xytext=(35, 25),
+                    arrowprops=dict(arrowstyle='->', color='salmon', lw=2))
+        ax.text(35, 5, f'Heat: {heat_total:.0f} kWh', ha='center', fontsize=10, color='red')
+    
+    # Water Removed
+    if water_removed > 0:
+        ax.annotate('', xy=(65, 10), xytext=(65, 25),
+                    arrowprops=dict(arrowstyle='->', color='lightblue', lw=2))
+        ax.text(65, 5, f'Water Out: {water_removed:.1f} kg', ha='center', fontsize=10, color='teal')
+    
+    # --- Title ---
+    ax.set_title('Plant Mass & Energy Balance', fontsize=16, pad=20)
+    
+    # --- Legend ---
+    legend_text = (
+        f"Simulation Period: {len(df)} minutes\n"
+        f"Total H₂ Produced: {h2_total:.2f} kg\n"
+        f"Total Heat Rejected: {heat_total:.1f} kWh"
+    )
+    ax.text(50, 45, legend_text, ha='center', va='center', fontsize=10, 
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return fig
 
 def create_mixer_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
@@ -745,11 +941,19 @@ def _find_component_columns(df: pd.DataFrame, component_type: str, metric: str) 
         Dict mapping component_id to data series
     """
     result = {}
-    pattern = f"_{metric}"
+    metric_lower = metric.lower()
     for col in df.columns:
-        if component_type.lower() in col.lower() and metric.lower() in col.lower():
-            # Extract component name (everything before the metric)
-            comp_name = col.replace(f"_{metric}", "").replace(f"_{metric.lower()}", "")
+        col_lower = col.lower()
+        if component_type.lower() in col_lower and metric_lower in col_lower:
+            # Extract component name using rsplit (more robust than replace)
+            # e.g., "KOD_1_dissolved_gas_ppm" → "KOD_1"
+            parts = col.rsplit(f"_{metric}", 1)
+            if len(parts) == 2:
+                comp_name = parts[0]
+            else:
+                # Try case-insensitive match
+                parts = col_lower.rsplit(f"_{metric_lower}", 1)
+                comp_name = col[:len(parts[0])] if len(parts) == 2 else col.split('_')[0]
             result[comp_name] = df[col]
     return result
 
@@ -865,78 +1069,276 @@ def create_dissolved_gas_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     
     return fig
 
+
+def create_dissolved_gas_efficiency_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    plot_concentracao_dreno (Bar Chart Mode): Dissolved Gas Removal Efficiency.
+    
+    Compares dissolved gas concentration IN vs OUT for separation components.
+    Shows removal efficiency as percentage labels.
+    
+    Uses time-averaged values.
+    """
+    fig = Figure(figsize=(10, 7), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Find inlet and outlet dissolved gas columns
+    in_cols = [c for c in df.columns if 'dissolved_gas_in' in c.lower() or 'gas_dissolved_inlet' in c.lower()]
+    out_cols = [c for c in df.columns if 'dissolved_gas_out' in c.lower() or 'gas_dissolved_outlet' in c.lower()]
+    
+    # Alternative: look for paired water_removed columns
+    if not in_cols:
+        in_cols = [c for c in df.columns if '_inlet_dissolved_ppm' in c.lower()]
+    if not out_cols:
+        out_cols = [c for c in df.columns if '_outlet_dissolved_ppm' in c.lower()]
+    
+    if not in_cols and not out_cols:
+        # Fallback: show aggregated data per component
+        ax.text(0.5, 0.5, 'No IN/OUT dissolved gas data found.\nThis graph requires inlet/outlet concentration tracking.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=11, color='gray')
+        ax.set_title('Dissolved Gas Removal Efficiency')
+        return fig
+    
+    # Build component data
+    components = []
+    c_in_vals = []
+    c_out_vals = []
+    efficiencies = []
+    
+    for col in sorted(in_cols):
+        comp = col.replace('_inlet_dissolved_ppm', '').replace('_dissolved_gas_in', '')
+        components.append(comp)
+        c_in = df[col].mean()
+        c_in_vals.append(c_in)
+        
+        # Find matching outlet
+        out_match = [c for c in out_cols if comp in c]
+        c_out = df[out_match[0]].mean() if out_match else 0
+        c_out_vals.append(c_out)
+        
+        # Calculate efficiency
+        eff = (c_in - c_out) / c_in * 100 if c_in > 0 else 0
+        efficiencies.append(eff)
+    
+    if not components:
+        ax.text(0.5, 0.5, 'No matching component data found.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=11, color='gray')
+        return fig
+    
+    x = np.arange(len(components))
+    width = 0.35
+    
+    # Bars
+    bars_in = ax.bar(x - width/2, c_in_vals, width, label='Concentration IN (ppm)', color='#1f77b4')
+    bars_out = ax.bar(x + width/2, c_out_vals, width, label='Concentration OUT (ppm)', color='#ff7f0e')
+    
+    # Efficiency labels
+    for i, (bar_out, eff) in enumerate(zip(bars_out, efficiencies)):
+        if eff > 0:
+            ax.annotate(f'{eff:.1f}%', xy=(bar_out.get_x() + bar_out.get_width()/2, bar_out.get_height()),
+                       xytext=(0, 5), textcoords='offset points', ha='center', fontsize=9,
+                       color='green', fontweight='bold')
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels(components, rotation=30, ha='right')
+    ax.set_ylabel('Concentration (ppm)')
+    ax.set_title('Dissolved Gas Removal Efficiency (IN vs OUT)', fontsize=12)
+    ax.legend()
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    return fig
+
 def create_crossover_impurities_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_impurezas_crossover: Crossover Impurity Tracking.
     
-    Plots trace impurities in main streams:
-    - O2 in H2 Stream (Source Input -> Deoxo Output)
-    - H2 in O2 Stream (Source Input)
+    Plots **time-averaged** trace impurities as a component profile (x-axis = components):
+    - Subplot 1: O2 impurity in H2 stream (progression through components)
+    - Subplot 2: H2 impurity in O2 stream (progression through components)
+    
+    This matches the legacy plot_impurezas_crossover.py visualization style.
     """
     fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
+    fig.suptitle('Crossover Impurity Evolution (Log Scale)', y=0.98, fontsize=14)
     
-    # 1. Collect Data
-    # H2 Source O2 impurity
-    h2_source_o2_ppm = _find_component_columns(df, 'H2Source', 'o2_impurity_ppm_mol') # Or similar ID
-    if not h2_source_o2_ppm: # Try generic h2_source
-         h2_source_o2_ppm = _find_component_columns(df, 'h2_source', 'o2_impurity_ppm_mol')
-         
-    # Deoxo Outlet O2
-    deoxo_o2_ppm = _find_component_columns(df, 'Deoxo', 'outlet_o2_ppm_mol')
+    # -------------------------------------------------------------------------
+    # 1. Collect ALL columns that have impurity-related metrics for H2 and O2 streams
+    # -------------------------------------------------------------------------
     
-    # O2 Source H2 impurity
-    o2_source_h2_ppm = _find_component_columns(df, 'O2Source', 'h2_impurity_ppm_mol')
-    if not o2_source_h2_ppm:
-        o2_source_h2_ppm = _find_component_columns(df, 'o2_source', 'h2_impurity_ppm_mol')
+    # H2 Stream: Look for O2 impurity columns across components
+    # Common patterns: *_o2_impurity_ppm_mol, *_outlet_o2_ppm_mol, *_y_o2_ppm
+    h2_stream_o2_data = {}  # {component_name: avg_ppm_value}
+    
+    # Define the suffixes we're looking for (order matters - most specific first)
+    o2_suffixes = [
+        '_o2_impurity_ppm_mol',
+        '_outlet_o2_ppm_mol', 
+        '_o2_ppm_mol',
+        '_y_o2_ppm',
+        '_o2_ppm',
+    ]
+    
+    for col in df.columns:
+        col_lower = col.lower()
+        
+        # Check if this column contains any O2 ppm pattern
+        if 'o2' in col_lower and 'ppm' in col_lower:
+            # Extract component name by finding the suffix
+            comp_name = None
+            for suffix in o2_suffixes:
+                idx = col_lower.find(suffix)
+                if idx != -1:
+                    comp_name = col[:idx]  # Use original case
+                    break
+            
+            if comp_name is None:
+                # Fallback: try to split on common patterns
+                if '_o2' in col_lower:
+                    parts = col.split('_o2')
+                    comp_name = parts[0] if parts else col.split('_')[0]
+                else:
+                    comp_name = col.split('_')[0]
+            
+            # Compute time-averaged value (mean of all values, including 0)
+            series = df[col]
+            avg_val = series.mean() if len(series) > 0 else 0.0
+            
+            if comp_name:
+                h2_stream_o2_data[comp_name] = avg_val
 
-    all_data = {**h2_source_o2_ppm, **deoxo_o2_ppm, **o2_source_h2_ppm}
     
-    if not all_data:
+    # O2 Stream: Look for H2 impurity columns across components
+    o2_stream_h2_data = {}  # {component_name: avg_ppm_value}
+    
+    for col in df.columns:
+        col_lower = col.lower()
+        # Match H2 impurity columns in O2 stream components
+        if any(pattern in col_lower for pattern in ['h2_impurity_ppm', 'outlet_h2_ppm', 'y_h2_ppm', 'h2_ppm_mol']):
+            # Extract component name
+            for suffix in ['_h2_impurity_ppm_mol', '_outlet_h2_ppm_mol', '_h2_ppm_mol', '_y_h2_ppm']:
+                if suffix in col_lower:
+                    comp_name = col[:col_lower.find(suffix)]
+                    break
+            else:
+                parts = col.rsplit('_h2', 1)
+                comp_name = parts[0] if len(parts) > 1 else col.split('_')[0]
+            
+            series = df[col]
+            avg_val = series[series > 0].mean() if (series > 0).any() else 0.0
+            if avg_val > 0:
+                o2_stream_h2_data[comp_name] = avg_val
+    
+    # -------------------------------------------------------------------------
+    # 2. Handle empty data case
+    # -------------------------------------------------------------------------
+    if not h2_stream_o2_data and not o2_stream_h2_data:
         ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, 'No crossover impurity data found.\nEnsure Sources/Deoxo expose ppm_mol metrics.',
                 ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
         ax.set_title('Crossover Impurities')
         return fig
 
-    # 2. Plotting
+    # -------------------------------------------------------------------------
+    # 3. Create subplots
+    # -------------------------------------------------------------------------
     ax1 = fig.add_subplot(211)
-    ax2 = fig.add_subplot(212, sharex=ax1)
+    ax2 = fig.add_subplot(212)
     
-    x = df['minute'] if 'minute' in df.columns else df.index
+    LIMITE_O2_DEOXO_PPM = 5.0  # Safety limit for O2 in H2 stream
     
-    # Panel 1: O2 in H2 Stream
-    has_p1 = False
-    for comp_id, data in h2_source_o2_ppm.items():
-        if data.any():
-            ax1.plot(downsample_for_plot(x), downsample_for_plot(data), label=f"{comp_id} (Inlet)", linewidth=1.5, color='orange')
-            has_p1 = True
+    # -------------------------------------------------------------------------
+    # 4. Panel 1: O2 Impurity in H2 Stream (Component Profile)
+    # -------------------------------------------------------------------------
+    if h2_stream_o2_data:
+        # Define process order for H2 train
+        PROCESS_ORDER = [
+            'PEM_Electrolyzer', 'KOD_1', 'DryCooler_1', 'Chiller_1', 'KOD_2',
+            'Coalescer_1', 'HeatExchanger_1', 'Deoxo_1', 'Chiller_2', 'KOD_3',
+            'HeatExchanger_2', 'PSA_1', 'Compressor_1'
+        ]
+        
+        # Sort components by process order, then alphabetically for any not in list
+        def sort_key(comp_name):
+            try:
+                return PROCESS_ORDER.index(comp_name)
+            except ValueError:
+                return len(PROCESS_ORDER) + 1  # Put unknown at end
+        
+        components = sorted(h2_stream_o2_data.keys(), key=sort_key)
+        values = [h2_stream_o2_data[c] for c in components]
+        
+        # Handle zero values for log scale (replace with small epsilon for plotting)
+        plot_values = [max(v, 1e-3) for v in values]  # Floor at 0.001 ppm for log scale
+        
+        x_pos = np.arange(len(components))
+        
+        # Plot line with markers
+        ax1.plot(x_pos, plot_values, marker='o', linewidth=2, color='darkgreen', label='O₂ Impurity (ppm)')
+        
+        # Limit line (no legend label to keep graph clean)
+        ax1.axhline(LIMITE_O2_DEOXO_PPM, color='red', linestyle='--', linewidth=1.0, alpha=0.5)
+        
+        # Value annotations (show actual value including 0)
+        for i, (comp, val, plot_val) in enumerate(zip(components, values, plot_values)):
+            if val < 0.01:
+                label = '~0 ppm' if val == 0 else f'{val:.2e}'
+            elif val < 1.0:
+                label = f'{val:.2e}'
+            else:
+                label = f'{val:.1f}'
+            ax1.text(i, val + max(values) * 0.05, label, ha='center', va='bottom', fontsize=8, color='darkgreen')
+        
+        ax1.set_xticks(x_pos)
+        ax1.set_xticklabels(components, rotation=30, ha='right', fontsize=8)
+        ax1.set_ylabel('O₂ Concentration (ppm molar)')
+        ax1.set_title('O₂ Impurity in H₂ Stream (Process Order)')
+        # Use linear scale for better visualization of the drop to 0
+        ax1.grid(True, which='major', linestyle='--', alpha=0.5)
+        ax1.legend(loc='upper right', fontsize=9)
+        
+        # Set y-limits with padding (linear scale)
+        y_max = max(values) * 1.2 if max(values) > 0 else 10
+        ax1.set_ylim(-5, y_max)
+    else:
+        ax1.text(0.5, 0.5, 'No O₂ impurity data in H₂ stream.', 
+                 ha='center', va='center', transform=ax1.transAxes, fontsize=11, color='gray')
+        ax1.set_title('O₂ Impurity in H₂ Stream')
     
-    for comp_id, data in deoxo_o2_ppm.items():
-        if data.any():
-            ax1.plot(downsample_for_plot(x), downsample_for_plot(data), label=f"{comp_id} (Outlet)", linewidth=1.5, color='green')
-            has_p1 = True
-            
-    ax1.set_ylabel('O2 Concentration (ppm molar)')
-    ax1.set_title('O2 Impurity in H2 Stream')
-    ax1.grid(True, linestyle='--', alpha=0.5)
-    ax1.set_ylim(bottom=0.01)  # Clip to avoid log(0)
-    ax1.set_yscale('log')
-    if has_p1: ax1.legend()
-    
-    # Panel 2: H2 in O2 Stream
-    has_p2 = False
-    for comp_id, data in o2_source_h2_ppm.items():
-        if data.any():
-            ax2.plot(downsample_for_plot(x), downsample_for_plot(data), label=f"{comp_id} (Inlet)", linewidth=1.5, color='red')
-            has_p2 = True
-            
-    ax2.set_ylabel('H2 Concentration (ppm molar)')
-    ax2.set_xlabel('Time (Minutes)')
-    ax2.set_title('H2 Impurity in O2 Stream')
-    ax2.grid(True, linestyle='--', alpha=0.5)
-    ax2.set_ylim(bottom=0.01)  # Clip to avoid log(0)
-    ax2.set_yscale('log')
-    if has_p2: ax2.legend()
+    # -------------------------------------------------------------------------
+    # 5. Panel 2: H2 Impurity in O2 Stream (Component Profile)
+    # -------------------------------------------------------------------------
+    if o2_stream_h2_data:
+        components = list(o2_stream_h2_data.keys())
+        values = [o2_stream_h2_data[c] for c in components]
+        
+        x_pos = np.arange(len(components))
+        
+        # Plot line with markers
+        ax2.plot(x_pos, values, marker='s', linewidth=2, color='orange', label='H₂ Impurity (ppm)')
+        
+        # Value annotations
+        for i, (comp, val) in enumerate(zip(components, values)):
+            label = f'{val:.2e}' if val < 1.0 else f'{val:.2f}'
+            ax2.text(i, val * 1.3, label, ha='center', va='bottom', fontsize=8, color='darkorange')
+        
+        ax2.set_xticks(x_pos)
+        ax2.set_xticklabels(components, rotation=20, ha='right', fontsize=9)
+        ax2.set_ylabel('H₂ Concentration (ppm molar)')
+        ax2.set_xlabel('Component')
+        ax2.set_title('H₂ Impurity in O₂ Stream')
+        ax2.set_yscale('log')
+        ax2.grid(True, which='both', linestyle='--', alpha=0.5)
+        ax2.legend(loc='upper right', fontsize=9)
+        
+        # Set y-limits
+        y_min = min(values) * 0.5 if min(values) > 0 else 0.01
+        y_max = max(values) * 3
+        ax2.set_ylim(y_min, y_max)
+    else:
+        ax2.text(0.5, 0.5, 'No H₂ impurity data in O₂ stream.', 
+                 ha='center', va='center', transform=ax2.transAxes, fontsize=11, color='gray')
+        ax2.set_title('H₂ Impurity in O₂ Stream')
+        ax2.set_xlabel('Component')
     
     return fig
 
@@ -1223,22 +1625,27 @@ def create_recirculation_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST
             
     ax1.set_ylabel('Mass Flow (kg/h)')
     ax1.set_title('Water System: Flow Comparison')
-    ax1.legend()
+    if has_data:
+        ax1.legend()
     ax1.grid(True, linestyle='--', alpha=0.5)
     
     # Plot Temperature Comparison
+    has_temp_data = False
     for cid, data in rec_temp.items():
         if data.any():
             ax2.plot(x_ds, downsample_for_plot(data), label=f"{cid} (Recovered)", color='tab:blue', linestyle='--')
+            has_temp_data = True
             
     for cid, data in feed_temp.items():
         if data.any():
             ax2.plot(x_ds, downsample_for_plot(data), label=f"{cid} (Recirculated)", color='tab:green', linewidth=2)
+            has_temp_data = True
             
     ax2.set_ylabel('Temperature (°C)')
     ax2.set_title('Water System: Temperature Comparison')
     ax2.set_xlabel('Time (Minutes)')
-    ax2.legend()
+    if has_temp_data:
+        ax2.legend()
     ax2.grid(True, linestyle='--', alpha=0.5)
     
     if not has_data:
@@ -1596,4 +2003,148 @@ def create_process_train_profile_figure(df: pd.DataFrame, dpi: int = DPI_HIGH) -
     ax_comp.set_xticklabels(components, rotation=15, ha='right')
     
     fig.tight_layout()
+    return fig
+
+
+def create_water_vapor_tracking_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    plot_vazao_agua_separada: Water Vapor Flow Tracking.
+    
+    Tracks water vapor mass flow (kg/h) across components with PPM concentration labels.
+    Includes limit line for purity specification (100 ppm).
+    
+    Uses time-averaged values from dynamic simulation.
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Find water vapor columns
+    vapor_cols = [c for c in df.columns if 'h2o_vapor' in c.lower() and 'kg_h' in c.lower()]
+    molar_cols = [c for c in df.columns if 'molar_fraction_h2o' in c.lower()]
+    
+    if not vapor_cols:
+        ax.text(0.5, 0.5, 'No water vapor data available.\nEnsure components expose h2o_vapor_kg_h metric.', 
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('Water Vapor Tracking')
+        return fig
+    
+    # Extract component names and values (time-averaged)
+    components = []
+    vapor_flows = []
+    ppm_values = []
+    
+    for col in sorted(vapor_cols):
+        comp_name = col.replace('_h2o_vapor_kg_h', '').replace('_H2O_vapor_kg_h', '')
+        components.append(comp_name)
+        vapor_flows.append(df[col].mean())  # Time-average
+        
+        # Find matching molar fraction column
+        matching_ppm = [c for c in molar_cols if comp_name in c]
+        if matching_ppm:
+            ppm_values.append(df[matching_ppm[0]].mean() * 1e6)  # Convert to ppm
+        else:
+            ppm_values.append(None)
+    
+    x = range(len(components))
+    
+    # Plot vapor flow line
+    stream_color = 'tab:blue'  # Default to H2 stream color
+    ax.plot(x, vapor_flows, marker='o', linestyle='-', color=stream_color, linewidth=2, markersize=8)
+    
+    # Add PPM labels
+    for i, (flow, ppm) in enumerate(zip(vapor_flows, ppm_values)):
+        if ppm is not None and ppm > 0:
+            label = f'{ppm:.1f} ppm' if ppm >= 1 else f'{ppm:.2e} ppm'
+            ax.annotate(label, xy=(i, flow), xytext=(0, 10), textcoords='offset points',
+                       ha='center', fontsize=8, color='purple')
+    
+    # Add 100 ppm limit line (typical VSA/Dryer exit spec)
+    # Calculate equivalent flow at 100 ppm for reference
+    LIMIT_PPM = 100
+    ax.axhline(y=0, color='green', linestyle='--', alpha=0.7, label=f'Target: {LIMIT_PPM} ppm')
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels(components, rotation=30, ha='right')
+    ax.set_ylabel('Water Vapor Flow (kg/h)')
+    ax.set_xlabel('Component')
+    ax.set_title('Water Vapor Mass Flow Tracking (with PPM Labels)', fontsize=12)
+    ax.legend(loc='upper right')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+    return fig
+
+
+def create_total_mass_flow_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    plot_vazao_massica_total_e_removida: Total Mass Flow Comparison.
+    
+    Compares gas, vapor, liquid, and total mass flows across components.
+    Uses time-averaged values from dynamic simulation.
+    """
+    fig = Figure(figsize=(12, 7), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Find flow columns - use 'mass_flow' (actual pattern, not 'gas_flow')
+    gas_cols = [c for c in df.columns if 'mass_flow' in c.lower() and 'kg_h' in c.lower()]
+    vapor_cols = [c for c in df.columns if 'h2o_vapor' in c.lower() and 'kg_h' in c.lower()]
+    liquid_cols = [c for c in df.columns if 'm_dot_h2o_liq_accomp' in c.lower()]
+    
+    if not gas_cols:
+        ax.text(0.5, 0.5, 'No mass flow data available.\nEnsure components expose mass_flow_kg_h metric.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('Total Mass Flow Comparison')
+        return fig
+    
+    # Build component-wise data using proper name extraction
+    components = []
+    for col in gas_cols:
+        # Extract component name using rsplit (e.g., "O2_Source_mass_flow_kg_h" → "O2_Source")
+        parts = col.rsplit('_mass_flow_kg_h', 1)
+        if len(parts) == 2 and parts[0]:
+            comp_name = parts[0]
+            if comp_name not in components:
+                components.append(comp_name)
+    x = range(len(components))
+    
+    gas_vals = []
+    vapor_vals = []
+    liquid_vals = []
+    total_vals = []
+    
+    for comp in components:
+        # Find matching columns - use startswith for exact prefix match
+        g = [c for c in gas_cols if c.startswith(f"{comp}_")]
+        v = [c for c in vapor_cols if c.startswith(f"{comp}_")]
+        l = [c for c in liquid_cols if c.startswith(f"{comp}_")]
+        
+        gas = df[g[0]].mean() if g else 0
+        vapor = df[v[0]].mean() if v else 0
+        # Convert kg/s to kg/h for liquid columns
+        liquid = df[l[0]].mean() * 3600 if l else 0
+        
+        gas_vals.append(gas)
+        vapor_vals.append(vapor)
+        liquid_vals.append(liquid)
+        total_vals.append(gas + vapor + liquid)
+    
+    # Plot lines
+    ax.plot(x, total_vals, marker='o', linestyle='-', color='purple', linewidth=2.5, markersize=8, label='TOTAL (Gas+Vapor+Liquid)')
+    ax.plot(x, gas_vals, marker='s', linestyle='--', color='blue', linewidth=2, markersize=6, label='Main Gas')
+    ax.plot(x, vapor_vals, marker='^', linestyle=':', color='red', linewidth=2, markersize=6, label='H2O Vapor')
+    ax.plot(x, liquid_vals, marker='d', linestyle='-', color='brown', linewidth=1.5, markersize=6, label='Entrained Liquid')
+    
+    # Value labels (offset to avoid overlap)
+    for i, (t, g, v, l) in enumerate(zip(total_vals, gas_vals, vapor_vals, liquid_vals)):
+        if t > 0:
+            ax.annotate(f'{t:.1f}', xy=(i, t), xytext=(0, 8), textcoords='offset points',
+                       ha='center', fontsize=8, color='purple', fontweight='bold')
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels(components, rotation=30, ha='right')
+    ax.set_ylabel('Mass Flow (kg/h)')
+    ax.set_xlabel('Component')
+    ax.set_title('Mass Flow Comparison (Gas + Vapor + Liquid)', fontsize=12)
+    ax.legend(loc='upper right', fontsize=9)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
     return fig

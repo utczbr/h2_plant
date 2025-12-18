@@ -496,5 +496,6 @@ class PSA(Component):
             'product_flow_kg_h': self.product_outlet.mass_flow_kg_h,
             'tail_gas_flow_kg_h': self.tail_gas_outlet.mass_flow_kg_h,
             'cycle_position': self.cycle_position,
-            'power_consumption_kw': self.power_consumption_kw
+            'power_consumption_kw': self.power_consumption_kw,
+            'outlet_o2_ppm_mol': (self.product_outlet.get_total_mole_frac('O2') * 1e6) if self.product_outlet else 0.0
         }

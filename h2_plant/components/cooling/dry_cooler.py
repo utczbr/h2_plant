@@ -46,6 +46,8 @@ from h2_plant.core.constants import (
     DryCoolerIndirectConstants as DCC
 )
 from h2_plant.optimization import numba_ops
+from h2_plant.optimization.coolprop_lut import CoolPropLUT
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -300,12 +302,116 @@ class DryCooler(Component):
 
         # Prepare output stream
         self.outlet_temp_c = T_gas_out_k - 273.15
+
+        # --- Flash Calculation (Condensation) ---
+        inlet_comp = self.inlet_stream.composition.copy()
+        outlet_comp = inlet_comp.copy()
+        m_condensed_kg_h = 0.0
+        
+        # 1. Quantify Inlet Liquid (from ALL sources)
+        x_H2O_liq_comp_in = inlet_comp.get('H2O_liq', 0.0)
+        m_H2O_liq_comp_in = x_H2O_liq_comp_in * self.inlet_stream.mass_flow_kg_h
+        
+        m_H2O_liq_extra_in = 0.0
+        if self.inlet_stream.extra:
+            m_H2O_liq_extra_in = self.inlet_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+            
+        m_H2O_liq_in = m_H2O_liq_comp_in + m_H2O_liq_extra_in
+        
+        # 2. Calculate Condensation from Vapor
+        x_H2O_vap_in = inlet_comp.get('H2O', 0.0)
+        m_H2O_vapor_out = x_H2O_vap_in * self.inlet_stream.mass_flow_kg_h
+        
+        if x_H2O_vap_in > 0 and P_out > 0:
+            # Saturation pressure check
+            try:
+                P_sat = CoolPropLUT.PropsSI('P', 'T', T_gas_out_k, 'Q', 0.0, 'Water')
+                if P_sat <= 1e-6 or not math.isfinite(P_sat):
+                     raise ValueError("Invalid P_sat")
+            except Exception:
+                # Antoine fallback
+                T_C = T_gas_out_k - 273.15
+                A, B, C = 8.07131, 1730.63, 233.426
+                P_sat_mmHg = 10 ** (A - B / (C + T_C))
+                P_sat = P_sat_mmHg * 133.322
+                
+            y_H2O_sat = P_sat / P_out
+            y_H2O_sat = min(y_H2O_sat, 1.0)
+            
+            # Estimate Mole fraction inlet (approx)
+            # Need strict mole frac for accurate flash, but mass frac comparison is often sufficient 
+            # if we convert y_sat to x_sat? Or convert x_in to y_in?
+            # Let's convert x_in to y_in as before.
+            MW_H2O = 18.015e-3
+            MW_H2 = 2.016e-3
+            MW_other = 28.0e-3
+            n_total = sum(frac / (MW_H2 if s == 'H2' else MW_H2O if s in ('H2O','H2O_liq') else MW_other) 
+                          for s, frac in inlet_comp.items())
+            
+            y_H2O_in = (x_H2O_vap_in / MW_H2O) / n_total if n_total > 0 else 0.0
+            
+            if y_H2O_in > y_H2O_sat:
+                # Condense
+                condensation_frac = 1.0 - (y_H2O_sat / y_H2O_in) if y_H2O_in > 0 else 0.0
+                condensation_frac = max(0.0, min(1.0, condensation_frac))
+                
+                m_H2O_vapor_in = x_H2O_vap_in * self.inlet_stream.mass_flow_kg_h
+                m_condensed_kg_h = m_H2O_vapor_in * condensation_frac
+                m_H2O_vapor_out = m_H2O_vapor_in - m_condensed_kg_h
+
+        # 3. Update Composition
+        m_total_out = self.inlet_stream.mass_flow_kg_h
+        m_H2O_liq_total_out = m_H2O_liq_in + m_condensed_kg_h
+        
+        if m_total_out > 0:
+            outlet_comp['H2O'] = m_H2O_vapor_out / m_total_out
+            outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_out
+            
+            # Preserve other species fractions (assumes their mass is constant)
+            # Since total mass is constant (no removal), their mass/total = fraction is constant
+            # unless we need to re-normalize? 
+            # If we shifted mass from Vapor to Liquid (or from Extra to Liquid), 
+            # we need to be careful.
+            # If Extra was NOT in m_total_out (Wait, extra IS NOT in mass_flow_kg_h usually!).
+            # STOP.
+            # Stream definition: mass_flow_kg_h encompasses composition. Extra is "accomponying".
+            # If I move Extra to Composition, I INCREASE mass_flow_kg_h?
+            # Or is Extra ALREADY in mass_flow?
+            # Usually Extra is NOT in mass_flow.
+            pass
+
+        # CRITICAL CHECK ON MASS BALANCE:
+        # If 'extra' liquid was NOT part of self.inlet_stream.mass_flow_kg_h, 
+        # and we move it to composition, we MUST increase the stream's total mass flow.
+        
+        # Let's check Stream implementation. 
+        # m_dot_extra is separate.
+        # So: m_total_new = m_total_old + m_H2O_liq_extra_in
+        
+        m_total_new = m_total_out + m_H2O_liq_extra_in
+        
+        if m_total_new > 0:
+             # Recalculate ALL fractions based on NEW total mass
+             outlet_comp['H2O'] = m_H2O_vapor_out / m_total_new
+             outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_new
+             
+             for s in inlet_comp:
+                 if s not in ('H2O', 'H2O_liq'):
+                     m_s = inlet_comp[s] * m_total_out
+                     outlet_comp[s] = m_s / m_total_new
+        
+        # Prepare output stream using NEW mass
+        out_extra = self.inlet_stream.extra.copy() if self.inlet_stream.extra else {}
+        if 'm_dot_H2O_liq_accomp_kg_s' in out_extra:
+            del out_extra['m_dot_H2O_liq_accomp_kg_s']
+
         self.outlet_stream = Stream(
-            mass_flow_kg_h=self.inlet_stream.mass_flow_kg_h,
+            mass_flow_kg_h=m_total_new, # Updated mass
             temperature_k=T_gas_out_k,
             pressure_pa=P_out,
-            composition=self.inlet_stream.composition,
-            phase='mixed'
+            composition=outlet_comp,
+            phase='mixed',
+            extra=out_extra
         )
 
         # Fan power consumption: P = V̇ × ΔP / η_fan
@@ -413,5 +519,6 @@ class DryCooler(Component):
             'glycol_hot_c': self.t_glycol_hot_c,
             'glycol_cold_c': self.t_glycol_cold_c,
             'tqc_effectiveness': self.tqc_effectiveness,
-            'dc_effectiveness': self.dc_effectiveness
+            'dc_effectiveness': self.dc_effectiveness,
+            'outlet_o2_ppm_mol': (self.outlet_stream.get_total_mole_frac('O2') * 1e6) if self.outlet_stream else 0.0
         }
