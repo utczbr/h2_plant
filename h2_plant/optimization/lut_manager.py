@@ -1,30 +1,29 @@
 """
-Lookup Table Manager for High-Performance Thermodynamic Property Lookups.
+High-Performance Thermodynamic Property Lookup Manager.
 
-This module implements pre-computed interpolation tables that replace
-expensive CoolProp.PropsSI() calls, achieving 50-200x speedup while
-maintaining <0.5% accuracy for engineering calculations.
+This module implements a caching layer for thermodynamic property calculations,
+replacing expensive runtime calls to CoolProp with pre-calculated, memory-mapped
+Lookup Tables (LUTs). This architecture achieves a 50-200x speedup for iterative
+solvers (e.g., Newton-Raphson) while maintaining engineering accuracy (<0.5%).
 
-Architecture:
-    The LUTManager implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Generates or loads LUTs from disk cache.
-    - `step()`: No per-timestep logic (passive data provider).
-    - `get_state()`: Returns configuration and loaded fluid list.
+System Architecture:
+    The LUTManager operates as a passive 'Service Component' within Layer 1.
+    It adheres to the Component Lifecycle Contract:
+    - **Initialization**: Generates or loads binary LUTs from disk.
+    - **Step**: Passive (no state mutation per timestep).
+    - **State Access**: Provides configuration telemetry.
 
 Interpolation Method:
-    Bilinear interpolation on regular (P, T) or (P, S) grids:
+    Properties are retrieved using vectorized bilinear interpolation on regular
+    (P, T) or (P, S) grids. The interpolation kernel is JIT-compiled via Numba
+    to minimize Python overhead in inner loops.
 
-    **f(x, y) = (1-wx)(1-wy)f₀₀ + wx(1-wy)f₁₀ + (1-wx)wy f₀₁ + wx·wy·f₁₁**
+    Basis: f(x, y) ≈ (1-wx)(1-wy)f₀₀ + ... (standard bilinear form)
 
-    Where wx, wy are normalized distances within the bounding cell.
-
-Isentropic Compression:
-    For compressor calculations, the H(P, S) table enables direct
-    isentropic enthalpy lookup without iterative CoolProp calls.
-
-Performance:
-    - Single lookup: ~1 μs (vs ~100 μs for CoolProp).
-    - Batch lookup (Numba JIT): ~0.1 μs per point with parallelization.
+Features:
+    - **Automatic Generation**: Lazy generation of LUTs if cache is missing/stale.
+    - **Isentropic Path**: Dedicated H(P, S) tables for direct compressor work calculation.
+    - **Hybrid Fallback**: Automatic fail-over to CoolProp for out-of-bounds queries.
 """
 
 import numpy as np
@@ -69,7 +68,7 @@ class LUTConfig:
         interpolation (str): Interpolation method ('linear' or 'cubic').
         cache_dir (Path): Directory for cached LUT files.
     """
-    pressure_min: float = 1e5
+    pressure_min: float = 0.05e5  # 0.05 bar - Supports vacuum compression
     pressure_max: float = 1000e5
     pressure_points: int = 2000
     temperature_min: float = 273.15
@@ -79,35 +78,37 @@ class LUTConfig:
     entropy_max: float = 100000.0
     entropy_points: int = 500
     properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C', 'Z')
-    fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O', 'Water')
+    fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O')
     interpolation: Literal['linear', 'cubic'] = 'linear'
     cache_dir: Path = Path(__file__).resolve().parents[2] / '.h2_plant' / 'lut_cache'
 
 
 class LUTManager(Component):
     """
-    High-performance thermodynamic property lookup manager.
+    Manages the lifecycle and access to high-performance property tables.
 
-    Provides fast property lookups via pre-computed interpolation tables
-    with automatic generation, disk caching, and CoolProp fallback.
+    This component serves as the central authority for thermodynamic data,
+    abstracting the complexity of CoolProp/Numba interactions from the
+    simulation components.
 
-    This component fulfills the Component Lifecycle Contract (Layer 1):
-        - `initialize()`: Loads or generates LUTs for configured fluids.
-        - `step()`: No operation (passive data provider).
-        - `get_state()`: Returns configuration and loaded fluids.
+    Component Lifecycle Contract (Layer 1):
+    1. **initialize()**:
+       - Checks for existing serialized LUT files in the cache directory.
+       - Validates cache metadata against current config (P/T ranges).
+       - Loads into memory or triggers regeneration if stale.
+       - Pre-calculates 1D saturation curves for phase detection.
+    
+    2. **step()**:
+       - No-op. The LUTManager provides data on demand but has no internal
+         time-dependent dynamics.
 
-    Property Lookup Flow:
-        1. Check if in bounds → use bilinear interpolation.
-        2. Out of bounds → fallback to CoolProp.
-        3. CoolProp unavailable → raise RuntimeError.
+    3. **get_state()**:
+       - Reports loaded fluids, memory usage, and configuration validity.
 
-    Attributes:
-        config (LUTConfig): LUT configuration parameters.
-
-    Example:
-        >>> lut = LUTManager()
-        >>> lut.initialize(dt=1/60, registry=registry)
-        >>> density = lut.lookup('H2', 'D', 350e5, 298.15)  # kg/m³
+    Usage Strategy:
+    Components should query the LUTManager instance passed via the Registry
+    rather than instantiating their own property backends. This ensures
+    consistency across the plant simulation.
     """
 
     def __init__(self, config: Optional[LUTConfig] = None):
@@ -135,24 +136,32 @@ class LUTManager(Component):
 
     def initialize(self, dt: float = 0.0, registry: Optional['ComponentRegistry'] = None) -> None:
         """
-        Load or generate lookup tables for all configured fluids.
+        Executes the initialization phase of the Component Lifecycle.
 
-        Fulfills the Component Lifecycle Contract initialization phase.
-        Attempts to load from disk cache; generates via CoolProp if missing.
+        Strategy: "Generate Once, Cache Forever"
+        1. Defines the coordinate grids for Pressure, Temperature, and Entropy.
+        2. Iterates through configured fluids to load corresponding tables.
+        3. If a valid cache file exists, it is deserialized (fast path).
+        4. If missing/invalid, CoolProp is invoked to generate the table point-by-point (slow path).
+        5. The fresh table is serialized to disk for future runs.
+
+        This approach minimizes simulation startup time while ensuring data integrity.
 
         Args:
-            dt (float): Simulation timestep (unused for LUTManager).
-            registry (ComponentRegistry, optional): Component registry.
+            dt (float): Timestep (unused by this data service).
+            registry (ComponentRegistry, optional): Reference to global component registry.
 
         Raises:
-            RuntimeError: If CoolProp unavailable and no cache exists.
+            RuntimeError: If CoolProp is unavailable and no valid cache exists, preventing system startup.
         """
         super().initialize(dt, registry)
 
         logger.info("Initializing LUT Manager...")
 
         # Generate coordinate grids
-        self._pressure_grid = np.linspace(
+        # Note: Pressure uses GEOMSPACE (logarithmic) to maintain resolution
+        # across 4 orders of magnitude (0.05-1000 bar)
+        self._pressure_grid = np.geomspace(
             self.config.pressure_min,
             self.config.pressure_max,
             self.config.pressure_points
@@ -224,28 +233,29 @@ class LUTManager(Component):
         temperature: float
     ) -> float:
         """
-        Lookup thermodynamic property using bilinear interpolation.
+        Retrieves a thermodynamic property using bilinear interpolation.
+
+        Operational Logic:
+        1. **Bound Check**: Verifies if (P, T) lies within the pre-computed grid.
+        2. **Fast Path**: Uses JIT-compiled interpolation if in-bounds.
+        3. **Fallback**: Calls CoolProp directly if out-of-bounds (e.g., extreme transient).
+        
+        This hybrid approach guarantees that the simulation continues even if
+        values momentarily drift outside the optimized LUT range, albeit at a 
+        performance penalty.
 
         Args:
-            fluid (str): Fluid name ('H2', 'O2', 'N2', 'Water', etc.).
-            property_type (PropertyType): Property code:
-                - 'D': Density (kg/m³)
-                - 'H': Specific enthalpy (J/kg)
-                - 'S': Specific entropy (J/(kg·K))
-                - 'C': Heat capacity Cp (J/(kg·K))
-                - 'Z': Compressibility factor (dimensionless)
-            pressure (float): Pressure in Pa.
-            temperature (float): Temperature in K.
+            fluid (str): Fluid identifier (e.g., 'H2', 'H2O').
+            property_type (PropertyType): Target property code ('D', 'H', 'S', etc.).
+            pressure (float): Absolute pressure (Pa).
+            temperature (float): Absolute temperature (K).
 
         Returns:
-            float: Property value in SI units.
+            float: Property value in standard SI units.
 
         Raises:
-            ValueError: If fluid or property not supported.
-            RuntimeError: If LUT not initialized.
-
-        Example:
-            >>> rho = lut.lookup('H2', 'D', 350e5, 298.15)  # 23.3 kg/m³
+            ValueError: If the requested fluid or property is not configured.
+            RuntimeError: If called before initialization.
         """
         if not self._initialized:
             self.initialize()
@@ -314,18 +324,22 @@ class LUTManager(Component):
         entropy: float
     ) -> float:
         """
-        Lookup enthalpy given pressure and entropy for isentropic process.
+        Determines enthalpy for an isentropic process (S_in = S_out).
 
-        Uses the H(P, S) table for direct isentropic compression/expansion
-        calculations without iterative CoolProp calls.
+        This special lookup utilizes a separate H(P, S) table. This avoids the 
+        computationally expensive "backward" calculation required when using standard 
+        H(P, T) tables, which would involve solving S(P, T_out) = S_in iteratively.
+
+        Primary Use Case:
+        Rapid calculation of ideal compressor work: W_isen = h(P_out, S_in) - h_in.
 
         Args:
-            fluid (str): Fluid name.
-            pressure (float): Pressure in Pa.
-            entropy (float): Specific entropy in J/(kg·K).
+            fluid (str): Fluid identifier.
+            pressure (float): Target discharge pressure (Pa).
+            entropy (float): Specific entropy fixed from inlet condition (J/(kg·K)).
 
         Returns:
-            float: Specific enthalpy in J/kg.
+            float: Specific enthalpy at the isentropic state (J/kg).
         """
         if not self._initialized:
             self.initialize()
@@ -548,6 +562,69 @@ class LUTManager(Component):
         
         w = (temperature_k - T0) / (T1 - T0) if T1 != T0 else 0.0
         return float(P0 * (1 - w) + P1 * w)
+
+    def get_saturation_properties(self, pressure_pa: float) -> Dict[str, float]:
+        """
+        Retrieves saturation data by inverting the P_sat(T) relationship.
+
+        Since the Saturation LUT is indexed by Temperature (T -> P_sat), this function
+        performs an inverse interpolation to find T_sat(P). It then looks up 
+        enthalpies at that calculated saturation temperature.
+
+        Approximation:
+        Inverse linear interpolation is accurate because the saturation curve 
+        is monotonic. This avoids the need for a separate pressure-indexed saturation LUT.
+
+        Args:
+            pressure_pa (float): System pressure (Pa).
+
+        Returns:
+            Dict[str, float]: Saturation properties:
+                - 'T_sat_K': Saturation temperature.
+                - 'h_f_Jkg': Saturated liquid enthalpy.
+                - 'h_g_Jkg': Saturated vapor enthalpy.
+                
+        Note:
+            Returns standard atmospheric values (1 atm) if pressure is out of range 
+            or LUT is unavailable, preventing crash during initialization transients.
+        """
+        # Fallback constants (1 atm saturation)
+        default = {'T_sat_K': 373.15, 'h_f_Jkg': 419000.0, 'h_g_Jkg': 2676000.0}
+        
+        if (self._saturation_temp_grid is None or 
+            'P_sat' not in self._saturation_lut or
+            'H_liq' not in self._saturation_lut or
+            'H_vap' not in self._saturation_lut):
+            return default
+        
+        T_grid = self._saturation_temp_grid
+        P_sat = self._saturation_lut['P_sat']
+        H_liq = self._saturation_lut['H_liq']
+        H_vap = self._saturation_lut['H_vap']
+        
+        # Check bounds (P_sat is monotonically increasing with T)
+        P_min, P_max = P_sat[0], P_sat[-1]
+        if pressure_pa < P_min or pressure_pa > P_max:
+            # Out of bounds - use CoolProp if available
+            if CP:
+                try:
+                    t_sat = CP.PropsSI('T', 'P', pressure_pa, 'Q', 0, 'Water')
+                    h_liq = CP.PropsSI('H', 'P', pressure_pa, 'Q', 0, 'Water')
+                    h_vap = CP.PropsSI('H', 'P', pressure_pa, 'Q', 1, 'Water')
+                    return {'T_sat_K': t_sat, 'h_f_Jkg': h_liq, 'h_g_Jkg': h_vap}
+                except Exception:
+                    return default
+            return default
+        
+        # Inverse interpolation: P → T_sat
+        # P_sat array is monotonic (increasing with T), so np.interp works
+        t_sat = float(np.interp(pressure_pa, P_sat, T_grid))
+        
+        # Interpolate enthalpies at T_sat
+        h_liq = float(np.interp(t_sat, T_grid, H_liq))
+        h_vap = float(np.interp(t_sat, T_grid, H_vap))
+        
+        return {'T_sat_K': t_sat, 'h_f_Jkg': h_liq, 'h_g_Jkg': h_vap}
 
     def _fallback_coolprop(
         self,

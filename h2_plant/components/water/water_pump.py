@@ -129,8 +129,8 @@ class WaterPumpThermodynamic(Component):
         self.target_pressure_pa = target_pressure_pa
 
         # Stream state
-        self.inlet_stream: Optional[Stream] = None
-        self.outlet_stream: Optional[Stream] = None
+        self.inlet_stream: Optional[Stream] = Stream(0.0)
+        self.outlet_stream: Optional[Stream] = Stream(0.0)
         self.flow_rate_kg_s: float = 0.0
 
         # Calculation results
@@ -442,9 +442,9 @@ class WaterPumpThermodynamic(Component):
             Stream: Output stream or None.
         """
         if port_name == 'water_out':
-            return self.outlet_stream
+            return self.outlet_stream if self.outlet_stream else Stream(0.0)
         elif port_name == 'water_in_reverse':
-            return self.inlet_stream
+            return self.inlet_stream if self.inlet_stream else Stream(0.0)
         return None
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:

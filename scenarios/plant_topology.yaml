@@ -1,161 +1,384 @@
-# H2 Purification Train Topology
-# H2Source → KOD_1 → DryCooler_1 → Chiller_1(4°C) → KOD_2 → Coalescer_1 → Chiller_2(40°C) → Deoxo_1 → PSA_1
+# SOEC Hydrogen Production Train Topology
+# 
+# Process Description (REORDERED to match legacy architecture):
+# 1. Hot wet H2 from SOEC (152°C) enters Heat Recovery (Interchanger).
+# 2. Cooled gas passes through staged cooling and separation (DryCooler -> Chiller -> KODs).
+# 3. Dried H2 is COMPRESSED (5-Stage to 40 bar) BEFORE purification.
+# 4. Compressed H2 is purified (Deoxo -> PSA) at high pressure.
+# 5. Recovered water is collected, mixed with fresh makeup water, pressurized, and pre-heated.
 
 nodes:
-  # === H2 Source (PEM-like output with 5% moisture and trace O2) ===
-  - id: "PEM_Electrolyzer"
-    type: "PEM"
+  # =================================================================================
+  # MAIN GAS TRAIN: SOEC -> SEPARATION -> COMPRESSION -> PURIFICATION
+  # =================================================================================
+
+  # 1. SOEC Cluster
+  # -------------------------------------------------------------------------
+  - id: "SOEC_Cluster"
+    type: "SOEC"
     params:
-      max_power_mw: 5.0
-      use_polynomials: True
-      water_excess_factor: 0.02 
-      out_pressure_pa: 4000000.0 # 40 bar 
+      num_modules: 6
+      max_power_nominal_mw: 2.4
+      optimal_limit: 0.80
+      steam_input_ratio_kg_per_kg_h2: 10.5
+      power_first_step_mw: 0.12
+      ramp_step_mw: 0.24
     connections:
       - source_port: "h2_out"
+        target_name: "Cathode_Mixer"
+        target_port: "inlet_1"
+        resource_type: "stream"
+      - source_port: "steam_out"
+        target_name: "Cathode_Mixer"
+        target_port: "inlet_2"
+        resource_type: "stream"
+
+  # -------------------------------------------------------------------------
+  # 2. Cathode Mixer (Recombines H2 and Steam to simulate Exhaust)
+  # -------------------------------------------------------------------------
+  - id: "Cathode_Mixer"
+    type: "Mixer"
+    params:
+      volume_m3: 5.0
+      continuous_flow: true
+    connections:
+      - source_port: "outlet"
+        target_name: "Interchanger_1"
+        target_port: "hot_in"
+        resource_type: "stream"
+
+  # 3. Heat Recovery (Interchanger)
+  - id: "Interchanger_1"
+    type: "Interchanger"
+    params:
+      min_approach_temp_k: 10.0
+      target_cold_out_temp_c: 95.0
+    connections:
+      - source_port: "hot_out"
+        target_name: "DryCooler_HX"  # Changed: Now goes to DryCooler first
+        target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "cold_out"
+        target_name: "Steam_Generator"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  # 3b. Dry Cooler (Post-Heat Recovery) - Matches legacy "Dry Cooler 1"
+  # Cools gas to 90°C to ensure proper condensation before KOD_1
+  - id: "DryCooler_HX"
+    type: "DryCooler"
+    params:
+      target_temp_c: 90.0  # Legacy target: T_DRY_COOLER_OUT_H2_C = 90°C
+    connections:
+      - source_port: "fluid_out"
         target_name: "KOD_1"
         target_port: "gas_inlet"
         resource_type: "stream"
 
-  # === Knock-Out Drum 1 (Initial water separation) ===
+  # =================================================================================
+  # SEPARATION STAGE (Before Compression)
+  # =================================================================================
+
   - id: "KOD_1"
     type: "KnockOutDrum"
     params:
-      diameter_m: 0.5
-      delta_p_bar: 0.05  # Legacy: 0.05 bar
-      gas_species: "H2"
+      diameter_m: 0.8
+      delta_p_bar: 0.05
     connections:
       - source_port: "gas_outlet"
-        target_name: "DryCooler_1"
+        target_name: "Compressor_Pre"
+        target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Mixer"
+        target_port: "KOD_1"
+        resource_type: "stream"
+
+
+  - id: "Compressor_Pre"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 550.0
+      inlet_pressure_bar: 0.8
+      outlet_pressure_bar: 10.0 # High cap to ensure temp limit is active
+      max_temp_c: 135.0
+      temperature_limited: true
+    connections:
+      - source_port: "outlet"
+        target_name: "DryCooler_Pre"
         target_port: "fluid_in"
         resource_type: "stream"
 
-  # === Dry Cooler 1 (Initial passive cooling) ===
-  - id: "DryCooler_1"
+  - id: "DryCooler_Pre"
     type: "DryCooler"
-    params: {}
+    params:
+      target_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
         target_name: "Chiller_1"
         target_port: "fluid_in"
         resource_type: "stream"
 
-  # === Chiller 1 (Deep cooling to 4°C = 277.15 K) ===
   - id: "Chiller_1"
     type: "Chiller"
     params:
-      target_temp_k: 277.15
-      cooling_capacity_kw: 100.0
-      cop: 4.0
-      pressure_drop_bar: 0.0  # Legacy Chiller has no pressure drop
+      target_temp_k: 277.15 # 4°C
+      cooling_capacity_kw: 200.0
     connections:
       - source_port: "fluid_out"
         target_name: "KOD_2"
         target_port: "gas_inlet"
-        resource_type: "gas"
+        resource_type: "stream"
 
-  # === Knock-Out Drum 2 (Secondary water separation after chilling) ===
   - id: "KOD_2"
     type: "KnockOutDrum"
     params:
-      diameter_m: 0.5
-      delta_p_bar: 0.05  # Legacy: 0.05 bar
-      gas_species: "H2"
+      diameter_m: 0.6
+      delta_p_bar: 0.05
     connections:
       - source_port: "gas_outlet"
         target_name: "Coalescer_1"
         target_port: "inlet"
-        resource_type: "gas_mixture"
+        resource_type: "stream"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Mixer"
+        target_port: "KOD_2"
+        resource_type: "stream"
 
-  # === Coalescer (Aerosol/mist removal) ===
   - id: "Coalescer_1"
     type: "Coalescer"
     params:
-      gas_type: "H2"
+      d_shell: 1.9
     connections:
       - source_port: "outlet"
-        target_name: "HeatExchanger_1"
-        target_port: "h2_in"  # ← Change from "fluid_in"
+        target_name: "Compressor_S1"  # <-- NOW GOES TO COMPRESSION
+        target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Coalescer_1"
         resource_type: "stream"
 
-  - id: "HeatExchanger_1"
-    type: "HeatExchanger"
-    params: 
-      max_heat_removal_kw: 100.0
-      target_outlet_temp_c: 40.0  # ← Use Celsius (40°C = 313.15K)
+  # =================================================================================
+  # COMPRESSION TRAIN (6-Stage, BEFORE Purification)
+  # Redistributed Pressure Ratios ~2.0x per stage (Target ~42 bar)
+  # =================================================================================
+
+  - id: "Compressor_S1"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 400.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      outlet_pressure_bar: 200.0
     connections:
-      - source_port: "h2_out"  
+      - source_port: "outlet"
+        target_name: "Intercooler_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Intercooler_1"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Compressor_S2"
+        target_port: "h2_in"
+        resource_type: "stream"
+  
+  - id: "Compressor_S2"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 400.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      outlet_pressure_bar: 200.0
+    connections:
+      - source_port: "outlet"
+        target_name: "Intercooler_2"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Intercooler_2"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Compressor_S3"
+        target_port: "h2_in"
+        resource_type: "stream"
+
+  - id: "Compressor_S3"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 400.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      outlet_pressure_bar: 200.0
+    connections:
+      - source_port: "outlet"
+        target_name: "Intercooler_3"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Intercooler_3"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Compressor_S4"
+        target_port: "h2_in"
+        resource_type: "stream"
+
+  - id: "Compressor_S4"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 400.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      outlet_pressure_bar: 200.0
+    connections:
+      - source_port: "outlet"
+        target_name: "Intercooler_4"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Intercooler_4"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Compressor_S5"
+        target_port: "h2_in"
+        resource_type: "stream"
+
+  - id: "Compressor_S5"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 400.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      outlet_pressure_bar: 200.0
+    connections:
+      - source_port: "outlet"
+        target_name: "Intercooler_5"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Intercooler_5"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
         target_name: "Deoxo_1"
         target_port: "inlet"
-        resource_type: "gas"
+        resource_type: "stream"
 
-  # === Deoxo Reactor (Adiabatic O2 removal) ===
+
+
+  # =================================================================================
+  # PURIFICATION STAGE (After 6-Stage Compression, at 42 bar)
+  # =================================================================================
+
   - id: "Deoxo_1"
     type: "DeoxoReactor"
     params: {}
     connections:
-      - source_port: "outlet" # Correct Deoxo output port name
+      - source_port: "outlet"
         target_name: "Chiller_2"
         target_port: "fluid_in"
         resource_type: "stream"
 
-  #== Chiller 2 (Deep cooling to 4°C = 277.15 K) ===
   - id: "Chiller_2"
     type: "Chiller"
     params:
-      target_temp_k: 277.15
-      cooling_capacity_kw: 100.0
-      cop: 4.0
-      pressure_drop_bar: 0.0  # Legacy Chiller has no pressure drop
+      target_temp_k: 277.15 # 4°C heavy cooling for condensation
     connections:
       - source_port: "fluid_out"
-        target_name: "KOD_3"
-        target_port: "gas_inlet"
-        resource_type: "gas"
-    
-
-  # === Knock-Out Drum 3 (Secondary water separation after chilling) ===
-  - id: "KOD_3"
-    type: "KnockOutDrum"
-    params:
-      diameter_m: 0.5
-      delta_p_bar: 0.05  # Legacy: 0.05 bar
-      gas_species: "H2"
-    connections:
-      - source_port: "gas_outlet"
-        target_name: "HeatExchanger_2"
-        target_port: "h2_in"
+        target_name: "Coalescer_2"
+        target_port: "inlet"
         resource_type: "stream"
 
-  # === Heat Exchanger 2 (Final cooling to 4°C = 277.15 K) ===
-  - id: "HeatExchanger_2"
-    type: "HeatExchanger"
-    params: 
-      max_heat_removal_kw: 100.0
-      target_outlet_temp_c: 30.0  # ← Use Celsius (40°C = 313.15K)
+  - id: "Coalescer_2"
+    type: "Coalescer"
+    params:
+      d_shell: 0.3  # Post-Deoxo coalescer (high pressure, low liquid load)
     connections:
-      - source_port: "h2_out"
+      - source_port: "outlet"
+        target_name: "ElectricBoiler_PSA"
+        target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Coalescer_2"
+        resource_type: "stream"
+
+  - id: "ElectricBoiler_PSA"
+    type: "ElectricBoiler"
+    params:
+      max_power_kw: 50.0
+      target_temp_c: 40.0 
+    connections:
+      - source_port: "fluid_out"
         target_name: "PSA_1"
         target_port: "gas_in"
-        resource_type: "gas"
+        resource_type: "stream"
 
-  # === PSA (Final H2O removal to high purity) ===
   - id: "PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.9999
-      recovery_rate: 0.90
-      power_consumption_kw: 10.0
-    connections: 
-      - source_port: "purified_gas_out"
-        target_name: "Compressor_1"
-        target_port: "h2_in"
-        resource_type: "gas"
+      purity_target: 0.999995
+    connections: []  # Final product outlet
 
-  # === Compressor (initial Compressor to 70 bar) ===
-  - id: "Compressor_1"
-    type: "CompressorSingle"
+  # =================================================================================
+  # WATER RECIRCULATION LOOP
+  # =================================================================================
+
+  - id: "Drain_Mixer"
+    type: "DrainRecorderMixer"
     params:
-      max_flow_kg_h: 110.0  # Sized for full PSA output + margin
-      inlet_pressure_bar: 40.0
-      outlet_pressure_bar: 70.0
-    connections: []
+      source_ids: ["KOD_1", "KOD_2", "Coalescer_1", "Coalescer_2"]
+    connections:
+      - source_port: "outlet"
+        target_name: "Makeup_Mixer_1"
+        target_port: "drain_in"
+        resource_type: "stream"
+  
+  - id: "Makeup_Mixer_1"
+    type: "MakeupMixer"
+    params:
+      target_flow_kg_h: 3600.0
+    connections:
+      - source_port: "water_out"
+        target_name: "Feed_Pump"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "Feed_Pump"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "Feed_Pump"
+      capacity_kg_h: 3600.0
+      target_pressure_pa: 500000.0 # 5 bar
+    connections:
+      - source_port: "water_out"
+        target_name: "Interchanger_1" # To Cold Side of HX
+        target_port: "cold_in"
+        resource_type: "stream"
+
+  # Final Step: Steam Generator
+  - id: "Steam_Generator"
+    type: "ElectricBoiler"
+    params:
+      max_power_kw: 3000.0
+      target_temp_c: 152.0 # Steam Temp
+    connections: 
+      - source_port: "fluid_out"
+        target_name: "SOEC_Cluster"
+        target_port: "steam_in"
+        resource_type: "stream"

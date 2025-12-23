@@ -253,127 +253,17 @@ def run_scenario(scenario: dict) -> dict:
     # Get topology order for summary table generation
     topo_order = [node.id for node in context.topology.nodes] if context.topology and context.topology.nodes else []
 
-    # 9. Print Stream Summary Table
-    # The detailed summary is now handled by the dispatch strategy's print_summary()
-    # but we can still print the specific table format requested previously.
+    # 9. Print Enhanced Stream Summary Table
+    from h2_plant.reporting.stream_table import print_stream_summary_table
     
-    primary_gas = 'H2'  # Default
-    for comp_id in topo_order:
-        comp = components.get(comp_id)
-        if comp:
-            for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet']:
-                try:
-                    stream = comp.get_output(port)
-                    if stream and stream.composition:
-                        h2_frac = stream.composition.get('H2', 0)
-                        o2_frac = stream.composition.get('O2', 0)
-                        if o2_frac > h2_frac:
-                            primary_gas = 'O2'
-                        break
-                except:
-                    pass
-            else:
-                 continue
-            break
-            
-    # Set column headers based on primary gas
-    if primary_gas == 'O2':
-        purity_label = "O2"
-        impurity_label = "H2"
-    else:
-        purity_label = "H2"
-        impurity_label = "O2"
+    # Build connection map: source_id -> list of target_ids
+    connection_map = {}
+    if context.topology and context.topology.nodes:
+        for node in context.topology.nodes:
+            targets = [conn.target_name for conn in node.connections]
+            connection_map[node.id] = targets
     
-    print(f"\n### Stream Summary Table (Topology Order) - {primary_gas} Train (ppm = molar)")
-    print("-" * 180)
-    print(f"{'Component':<18} | {'T_out':>8} | {'P_out':>10} | {purity_label+' %':>8} | {purity_label+' mol ppm':>10} | {purity_label+' kg/h':>10} | {'H2O %':>7} | {'H2O mol ppm':>11} | {'H2O kg/h':>9} | {'Mass Flow':>10} | {impurity_label+' %':>7} | {impurity_label+' mol ppm':>12} | {impurity_label+' kg/h':>10}")
-    print("-" * 180)
-    
-    profile_data = []
-
-    for comp_id in topo_order:
-        comp = components.get(comp_id)
-        if not comp:
-            continue
-        
-        # Try to get output stream
-        stream = None
-        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out']:
-            try:
-                stream = comp.get_output(port)
-                if stream is not None and stream.mass_flow_kg_h > 1e-6:
-                    break
-                stream = None
-            except Exception as e:
-                pass
-        
-        if stream is None:
-            continue
-        
-        T_c = stream.temperature_k - 273.15
-        P_bar = stream.pressure_pa / 1e5
-        h2_frac = stream.composition.get('H2', 0.0)
-        h2o_frac = stream.composition.get('H2O', 0.0) + stream.composition.get('H2O_liq', 0.0)
-        o2_frac = stream.composition.get('O2', 0.0)
-        
-        mass_flow_total = stream.mass_flow_kg_h
-        h2_mass_kg_h = h2_frac * mass_flow_total
-        o2_mass_kg_h = o2_frac * mass_flow_total
-        h2o_mass_kg_h = h2o_frac * mass_flow_total
-        
-        try:
-             s_val = stream.specific_entropy_j_kgK / 1000.0
-        except:
-             s_val = 0.0
-             
-        profile_data.append({
-            'Component': comp_id,
-            'T_c': T_c,
-            'P_bar': P_bar,
-            'H_kj_kg': stream.specific_enthalpy_j_kg / 1000.0,
-            'S_kj_kgK': s_val,
-            'MassFrac_H2': h2_frac,
-            'MassFrac_O2': o2_frac,
-            'MassFrac_H2O': h2o_frac
-        })
-
-        if primary_gas == 'O2':
-            purity_frac, impurity_frac = o2_frac, h2_frac
-            purity_mass_kg_h, impurity_mass_kg_h = o2_mass_kg_h, h2_mass_kg_h
-        else:
-            purity_frac, impurity_frac = h2_frac, o2_frac
-            purity_mass_kg_h, impurity_mass_kg_h = h2_mass_kg_h, o2_mass_kg_h
-        
-        # Convert to MOLAR ppm (more physically meaningful for gas-phase equilibrium)
-        mole_fracs = mass_frac_to_mole_frac(stream.composition)
-        h2_mol = mole_fracs.get('H2', 0.0)
-        o2_mol = mole_fracs.get('O2', 0.0)
-        h2o_mol = mole_fracs.get('H2O', 0.0) + mole_fracs.get('H2O_liq', 0.0)
-        
-        if primary_gas == 'O2':
-            purity_mol, impurity_mol = o2_mol, h2_mol
-        else:
-            purity_mol, impurity_mol = h2_mol, o2_mol
-        
-        purity_ppm = purity_mol * 1e6
-        impurity_ppm = impurity_mol * 1e6
-        h2o_ppm = h2o_mol * 1e6
-        
-        purity_pct_str = f"{purity_frac*100:.4f}"
-        purity_ppm_str = f"{purity_ppm:.0f}"
-        purity_mass_str = f"{purity_mass_kg_h:.4f}"
-        
-        h2o_pct_str = f"{h2o_frac*100:.4f}"
-        h2o_ppm_str = f"{h2o_ppm:.0f}"
-        h2o_mass_str = f"{h2o_mass_kg_h:.4f}"
-        
-        impurity_pct_str = f"{impurity_frac*100:.4f}"
-        impurity_ppm_str = f"{impurity_ppm:.0f}"
-        impurity_mass_str = f"{impurity_mass_kg_h:.6f}"
-        
-        print(f"{comp_id:<18} | {T_c:>6.1f}°C | {P_bar:>8.2f} bar | {purity_pct_str:>7}% | {purity_ppm_str:>10} | {purity_mass_str:>10} | {h2o_pct_str:>6}% | {h2o_ppm_str:>9} | {h2o_mass_str:>9} | {mass_flow_total:>8.2f} | {impurity_pct_str:>6}% | {impurity_ppm_str:>10} | {impurity_mass_str:>10}")
-    
-    print("-" * 180)
+    profile_data = print_stream_summary_table(components, topo_order, connection_map)
 
     # 10. Save History and Generate Graphs
     output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")

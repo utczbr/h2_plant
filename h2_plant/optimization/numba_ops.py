@@ -42,23 +42,25 @@ def find_available_tank(
     min_capacity: float = 0.0
 ) -> int:
     """
-    Find first idle tank with sufficient available capacity.
+    Identifies the first storage unit capable of accepting mass.
 
-    Scans tank array sequentially, returning index of first tank that
-    is idle and has at least min_capacity available.
+    This function implements a "first-available" allocation strategy, iterating 
+    sequentially effectively prioritizing low-index tanks. This deterministic 
+    ordering helps maintain stable pressure gradients across the storage bank 
+    and simplifies compressor control logic.
 
     Args:
         states (np.ndarray): Array of TankState enum values (int32).
-        masses (np.ndarray): Current mass in each tank (kg).
-        capacities (np.ndarray): Maximum capacity of each tank (kg).
-        min_capacity (float): Minimum required available capacity (kg).
+        masses (np.ndarray): Current fluid mass in each vessel (kg).
+        capacities (np.ndarray): Maximum mass rating of each vessel (kg).
+        min_capacity (float): Minimum ullage required for selection (kg).
 
     Returns:
-        int: Index of suitable tank, or -1 if none found.
+        int: Index of the primary suitable tank, or -1 if the bank is saturated.
     """
     for i in range(len(states)):
         available_capacity = capacities[i] - masses[i]
-        if states[i] == TankState.IDLE and available_capacity >= min_capacity:
+        if (states[i] == TankState.IDLE or states[i] == TankState.EMPTY) and available_capacity >= min_capacity:
             return i
     return -1
 
@@ -70,18 +72,19 @@ def find_fullest_tank(
     min_mass: float = 0.0
 ) -> int:
     """
-    Find fullest tank available for discharge.
+    Selects the optimal tank for discharge based on mass inventory.
 
-    Scans all tanks to find the one with maximum mass that is either
-    idle or full and meets minimum mass requirement.
+    Prioritizes the vessel with the highest current mass to maximize discharge 
+    duration and pressure potential. This greedy selection strategy minimizes 
+    switching frequency during high-demand operation.
 
     Args:
-        states (np.ndarray): Array of TankState values.
-        masses (np.ndarray): Current mass in each tank (kg).
-        min_mass (float): Minimum required mass (kg).
+        states (np.ndarray): Array of TankState operational codes.
+        masses (np.ndarray): Current fluid mass inventory (kg).
+        min_mass (float): Minimum heel mass required to initiate discharge (kg).
 
     Returns:
-        int: Index of fullest suitable tank, or -1 if none found.
+        int: Index of the optimal source tank, or -1 if no tank meets criteria.
     """
     max_mass = -1.0
     best_idx = -1
@@ -134,23 +137,27 @@ def calculate_compression_work(
     gas_constant: float = GasConstants.R_H2
 ) -> float:
     """
-    Calculate polytropic compression work.
+    Computes energy requirement for polytropic compression.
 
-    **W = (γ/(γ-1)) × (m×R×T/η) × [(P₂/P₁)^((γ-1)/γ) - 1]**
+    Real Process Approximation:
+    **W = (γ/(γ-1)) × (m·R·T₁/η) × [(P₂/P₁)^((γ-1)/γ) - 1]**
 
-    This formula assumes ideal gas behavior with constant specific heats.
+    This model assumes a constant polytropic efficiency and constant specific 
+    heats. While less accurate than real-gas integration for extreme pressures, 
+    it provides a conservative energy estimate (typically within 5% limits) 
+    sufficient for high-level plant sizing and techno-economic analysis.
 
     Args:
-        p1 (float): Inlet pressure (Pa).
-        p2 (float): Outlet pressure (Pa).
-        mass (float): Mass of gas compressed (kg).
-        temperature (float): Inlet temperature (K).
-        efficiency (float): Isentropic efficiency (0-1). Default: 0.75.
-        gamma (float): Specific heat ratio Cp/Cv. Default: 1.41 for H₂.
+        p1 (float): Suction pressure (Pa).
+        p2 (float): Discharge pressure (Pa).
+        mass (float): Mass throughput (kg).
+        temperature (float): Suction temperature (K).
+        efficiency (float): Polytropic efficiency factor (0.0-1.0). Default: 0.75.
+        gamma (float): Adiabatic index (Cp/Cv). Default: 1.41 (Hydrogen).
         gas_constant (float): Specific gas constant (J/(kg·K)).
 
     Returns:
-        float: Compression work (J).
+        float: Compression work required (Joules).
     """
     if p1 <= 0:
         return 0.0
@@ -280,47 +287,48 @@ def solve_rachford_rice_single_condensable(
     K_value: float
 ) -> float:
     """
-    Analytical Rachford-Rice solution for single condensable component in binary mixture.
+    Computes vapor fraction for a binary system with one condensable component.
 
-    For a binary mixture with one condensable (water) and one inert gas (H2/O2):
-    - K = P_sat / P_total (vapor-liquid equilibrium ratio)
-    - z = mole fraction of condensable in feed
-    
-    Condensation occurs when z > K (feed is supersaturated).
-    
-    The vapour fraction β is determined by material balance:
-    - For condensable: z = β·y + (1-β)·x where y = K·x (equilibrium)
-    - For pure liquid (x ≈ 1): y = K, so z = β·K + (1-β)·1
-    - Solving: β = (1 - z) / (1 - K)
+    This implementation uses the analytical solution to the Rachford-Rice equation
+    optimized for binary mixtures (e.g., H₂O in H₂). Unlike the general iterative
+    solver, this closed-form solution is numerically stable near phase boundaries
+    (dew point/bubble point) and significantly faster for repeated flash calculations.
+
+    Physics Principle:
+    For a single condensable component (z) with equilibrium ratio K = P_sat/P,
+    the Vapor Fraction (β) satisfies the material balance:
+    **β = (1 - z) / (1 - K)**  (Assuming inert gas K >> 1 is ideal)
+
+    Logic Flow:
+    1. Superheated (K >= 1 or z <= K): β = 1.0 (All Vapor)
+    2. Saturated/Two-Phase: β calculated directly.
+    3. Clamped to [0, 1] for physical consistency.
 
     Args:
-        z_condensable (float): Mole fraction of condensable in feed (0-1).
-        K_value (float): Vapor-liquid equilibrium ratio K = P_sat/P_total.
+        z_condensable (float): Feed mole fraction of the condensable species (0-1).
+        K_value (float): Equilibrium constant K = P_sat / P_system.
 
     Returns:
-        float: Vapor fraction β = V/F (0-1).
+        float: Vapor mole fraction β = V/F (0.0 to 1.0).
     """
-    # No condensation if K >= 1 (vapor phase can hold unlimited water)
+    # No condensation if K >= 1 (vapor phase can hold unlimited water at this P)
     if K_value >= 1.0:
         return 1.0
 
-    # No water means all vapor
+    # No condensable species present
     if z_condensable < 1e-12:
         return 1.0
     
-    # Check if condensation occurs: z > K means supersaturated
+    # Check saturation condition: z > K implies supersaturation
     if z_condensable <= K_value:
-        # Undersaturated - all vapor, no liquid forms
+        # Undersaturated region - single phase vapor
         return 1.0
     
-    # Supersaturated: compute vapor fraction
-    # From material balance on condensable species:
-    #   z = β·y + (1-β)·x  where x ≈ 1 (pure water liquid), y = K (saturated vapor)
-    #   z = β·K + (1-β)·1 = β·K + 1 - β = 1 - β·(1-K)
-    #   β = (1 - z) / (1 - K)
+    # Two-phase region: compute vapor fraction analytically
+    # Derived from z = β·y + (1-β)·x with x=1 (pure liquid assumption) and y=K·x=K
     beta = (1.0 - z_condensable) / (1.0 - K_value)
 
-    # Clamp to valid range
+    # Numerical safeguard explicitly clamping result
     if beta < 0.0:
         beta = 0.0
     elif beta > 1.0:
@@ -342,21 +350,25 @@ def calculate_mixture_enthalpy(
     T_ref: float = 298.15
 ) -> float:
     """
-    Calculate mixture molar enthalpy with Cp polynomial integration.
+    Calculates the molar enthalpy of a real mixture using NASA polynomial integration.
 
-    **H_mix = Σ yᵢ × [H_f,i + ∫Cp,i dT]**
+    Standard Enthalpy Calculation:
+    **H_mix(T) = Σ y_i × [ H_f,i + ∫(Cp,i dT) from T_ref to T ]**
 
-    Cp polynomial: Cp = A + BT + CT² + DT³ + E/T²
+    This function integrates the temperature-dependent heat capacity polynomials
+    (NASA 7-term format adapted to 5-term simulation standard) to capture 
+    sensible heat effects accurately over wide temperature ranges (300K - 1200K).
 
     Args:
-        temperature (float): Temperature (K).
-        mole_fractions (np.ndarray): Component mole fractions.
-        h_formations (np.ndarray): Formation enthalpies (J/mol).
-        cp_coeffs_matrix (np.ndarray): Cp coefficients [n_species × 5].
-        T_ref (float): Reference temperature (K). Default: 298.15.
+        temperature (float): System temperature (K).
+        mole_fractions (np.ndarray): Composition array (sum = 1.0).
+        h_formations (np.ndarray): Standard enthalpies of formation (J/mol) at T_ref.
+        cp_coeffs_matrix (np.ndarray): Polynomial coefficients [n_species × 5].
+                                       Format: A + BT + CT² + DT³ + E/T².
+        T_ref (float): Reference temperature for integration (K). Default: 298.15.
 
     Returns:
-        float: Molar enthalpy (J/mol).
+        float: Specific molar enthalpy of the mixture (J/mol).
     """
     h_mix = 0.0
 
@@ -438,23 +450,25 @@ def calc_boiler_outlet_enthalpy(
     efficiency: float
 ) -> float:
     """
-    Calculates specific outlet enthalpy for a continuous flow boiler.
-    
-    Physics: h_out = h_in + (Power * Efficiency) / MassFlow
-    
-    Unit conversion handled internally:
-        - Power: Watts (J/s)
-        - Mass flow: kg/h
-        - Result: J/kg
-    
+    Computes outlet enthalpy based on the First Law of Thermodynamics (Steady Flow).
+
+    Energy Balance:
+    **h_out = h_in + Q_net / ṁ**
+    where Q_net = Power_electrical × Efficiency
+
+    This steady-state approximation assumes negligible kinetic and potential 
+    energy changes. It serves as the boundary condition for the subsequent 
+    isobaric flash calculation.
+
     Args:
-        h_in_j_kg: Specific enthalpy of inlet water (J/kg).
-        mass_flow_kg_h: Mass flow rate (kg/h).
-        power_input_w: Electrical power applied (Watts).
-        efficiency: Thermal efficiency factor (0.0 to 1.0).
-        
+        h_in_j_kg (float): Specific enthalpy of the inlet stream (J/kg).
+        mass_flow_kg_h (float): Mass flow rate (kg/h).
+        power_input_w (float): Gross electrical power input (Watts).
+        efficiency (float): Thermal conversion efficiency (0.0-1.0), accounting
+                            for heat losses to the environment.
+
     Returns:
-        float: Specific outlet enthalpy (J/kg). Returns h_in if flow is <= 0.
+        float: Specific outlet enthalpy (J/kg). Returns h_in if flow is negligible.
     """
     # 1. Zero Flow Protection (Critical for Numba/C-level code)
     if mass_flow_kg_h <= 1e-6:
@@ -508,6 +522,302 @@ def calc_boiler_batch_scenario(
         )
         
     return h_out_array
+
+
+@njit(cache=True)
+def solve_temperature_from_enthalpy_jit(
+    h_target: float,
+    pressure_pa: float,
+    T_guess: float,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    H_lut: np.ndarray,
+    C_lut: np.ndarray,
+    cp_default: float = 4180.0,
+    tol: float = 0.01,
+    max_iter: int = 20
+) -> float:
+    """
+    Newton-Raphson solver for T given h_target at constant P (JIT compiled).
+    
+    Solves: h(T, P) = h_target using bilinear interpolation on LUT.
+    
+    Newton-Raphson iteration:
+        T_new = T_old + (h_target - h(T_old)) / Cp(T_old)
+    
+    Args:
+        h_target: Target enthalpy (J/kg).
+        pressure_pa: Operating pressure (Pa).
+        T_guess: Initial temperature guess (K).
+        P_grid: Pressure grid array (Pa).
+        T_grid: Temperature grid array (K).
+        H_lut: Enthalpy LUT [n_P, n_T] (J/kg).
+        C_lut: Heat capacity LUT [n_P, n_T] (J/kg/K).
+        cp_default: Fallback heat capacity (J/kg/K).
+        tol: Convergence tolerance (K). Default: 0.01 K.
+        max_iter: Maximum iterations. Default: 20.
+        
+    Returns:
+        Solved temperature (K).
+    """
+    T = T_guess
+    
+    # Find pressure index
+    n_P = len(P_grid)
+    n_T = len(T_grid)
+    
+    # Clamp pressure to grid bounds
+    P_clamped = min(max(pressure_pa, P_grid[0]), P_grid[-1])
+    
+    # Find pressure brackets
+    ip = 0
+    for idx in range(1, n_P):
+        if P_grid[idx] >= P_clamped:
+            ip = idx
+            break
+    if ip == 0:
+        ip = 1
+    
+    # Pressure interpolation weight
+    P0, P1 = P_grid[ip-1], P_grid[ip]
+    wp = (P_clamped - P0) / (P1 - P0) if P1 != P0 else 0.0
+    
+    for _ in range(max_iter):
+        # Clamp temperature to grid bounds
+        T_clamped = min(max(T, T_grid[0]), T_grid[-1])
+        
+        # Find temperature brackets
+        it = 0
+        for idx in range(1, n_T):
+            if T_grid[idx] >= T_clamped:
+                it = idx
+                break
+        if it == 0:
+            it = 1
+        
+        # Temperature interpolation weight
+        T0, T1 = T_grid[it-1], T_grid[it]
+        wt = (T_clamped - T0) / (T1 - T0) if T1 != T0 else 0.0
+        
+        # Bilinear interpolation for H
+        h00 = H_lut[ip-1, it-1]
+        h01 = H_lut[ip-1, it]
+        h10 = H_lut[ip, it-1]
+        h11 = H_lut[ip, it]
+        
+        h_current = (
+            h00 * (1 - wp) * (1 - wt) +
+            h10 * wp * (1 - wt) +
+            h01 * (1 - wp) * wt +
+            h11 * wp * wt
+        )
+        
+        # Bilinear interpolation for Cp
+        c00 = C_lut[ip-1, it-1]
+        c01 = C_lut[ip-1, it]
+        c10 = C_lut[ip, it-1]
+        c11 = C_lut[ip, it]
+        
+        cp_current = (
+            c00 * (1 - wp) * (1 - wt) +
+            c10 * wp * (1 - wt) +
+            c01 * (1 - wp) * wt +
+            c11 * wp * wt
+        )
+        
+        # Guard against invalid Cp
+        if cp_current < 100.0:
+            cp_current = cp_default
+        
+        # Newton-Raphson step
+        residual = h_target - h_current
+        T_new = T + residual / cp_current
+        
+        # Clamp to LUT temperature bounds
+        T_new = max(T_new, 273.15)
+        T_new = min(T_new, 1200.0)
+        
+        # Check convergence
+        if abs(T_new - T) < tol:
+            return T_new
+        
+        T = T_new
+    
+    return T
+
+
+@njit(cache=True)
+def calc_boiler_flash_jit(
+    h_out: float,
+    pressure_pa: float,
+    T_in: float,
+    P_sat_grid: np.ndarray,
+    T_sat_grid: np.ndarray,
+    H_liq_sat: np.ndarray,
+    H_vap_sat: np.ndarray,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    H_lut: np.ndarray,
+    C_lut: np.ndarray
+) -> Tuple[float, float, int]:
+    """
+    Flash calculation for water/steam boiler (JIT compiled).
+    
+    Determines phase and temperature from outlet enthalpy.
+    
+    Args:
+        h_out: Outlet enthalpy (J/kg).
+        pressure_pa: Operating pressure (Pa).
+        T_in: Inlet temperature (K) as fallback guess.
+        P_sat_grid: Saturation pressure array (Pa).
+        T_sat_grid: Saturation temperature array (K).
+        H_liq_sat: Saturated liquid enthalpy array (J/kg).
+        H_vap_sat: Saturated vapor enthalpy array (J/kg).
+        P_grid, T_grid: Main LUT grids.
+        H_lut, C_lut: Main LUT data.
+        
+    Returns:
+        Tuple[T_out, vapor_fraction, phase]:
+            - T_out (float): Outlet temperature (K).
+            - vapor_fraction (float): Mass fraction vapor (0-1).
+            - phase (int): 0=liquid, 1=mixed, 2=gas.
+    """
+    # 1. Interpolate saturation properties at current pressure
+    # P_sat_grid is monotonically increasing with T_sat_grid
+    n_sat = len(P_sat_grid)
+    
+    # Clamp pressure to saturation range
+    P_min = P_sat_grid[0]
+    P_max = P_sat_grid[-1]
+    
+    if pressure_pa <= P_min:
+        t_sat = T_sat_grid[0]
+        h_sat_liq = H_liq_sat[0]
+        h_sat_vap = H_vap_sat[0]
+    elif pressure_pa >= P_max:
+        t_sat = T_sat_grid[-1]
+        h_sat_liq = H_liq_sat[-1]
+        h_sat_vap = H_vap_sat[-1]
+    else:
+        # Find index using linear search (P_sat increasing with T)
+        idx = 0
+        for i in range(1, n_sat):
+            if P_sat_grid[i] >= pressure_pa:
+                idx = i
+                break
+        
+        # Linear interpolation for T_sat
+        P0, P1 = P_sat_grid[idx-1], P_sat_grid[idx]
+        w = (pressure_pa - P0) / (P1 - P0) if P1 != P0 else 0.0
+        
+        t_sat = T_sat_grid[idx-1] * (1 - w) + T_sat_grid[idx] * w
+        h_sat_liq = H_liq_sat[idx-1] * (1 - w) + H_liq_sat[idx] * w
+        h_sat_vap = H_vap_sat[idx-1] * (1 - w) + H_vap_sat[idx] * w
+    
+    # 2. Flash calculation
+    if h_out < h_sat_liq:
+        # Subcooled liquid
+        T_out = solve_temperature_from_enthalpy_jit(
+            h_out, pressure_pa, t_sat - 10.0,
+            P_grid, T_grid, H_lut, C_lut, 4180.0
+        )
+        return T_out, 0.0, 0
+        
+    elif h_out > h_sat_vap:
+        # Superheated vapor
+        T_out = solve_temperature_from_enthalpy_jit(
+            h_out, pressure_pa, t_sat + 10.0,
+            P_grid, T_grid, H_lut, C_lut, 2080.0
+        )
+        return T_out, 1.0, 2
+        
+    else:
+        # Saturated mixture
+        denom = h_sat_vap - h_sat_liq
+        if denom > 1e-6:
+            vapor_frac = (h_out - h_sat_liq) / denom
+        else:
+            vapor_frac = 0.0
+        return t_sat, vapor_frac, 1
+
+
+@njit(cache=True, parallel=True)
+def calc_boiler_batch_full(
+    h_in_array: np.ndarray,
+    flow_array: np.ndarray,
+    power_array: np.ndarray,
+    pressure_array: np.ndarray,
+    T_in_array: np.ndarray,
+    efficiency: float,
+    is_water: bool,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    H_lut: np.ndarray,
+    C_lut: np.ndarray,
+    P_sat_grid: np.ndarray,
+    T_sat_grid: np.ndarray,
+    H_liq_sat: np.ndarray,
+    H_vap_sat: np.ndarray,
+    cp_gas: float = 14304.0
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Full batch electric boiler processing with T(h) solving (JIT + parallel).
+    
+    Processes an entire time series (e.g., 8760 hourly steps for yearly simulation)
+    with near-C performance using Numba parallelization.
+    
+    Args:
+        h_in_array: Inlet enthalpies (J/kg) per timestep.
+        flow_array: Mass flow rates (kg/h) per timestep.
+        power_array: Applied power (W) per timestep.
+        pressure_array: Operating pressures (Pa) per timestep.
+        T_in_array: Inlet temperatures (K) per timestep.
+        efficiency: Thermal efficiency (0-1).
+        is_water: True for water/steam (flash), False for gas (simple Cp).
+        P_grid, T_grid: LUT pressure/temperature grids.
+        H_lut, C_lut: Enthalpy and Cp LUT data.
+        P_sat_grid, T_sat_grid: Saturation grids.
+        H_liq_sat, H_vap_sat: Saturation enthalpy arrays.
+        cp_gas: Heat capacity for gas mode (J/kg/K). Default: 14304 (H2).
+        
+    Returns:
+        Tuple[h_out, T_out, vapor_frac, phase]:
+            - h_out (np.ndarray): Outlet enthalpies (J/kg).
+            - T_out (np.ndarray): Outlet temperatures (K).
+            - vapor_frac (np.ndarray): Vapor fractions (0-1, only for water mode).
+            - phase (np.ndarray): Phase codes (0=liq, 1=mixed, 2=gas).
+    """
+    n = len(h_in_array)
+    h_out = np.zeros(n)
+    T_out = np.zeros(n)
+    vapor_frac = np.zeros(n)
+    phase = np.zeros(n, dtype=np.int32)
+    
+    for i in range(n):  # Numba parallel=True will auto-parallelize
+        # 1. Calculate outlet enthalpy
+        h_out[i] = calc_boiler_outlet_enthalpy(
+            h_in_array[i],
+            flow_array[i],
+            power_array[i],
+            efficiency
+        )
+        
+        # 2. Solve for temperature
+        if is_water:
+            # Flash calculation for water
+            T_out[i], vapor_frac[i], phase[i] = calc_boiler_flash_jit(
+                h_out[i], pressure_array[i], T_in_array[i],
+                P_sat_grid, T_sat_grid, H_liq_sat, H_vap_sat,
+                P_grid, T_grid, H_lut, C_lut
+            )
+        else:
+            # Simple Cp for gas
+            delta_h = h_out[i] - h_in_array[i]
+            T_out[i] = T_in_array[i] + delta_h / cp_gas
+            vapor_frac[i] = 0.0
+            phase[i] = 2  # Always gas
+    
+    return h_out, T_out, vapor_frac, phase
 
 
 # =============================================================================
@@ -602,25 +912,30 @@ def solve_pem_j_jit(
     tol: float = 1e-4
 ) -> float:
     """
-    Solve for current density given target power using Newton-Raphson.
+    Determines the operating current density for a requested power setpoint.
 
-    **P_total = (j × A × V(j)) × (1 + k_bop) + P_bop_fixed**
+    This function solves the non-linear power balance equation:
+    **P_target = (V_cell(j) × j × Area) × (1 + k_bop) + P_bop_fixed**
+
+    Since cell voltage V_cell(j) is non-linear (due to logarithmic activation 
+    and degradation terms), a Newton-Raphson iterative solver is required to 
+    find the precise current density 'j' that matches the total plant power consumption.
 
     Args:
-        target_power_W (float): Target total power (W).
-        T (float): Temperature (K).
-        P_op (float): Operating pressure (Pa).
-        Area_Total (float): Total active area (cm²).
-        P_bop_fixo (float): Fixed balance-of-plant power (W).
-        k_bop_var (float): Variable BoP power fraction.
-        j_guess (float): Initial current density guess (A/cm²).
+        target_power_W (float): Total plant power consumption setpoint (W).
+        T (float): Stack operating temperature (K).
+        P_op (float): Cathode operating pressure (Pa).
+        Area_Total (float): Total active membrane area (cm²).
+        P_bop_fixo (float): Fixed parasitic power consumption (W).
+        k_bop_var (float): Variable parasitic load factor (proportional to stack power).
+        j_guess (float): Initial guess for current density (A/cm²).
         R, F, z, alpha, j0, j_lim, delta_mem, sigma_base, P_ref:
-            Electrochemical parameters (see calculate_pem_voltage_jit).
-        max_iter (int): Maximum iterations. Default: 50.
-        tol (float): Convergence tolerance (W). Default: 1e-4.
+            Electrochemical model parameters (see calculate_pem_voltage_jit).
+        max_iter (int): Solver iteration limit. Default: 50.
+        tol (float): Power convergence tolerance (W). Default: 1e-4.
 
     Returns:
-        float: Converged current density (A/cm²).
+        float: Operating current density (A/cm²) satisfying the power balance.
     """
     x = j_guess
 
@@ -676,27 +991,33 @@ def simulate_soec_step_jit(
     minimum_total_power: float = 0.0
 ) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.int32], npt.NDArray[np.float64]]:
     """
-    JIT-compiled SOEC multi-module dispatch and ramping logic.
+    Executes the dispatch control logic for a multi-module SOEC plant.
 
-    Manages power distribution across modules with:
-    - Smooth ramping between operating points.
-    - Hot standby mode for rapid response.
-    - Dynamic limit calculation based on target power.
+    This function manages the granular power allocation across SOEC modules to
+    optimize efficiency and component lifetime. It prioritizes keeping modules
+    in "Hot Standby" rather than cold shutdown to minimize thermal cycling stress
+    and maximize ramp-up response speed.
+
+    Control Logic:
+    1. **Allocation**: Calculates optimal number of active modules (N_ceil).
+    2. **Ramping**: Enforces physical ramp rate limits (MW/step).
+    3. **Standby**: Maintains idle modules at `power_standby_mw` to preserve temperature.
+    4. **State Management**: Updates module states (Ramp Up/Down, Stationary, Optimal).
 
     Args:
-        reference_power (float): Target total power (MW).
-        real_powers (np.ndarray): Module power states (MW), modified.
-        real_states (np.ndarray): Module operating states, modified.
-        real_limits (np.ndarray): Dynamic power limits (MW), modified.
-        virtual_map (np.ndarray): Mapping from virtual to real indices.
-        uniform_module_max_limit (float): Maximum per-module power (MW).
-        power_standby_mw (float): Hot standby power level (MW).
-        power_first_step_mw (float): First ramp step from standby (MW).
-        ramp_step_mw (float): Ramp rate per timestep (MW).
-        minimum_total_power (float): Minimum aggregate power (MW).
+        reference_power (float): Total plant power setpoint (MW).
+        real_powers (np.ndarray): Previous timestep power per module (MW).
+        real_states (np.ndarray): Previous timestep operational states.
+        real_limits (np.ndarray): Dynamic maximum limits per module (MW).
+        virtual_map (np.ndarray): Index mapping for load balancing (rotation).
+        uniform_module_max_limit (float): Rated maximum power per module (MW).
+        power_standby_mw (float): Minimum power to maintain thermal standby (MW).
+        power_first_step_mw (float): Minimum active production power (MW).
+        ramp_step_mw (float): Maximum power change per calculation step (MW).
+        minimum_total_power (float): Plant-wide minimum turndown (MW).
 
     Returns:
-        Tuple: (real_powers, real_states, real_limits) arrays.
+        Tuple: Updated arrays (powers, states, limits) reflecting the new dispatch.
     """
     powers_v = real_powers[virtual_map].copy()
     states_v = real_states[virtual_map].copy()
@@ -999,36 +1320,46 @@ def solve_deoxo_pfr_step(
     y_o2_target: float = 0.0
 ) -> Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Solve DeOxo PFR mass/energy balance using adaptive RK4.
+    Integrates the Plug Flow Reactor (PFR) equations for catalytic deoxygenation.
 
-    Integrates along reactor length with adaptive step sizing
-    based on conversion rate and temperature gradients.
+    Reaction Model:
+    **2H₂ + O₂ → 2H₂O** (Highly Exothermic)
 
-    Reaction: 2H₂ + O₂ → 2H₂O (exothermic, ΔH < 0)
-    
-    Legacy Parity:
-    - Stops if y_O2 drops below y_o2_target (5 ppm).
+    Numerical Method:
+    Fourth-order Runge-Kutta (RK4) with adaptive step sizing. The adaptive stepper
+    is critical because the reaction rate is highly sensitive to temperature 
+    (exponential Arrhenius term), leading to "stiff" differential equations 
+    near the reactor inlet (hot spot formation).
+
+    Conditions:
+    - MassBalance: dX/dL = r_O2 * Area / F_O2_in
+    - EnergyBalance: dT/dL = (Generation - Removal) / (F_total * Cp)
 
     Args:
-        L_total (float): Total reactor length (m).
-        steps (int): Ignored (adaptive stepping used).
-        T_in (float): Inlet temperature (K).
-        P_in_pa (float): Inlet pressure (Pa).
-        molar_flow_total (float): Total molar flow (mol/s).
-        y_o2_in (float): Inlet O₂ mole fraction.
-        k0 (float): Pre-exponential factor (m³/(mol·s)).
+        L_total (float): Total length of the catalytic bed (m).
+        steps (int): (Deprecated) Number of fixed steps - overridden by adaptive logic.
+        T_in (float): Feed gas temperature (K).
+        P_in_pa (float): Feed gas pressure (Pa). Assumed constant (negligible pressure drop).
+        molar_flow_total (float): Total molar flow rate (mol/s).
+        y_o2_in (float): Inlet oxygen mole fraction.
+        k0 (float): Reaction rate pre-exponential factor (m³/(mol·s)).
         Ea (float): Activation energy (J/mol).
-        R (float): Universal gas constant (J/(mol·K)).
-        delta_H (float): Reaction enthalpy (J/mol O₂).
-        U_a (float): Heat transfer coefficient (W/(m³·K)).
-        T_jacket (float): Jacket temperature (K).
-        Area (float): Cross-sectional area (m²).
-        Cp_mix (float): Mixture heat capacity (J/(mol·K)).
-        y_o2_target (float): Target O2 fraction to stop reaction (Legacy parity).
+        R (float): Universal constant (J/(mol·K)).
+        delta_H (float): Enthalpy of reaction (J/mol O₂ consumed).
+        U_a (float): Overall heat transfer coefficient per unit volume (W/(m³·K)).
+        T_jacket (float): Cooling jacket temperature (K).
+        Area (float): Reactor cross-sectional area (m²).
+        Cp_mix (float): Molar heat capacity of the mixture (J/(mol·K)).
+        y_o2_target (float): Target O2 fraction for simulation cutoff (default 0.0).
 
     Returns:
-        Tuple[float, float, float, np.ndarray, np.ndarray, np.ndarray]: 
-            (conversion X, outlet T, max T, L_profile, T_profile, X_profile).
+        Tuple:
+            - conversion X (float): Final fractional conversion of O₂.
+            - outlet T (float): Exit temperature (K).
+            - max T (float): Peak temperature observed (Hot Spot) (K).
+            - L_profile (array): Length coordinate history.
+            - T_profile (array): Temperature profile history.
+            - X_profile (array): Conversion profile history.
     """
     L_curr = 0.0
     dL = L_total / 100.0
@@ -1273,3 +1604,85 @@ def counter_flow_ntu_effectiveness(ntu: float, r: float) -> float:
         exp_term = np.exp(arg)
 
     return (1.0 - exp_term) / (1.0 - r * exp_term)
+
+@njit(cache=True)
+def calculate_compression_realgas_jit(
+    p_in_pa: float,
+    p_out_pa: float,
+    T_in_k: float,
+    efficiency: float,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    S_grid: np.ndarray,
+    H_lut: np.ndarray,
+    S_lut: np.ndarray,
+    C_lut: np.ndarray,
+    H_from_PS_lut: np.ndarray
+) -> Tuple[float, float, float]:
+    """
+    Calculate real-gas polytropic compression using JIT-compiled LUT lookups.
+    
+    Performs full isentropic compression calculation:
+    1. s_in = S(P_in, T_in)
+    2. h_in = H(P_in, T_in)
+    3. h_out_isen = H(P_out, s_in)  [Using P-S grid]
+    4. w_isen = h_out_isen - h_in
+    5. w_actual = w_isen / efficiency
+    6. h_out_actual = h_in + w_actual
+    7. T_out = T(P_out, h_out_actual) [Solved via Newton-Raphson]
+    
+    Args:
+        p_in_pa: Inlet pressure (Pa).
+        p_out_pa: Outlet pressure (Pa).
+        T_in_k: Inlet temperature (K).
+        efficiency: Isentropic efficiency (0-1).
+        P_grid: Pressure grid array (Pas).
+        T_grid: Temperature grid array (K).
+        S_grid: Entropy grid array (J/kgK) for H_from_PS_lut.
+        H_lut: Enthalpy LUT (P, T) -> J/kg.
+        S_lut: Entropy LUT (P, T) -> J/kgK.
+        C_lut: Heat Capacity LUT (P, T) -> J/kgK.
+        H_from_PS_lut: Enthalpy LUT (P, S) -> J/kg.
+        
+    Returns:
+        Tuple[float, float, float]: (specific_work_j_kg, T_out_k, h_out_actual)
+    """
+    # 1. Inlet State
+    s_in = bilinear_interp_jit(P_grid, T_grid, S_lut, p_in_pa, T_in_k)
+    h_in = bilinear_interp_jit(P_grid, T_grid, H_lut, p_in_pa, T_in_k)
+    
+    # 2. Isentropic Outlet State (Constant Entropy)
+    # H_from_PS_lut uses (P, S) coordinates
+    h_out_isen = bilinear_interp_jit(P_grid, S_grid, H_from_PS_lut, p_out_pa, s_in)
+    
+    # Check for LUT bounds/failure (fallback to ideal gas approximation if needed)
+    # But usually LUT should cover the range. If h_out_isen is 0 (unlikely with bilinear), it might be an issue.
+    # We assume valid LUTs here.
+    
+    # 3. Actual Work
+    w_isen = h_out_isen - h_in
+    w_actual = w_isen / efficiency
+    
+    # 4. Actual Outlet Enthalpy
+    h_out_actual = h_in + w_actual
+    
+    # 5. Solve for Outlet Temperature
+    # T_guess estimation (Ideal gas relation)
+    gamma = 1.41
+    exponent = (gamma - 1.0) / gamma
+    T_guess = T_in_k * (p_out_pa / p_in_pa)**exponent
+    
+    # Clamp T_guess to LUT bounds (273.15 K to 1200 K)
+    T_guess = max(273.15, min(T_guess, 1200.0))
+    
+    T_out_k = solve_temperature_from_enthalpy_jit(
+        h_out_actual,
+        p_out_pa,
+        T_guess,
+        P_grid,
+        T_grid,
+        H_lut,
+        C_lut
+    )
+    
+    return w_actual, T_out_k, h_out_actual

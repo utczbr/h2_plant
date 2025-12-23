@@ -80,6 +80,26 @@ def main():
             f_out.write(",".join(row) + "\n")
 
     print("Done.")
+    
+    # =========================================================================
+    # Save all interpolation functions as Numba-compatible arrays
+    # =========================================================================
+    # This exports the extracted interpolation data (x_data, y_data, kind)
+    # from all functions in the original pickle, making them available for
+    # fast JIT-compiled interpolation in other components.
+    output_pkl = os.path.join(project_root, 'h2_plant/data/ATR_interp_data.pkl')
+    
+    print(f"Saving all interpolation functions to {output_pkl}...")
+    
+    with open(output_pkl, 'wb') as f_pkl:
+        pickle.dump(interp_data, f_pkl)
+    
+    print(f"Saved {len(interp_data)} interpolation functions:")
+    for name in sorted(interp_data.keys()):
+        x_data, y_data, kind = interp_data[name]
+        print(f"  - {name}: {len(x_data)} points, kind={kind}")
+    
+    print("All functions saved successfully.")
 
 if __name__ == "__main__":
     main()

@@ -79,10 +79,10 @@ PropertyType = Literal['D', 'H', 'S', 'C', 'Z']
 class LUTConfig:
     """Configuration for lookup table generation."""
     
-    # Pressure range (Pa)
-    pressure_min: float = 1e5          # 1 bar
-    pressure_max: float = 1000e5       # 1000 bar
-    pressure_points: int = 2000        # MAXIMUM Resolution
+    # Pressure range (Pa) - UPDATED for vacuum support
+    pressure_min: float = 0.05e5        # 0.05 bar (Safety margin for vacuum compression)
+    pressure_max: float = 1000e5        # 1000 bar
+    pressure_points: int = 2000         # 2000 points - adequate with LOG spacing
     
     # Temperature range (K)
     temperature_min: float = 273.15    # 0°C
@@ -204,8 +204,10 @@ class StandaloneGenerator:
         return np.concatenate(results_list)
 
     def _compute_pt_grid(self, fluid_name_friendly, cp_fluid_name, lut_data):
-        # Grids
-        p_grid = np.linspace(self.config.pressure_min, self.config.pressure_max, self.config.pressure_points)
+        # Grids - Using GEOMSPACE for logarithmic pressure distribution
+        # This places more points in low-pressure (vacuum) region where
+        # gas properties change rapidly with pressure
+        p_grid = np.geomspace(self.config.pressure_min, self.config.pressure_max, self.config.pressure_points)
         t_grid = np.linspace(self.config.temperature_min, self.config.temperature_max, self.config.temperature_points)
         
         P_mesh, T_mesh = np.meshgrid(p_grid, t_grid, indexing='ij')
@@ -220,8 +222,8 @@ class StandaloneGenerator:
             lut_data[prop] = vals_flat.reshape(P_mesh.shape)
 
     def _compute_ps_grid(self, fluid_name_friendly, cp_fluid_name, lut_data):
-        # Grids
-        p_grid = np.linspace(self.config.pressure_min, self.config.pressure_max, self.config.pressure_points)
+        # Grids - Must use same GEOMSPACE as P-T grid for consistency
+        p_grid = np.geomspace(self.config.pressure_min, self.config.pressure_max, self.config.pressure_points)
         s_grid = np.linspace(self.config.entropy_min, self.config.entropy_max, self.config.entropy_points)
         
         P_s_mesh, S_mesh = np.meshgrid(p_grid, s_grid, indexing='ij')

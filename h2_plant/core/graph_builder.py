@@ -13,6 +13,12 @@ from h2_plant.components.compression.compressor_single import CompressorSingle
 from h2_plant.components.balance_of_plant.pump import Pump
 from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer as Mixer
 from h2_plant.components.control.valve import ThrottlingValve as Valve
+from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
+from h2_plant.components.water.makeup_mixer import MakeupMixer
+from h2_plant.components.thermal.interchanger import Interchanger
+from h2_plant.components.water.water_pump import WaterPumpThermodynamic
+from h2_plant.optimization.lut_manager import LUTManager
+from h2_plant.core.component_ids import ComponentID
 
 # Passive Components (Placeholder implementations for now)
 class PassiveComponent(Component):
@@ -36,6 +42,12 @@ class PlantGraphBuilder:
         Builds and returns the dictionary of components.
         """
         logger.info("Building plant graph...")
+        
+        # Create and register LUTManager FIRST so other components can use it
+        lut_manager = LUTManager()
+        lut_manager.set_component_id(ComponentID.LUT_MANAGER.value)
+        self.components[ComponentID.LUT_MANAGER.value] = lut_manager
+        logger.info(f"Registered LUTManager for component optimization")
         
         for node in self.context.topology.nodes:
             component = self._create_component(node)
@@ -76,10 +88,19 @@ class PlantGraphBuilder:
             return DetailedPEMElectrolyzer(physics_dict)
             
         elif node.type == "SOEC":
-            # Inject SOEC Physics Spec directly
-            physics_spec = self.context.physics.soec_cluster
-            # SOECOperator now accepts the spec as the first argument
-            return SOECOperator(physics_spec)
+            # Start with physics defaults if available
+            soec_config = {}
+            if hasattr(self.context.physics, 'soec_cluster'):
+                 soec_config = self.context.physics.soec_cluster.model_dump() if hasattr(self.context.physics.soec_cluster, 'model_dump') else dict(self.context.physics.soec_cluster)
+            
+            # Merge/Override with node params
+            if node.params:
+                soec_config.update(node.params)
+                
+            # Ensure component_id is set
+            soec_config['component_id'] = node.id
+            
+            return SOECOperator(soec_config)
             
         elif node.type == "Compressor":
             # Inject defaults if params are missing
@@ -130,7 +151,8 @@ class PlantGraphBuilder:
             
         elif node.type == "Mixer":
             vol = float(node.params.get('volume_m3', 10.0))
-            return Mixer(volume_m3=vol)
+            continuous_flow = bool(node.params.get('continuous_flow', True))
+            return Mixer(volume_m3=vol, continuous_flow=continuous_flow)
 
         elif node.type == "WaterMixer":
             from h2_plant.components.mixing.water_mixer import WaterMixer
@@ -228,11 +250,14 @@ class PlantGraphBuilder:
             
         elif node.type == "ElectricBoiler":
             from h2_plant.components.thermal.electric_boiler import ElectricBoiler
-            return ElectricBoiler(config={
+            config = {
                 'max_power_kw': float(node.params.get('max_power_kw', 1000.0)),
                 'efficiency': float(node.params.get('efficiency', 0.99)),
                 'design_pressure_bar': float(node.params.get('design_pressure_bar', 10.0))
-            })
+            }
+            if 'target_temp_c' in node.params:
+                config['target_temp_c'] = float(node.params['target_temp_c'])
+            return ElectricBoiler(config=config)
             
         elif node.type == "Coalescer":
             from h2_plant.components.separation.coalescer import Coalescer
@@ -257,6 +282,44 @@ class PlantGraphBuilder:
         elif node.type == "ExternalOxygenSource":
             from h2_plant.components.external.oxygen_source import ExternalOxygenSource
             return ExternalOxygenSource(config=node.params)
+
+        elif node.type == "WaterSource":
+            from h2_plant.components.external.water_source import ExternalWaterSource
+            return ExternalWaterSource(node.params)
+
+        elif node.type == "DrainRecorderMixer":
+            # Pass explicit source_ids if provided
+            sources = node.params.get("source_ids", None)
+            return DrainRecorderMixer(source_ids=sources)
+
+        elif node.type == "MakeupMixer":
+            return MakeupMixer(
+                component_id=node.id,
+                target_flow_kg_h=float(node.params.get("target_flow_kg_h", 100.0)),
+                makeup_temp_c=float(node.params.get("makeup_temp_c", 20.0)),
+                makeup_pressure_bar=float(node.params.get("makeup_pressure_bar", 1.0))
+            )
+
+        elif node.type == "Interchanger":
+            return Interchanger(
+                component_id=node.id,
+                min_approach_temp_k=float(node.params.get("min_approach_temp_k", 10.0)),
+                target_cold_out_temp_c=float(node.params.get("target_cold_out_temp_c", 95.0)),
+                efficiency=float(node.params.get("efficiency", 0.95))
+            )
+        
+        elif node.type == "WaterPumpThermodynamic":
+             capacity = float(node.params.get('capacity_kg_h', 1000.0))
+             target_p = float(node.params.get('target_pressure_pa', 500000.0))
+             eta_is = float(node.params.get('eta_is', 0.80))
+             eta_m = float(node.params.get('eta_m', 0.95))
+             pump_id = node.params.get('pump_id', node.id)
+             return WaterPumpThermodynamic(
+                 pump_id=pump_id,
+                 target_pressure_pa=target_p,
+                 eta_is=eta_is,
+                 eta_m=eta_m
+             )
 
         else:
             logger.warning(f"Unknown component type: {node.type} (ID: {node.id}) -> Instantiating PassiveComponent")

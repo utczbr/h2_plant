@@ -99,6 +99,10 @@ class Coalescer(Component):
         self.gas_type = gas_type
         if 'component_id' in kwargs:
             self.component_id = kwargs['component_id']
+        
+        # Permeability override (allow tuning for different pressure regimes)
+        # Default to constant if not provided
+        self.k_permeability = kwargs.get('k_permeability', CoalescerConstants.K_PERDA)
 
         # Geometry validation
         if self.d_shell <= 0:
@@ -235,7 +239,19 @@ class Coalescer(Component):
         y_gas_resto = 1.0 - y_H2O_vapor - h2o_liq_frac  # Mass fraction of primary gas
         
         # Average molar mass of gas phase (kg/mol)
-        M_avg = y_gas_resto * self.M_gas + y_H2O_vapor * CoalescerConstants.M_H2O
+        # FIX: Use harmonic mean of molar masses weighted by mass fractions
+        # Formula: M_avg = 1 / Σ(y_i / M_i) - thermodynamically correct for density
+        # The previous formula (Σ y_i * M_i) significantly overestimates M_avg for mixtures
+        sum_y_over_M = 0.0
+        if y_gas_resto > 0 and self.M_gas > 0:
+            sum_y_over_M += y_gas_resto / self.M_gas
+        if y_H2O_vapor > 0:
+            sum_y_over_M += y_H2O_vapor / CoalescerConstants.M_H2O
+        
+        if sum_y_over_M > 0:
+            M_avg = 1.0 / sum_y_over_M
+        else:
+            M_avg = self.M_gas  # Fallback for pure primary gas
         
         # Get compressibility factor Z from LUT or fallback to Z=1 (ideal gas)
         R_UNIV = 8.31446  # J/(mol·K)
@@ -264,7 +280,7 @@ class Coalescer(Component):
 
         # Calculate Pressure Drop (Carman-Kozeny)
         # Principle: ΔP = K * μ * L * U
-        delta_p_pa = (CoalescerConstants.K_PERDA *
+        delta_p_pa = (self.k_permeability *
                       mu_g *
                       self.l_elem *
                       u_sup)

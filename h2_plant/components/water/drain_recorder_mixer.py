@@ -73,7 +73,8 @@ class DrainRecorderMixer(Component):
         self._received_streams: Dict[str, Stream] = {}
         
         # Output stream after mixing
-        self.outlet_stream: Optional[Stream] = None
+        # Output stream after mixing - initialized to zero flow
+        self.outlet_stream: Optional[Stream] = Stream(0.0)
         
         # History arrays (pre-allocated in initialize)
         self._history: Dict[str, np.ndarray] = {}
@@ -188,7 +189,7 @@ class DrainRecorderMixer(Component):
                 min_pressure = min(min_pressure, stream.pressure_pa)
             
             # Update running totals (kg)
-            self._total_mass_kg[source_id] = self._total_mass_kg.get(source_id, 0.0) + (mass_kg_h * self._dt)
+            self._total_mass_kg[source_id] = self._total_mass_kg.get(source_id, 0.0) + (mass_kg_h * self.dt)
         
         # Record time
         if self._history_index < self._history_capacity:
@@ -208,7 +209,7 @@ class DrainRecorderMixer(Component):
                 phase='liquid'
             )
         else:
-            self.outlet_stream = None
+            self.outlet_stream = Stream(0.0)
         
         # Clear buffer for next timestep
         self._received_streams.clear()
@@ -224,7 +225,7 @@ class DrainRecorderMixer(Component):
             Stream: Mixed drain stream, or None if no flow.
         """
         if port_name == 'outlet':
-            return self.outlet_stream
+            return self.outlet_stream if self.outlet_stream else Stream(0.0)
         return None
 
     def get_history(self) -> Dict[str, np.ndarray]:

@@ -1,33 +1,18 @@
 """
-Thermodynamic Water Mixer Component.
+Rigorous Thermodynamic Water Mixer.
 
-This module implements a rigorous water mixer using CoolProp for exact
-enthalpy calculations. The mixer performs mass and energy balance for
-combining multiple water streams at potentially different temperatures
-and pressures.
+This component performs exact mass and energy balancing for liquid water streams,
+accounting for non-linear property variations (e.g., Cp(T)) using high-fidelity
+state equations.
 
-Thermodynamic Model:
-    - **Mass Balance**: ṁ_out = Σ ṁ_in
-    - **Energy Balance**: H_out = Σ(ṁ_in × h_in) / ṁ_out
-    - **Temperature from Enthalpy**: Given h_out and P_out, solve for T_out
-      using CoolProp inverse lookup T(H, P).
+Thermodynamic Principle (Adiabatic Isobaric Mixing):
+    1. **Mass Balance**: ṁ_out = Σ ṁ_i
+    2. **Energy Balance**: H_out = (Σ ṁ_i * h_i(T_in, P_in)) / ṁ_out
+    3. **State Resolution**: T_out = T(P_out, H_out)
 
-This approach is thermodynamically exact for liquid water mixing, properly
-accounting for the temperature-dependent specific heat and non-ideal mixing.
-
-Architecture:
-    Implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Connects to LUTManager, validates CoolProp availability.
-    - `step()`: Accumulates inlet enthalpies, solves for outlet temperature.
-    - `get_state()`: Returns outlet conditions and active inlet count.
-
-Property Lookup Hierarchy:
-    1. LUTManager (fastest, pre-computed tables)
-    2. CoolPropLUT (cached CoolProp calls)
-    3. Direct CoolProp (fallback for inverse lookups)
-
-References:
-    - IAPWS-IF97: Industrial formulation for thermodynamic properties of water.
+Computational Strategy:
+    - **Tier 1 (Speed)**: `LUTManager` (Bilinear Interpolation)
+    - **Tier 2 (Accuracy)**: `CoolProp` (Helmholtz Energy EOS)
 """
 
 from typing import Dict, Any, Optional
@@ -54,35 +39,17 @@ logger = logging.getLogger(__name__)
 
 class WaterMixer(Component):
     """
-    Multi-inlet water mixer with CoolProp thermodynamics.
+    Multi-port thermodynamic mixer for water streams.
 
-    Performs rigorous mass and energy balance using exact enthalpy
-    calculations from CoolProp. Supports arbitrary number of inlet streams.
-
-    This component fulfills the Component Lifecycle Contract (Layer 1):
-        - `initialize()`: Validates CoolProp availability, connects to LUTManager.
-        - `step()`: Collects inlet enthalpies, computes mixed outlet conditions.
-        - `get_state()`: Returns outlet T/P/h and operational metrics.
-
-    The mixing algorithm (exact):
-    1. For each inlet stream, compute h_i = H(T_i, P_i) from CoolProp.
-    2. Energy balance: H_total = Σ(ṁ_i × h_i)
-    3. Mixed enthalpy: h_out = H_total / ṁ_total
-    4. Find outlet temperature: T_out = T(h_out, P_out) via CoolProp inverse.
+    Aggregates N inlet streams into a single outlet stream, resolving final
+    temperature via enthalpy conservation. This is crucial for accurate loop
+    temperature tracking where simple T_mix = Avg(T_in) is insufficient due to 
+    Cp variations.
 
     Attributes:
-        outlet_pressure_kpa (float): Fixed outlet pressure (kPa).
-        fluid_type (str): CoolProp fluid identifier.
-        outlet_stream (Stream): Mixed output stream.
-        last_temperature_k (float): Last computed outlet temperature (K).
-
-    Example:
-        >>> mixer = WaterMixer(outlet_pressure_kpa=200.0)
-        >>> mixer.initialize(dt=1/60, registry=registry)
-        >>> mixer.receive_input('inlet_0', cold_water_stream, 'water')
-        >>> mixer.receive_input('inlet_1', hot_water_stream, 'water')
-        >>> mixer.step(t=0.0)
-        >>> mixed = mixer.get_output('outlet')
+        outlet_pressure_kpa (float): Regulated downstream pressure (kPa).
+        fluid_type (str): Fluid identifier for EOS model (default: 'Water').
+        max_inlet_streams (int): Connection limit.
     """
 
     def __init__(
@@ -130,18 +97,17 @@ class WaterMixer(Component):
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
-        Prepare the mixer for simulation execution.
+        Executes initialization phase of Component Lifecycle.
 
-        Fulfills the Component Lifecycle Contract initialization phase.
-        Connects to LUTManager for fast property lookups and validates
-        CoolProp availability.
+        Connects to `LUTManager` for optimized property lookups ('H', 'T') to avoid
+        runtime penalties of EOS solving where possible.
 
         Args:
-            dt (float): Simulation timestep in hours.
-            registry (ComponentRegistry): Central registry for component access.
+            dt (float): Simulation timestep (hours).
+            registry (ComponentRegistry): Central service registry.
 
         Raises:
-            RuntimeError: If CoolProp is not available.
+            RuntimeError: If primary physics engine (CoolProp) is missing.
         """
         super().initialize(dt, registry)
 
@@ -217,17 +183,17 @@ class WaterMixer(Component):
 
     def step(self, t: float) -> None:
         """
-        Execute mixing calculations for current timestep.
+        Executes the mixing physics step.
 
-        Implements rigorous mass and energy balance using CoolProp:
-        1. Collect active inlet streams (non-zero flow).
-        2. For each stream, compute enthalpy h_i = H(T_i, P_i).
-        3. Mass balance: ṁ_out = Σ ṁ_i
-        4. Energy balance: h_out = Σ(ṁ_i × h_i) / ṁ_out
-        5. Find outlet temperature: T_out = T(h_out, P_out).
+        Process Logic:
+        1. **Filter**: Identifies active streams (mass_flow > 0).
+        2. **Enthalpy Calculation**: Retrieves h_i for each stream using LUTs/CoolProp.
+        3. **Conservation**: Sums Mass (kg/s) and Energy (kW).
+        4. **State Equation**: Solves T_out = f(H_mix_avg, P_out).
+        5. **Update**: Publishes new `outlet_stream`.
 
         Args:
-            t (float): Current simulation time in hours.
+            t (float): Current simulation time (hours).
         """
         super().step(t)
 
@@ -362,18 +328,12 @@ class WaterMixer(Component):
 
     def get_state(self) -> Dict[str, Any]:
         """
-        Retrieve the component's current operational state.
+        Retrieves component operational telemetry.
 
-        Fulfills the Component Lifecycle Contract state access.
+        Fulfills Layer 1 Contract for GUI and Data Logging.
 
         Returns:
-            Dict[str, Any]: State dictionary containing:
-                - outlet_pressure_kpa (float): Fixed outlet pressure.
-                - num_active_inlets (int): Count of active inlet streams.
-                - outlet_mass_flow_kg_h (float): Mixed outlet flow rate.
-                - outlet_temperature_k (float): Mixed outlet temperature.
-                - outlet_enthalpy_j_kg (float): Mixed outlet specific enthalpy.
-                - dissolved_gas_ppm (float): Concentration of non-water species.
+            Dict[str, Any]: Mixing results including N_active_inlets and PPM purity.
         """
         num_inlets = len([s for s in self.inlet_streams.values() if s is not None])
         

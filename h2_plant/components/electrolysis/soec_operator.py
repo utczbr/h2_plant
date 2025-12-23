@@ -130,10 +130,11 @@ class SOECOperator(Component):
             self.power_standby_mw = DEFAULT_POWER_STANDBY_MW
             self.power_first_step_mw = config.power_first_step_mw
             self.ramp_step_mw = config.ramp_step_mw
-            self.steam_input_ratio = getattr(config, 'steam_input_ratio_kg_per_kg_h2', 10.5)
+            # UPDATE: Default steam ratio to 9.0 (Legacy Alignment)
+            self.steam_input_ratio = getattr(config, 'steam_input_ratio_kg_per_kg_h2', 9.0)
 
-            from h2_plant.core.constants import StorageConstants
-            self.out_pressure_pa = getattr(config, 'out_pressure_pa', StorageConstants.LOW_PRESSURE_PA)
+            # UPDATE: Default pressure to 1.0 bar (Legacy Alignment), override constant
+            self.out_pressure_pa = getattr(config, 'out_pressure_pa', 100000.0)
 
             self.config = config.dict()
             self.physics_config = {}
@@ -152,10 +153,14 @@ class SOECOperator(Component):
             self.power_standby_mw = DEFAULT_POWER_STANDBY_MW
             self.power_first_step_mw = soec_phys.get("power_first_step_mw", DEFAULT_POWER_FIRST_STEP_MW)
             self.ramp_step_mw = soec_phys.get("ramp_step_mw", DEFAULT_RAMP_STEP_MW)
-            self.steam_input_ratio = soec_phys.get("steam_input_ratio_kg_per_kg_h2", 10.5)
+            self.ramp_step_mw = soec_phys.get("ramp_step_mw", DEFAULT_RAMP_STEP_MW)
+            
+            # UPDATE: Default steam ratio to 9.0. Check config first (YAML overrides), then physics, then default.
+            self.steam_input_ratio = config.get("steam_input_ratio_kg_per_kg_h2", 
+                                                soec_phys.get("steam_input_ratio_kg_per_kg_h2", 9.0))
 
-            from h2_plant.core.constants import StorageConstants
-            self.out_pressure_pa = config.get("out_pressure_pa", StorageConstants.LOW_PRESSURE_PA)
+            # UPDATE: Default pressure to 1.0 bar. Check config first.
+            self.out_pressure_pa = config.get("out_pressure_pa", 100000.0)
 
         # Initialize module states
         self._initialize_state()
@@ -436,7 +441,7 @@ class SOECOperator(Component):
         Retrieve output from a specified port.
 
         Args:
-            port_name (str): Port identifier ('h2_out' or 'steam_out').
+            port_name (str): Port identifier ('h2_out', 'steam_out', or 'o2_out').
 
         Returns:
             Stream: Output stream with mass flow, temperature, and composition.
@@ -444,25 +449,80 @@ class SOECOperator(Component):
         Raises:
             ValueError: If port_name is not a valid output port.
         """
+        h2_kg = getattr(self, 'last_step_h2_kg', 0.0)
+        mass_flow_base = h2_kg * (1.0/self.dt) if self.dt > 0 else 0.0
+
         if port_name == 'h2_out':
-            h2_kg = getattr(self, 'last_step_h2_kg', 0.0)
+            # Crossover Modeling (Molar Basis -> Mass Fraction)
+            # Reference: constants_and_config.py
+            # Y_O2_IN_H2 (Molar) = 0.0002 (200 ppm)
+            y_o2_molar = 0.0002
+            y_h2_molar = 1.0 - y_o2_molar
+            
+            mw_h2 = 2.016
+            mw_o2 = 32.00
+            
+            mass_h2_rel = y_h2_molar * mw_h2
+            mass_o2_rel = y_o2_molar * mw_o2
+            total_mass_rel = mass_h2_rel + mass_o2_rel
+            
+            w_h2 = mass_h2_rel / total_mass_rel
+            w_o2 = mass_o2_rel / total_mass_rel
 
             return Stream(
-                mass_flow_kg_h=h2_kg * (1.0/self.dt) if self.dt > 0 else 0.0,
-                temperature_k=1073.15,
+                mass_flow_kg_h=mass_flow_base,
+                temperature_k=1073.15, # ~800 °C
                 pressure_pa=self.out_pressure_pa,
-                composition={'H2': 1.0},
+                composition={'H2': w_h2, 'O2': w_o2},
                 phase='gas'
             )
+
         elif port_name == 'steam_out':
             water_kg = getattr(self, 'last_water_output_kg', 0.0)
             return Stream(
                 mass_flow_kg_h=water_kg * (1.0/self.dt) if self.dt > 0 else 0.0,
                 temperature_k=1073.15,
-                pressure_pa=101325.0,
+                pressure_pa=self.out_pressure_pa, # Pressure balanced with H2
                 composition={'H2O': 1.0},
                 phase='gas'
             )
+            
+        elif port_name == 'o2_out':
+            # Stoichiometry O2 = 7.94 * H2 (Mass) approx
+            # Precise: 0.5 mol O2 per 1 mol H2
+            # 16 g O2 per 2.016 g H2 = 7.9365...
+            
+            from h2_plant.core.constants import ProductionConstants
+            
+            # Theoretical pure O2 production
+            o2_pure_kg = h2_kg * ProductionConstants.O2_TO_H2_MASS_RATIO
+            
+            # Crossover: 4000 ppm H2 in O2 (Molar)
+            y_h2_imp_molar = 0.0040 
+            y_o2_pure_molar = 1.0 - y_h2_imp_molar
+            
+            mw_h2 = 2.016
+            mw_o2 = 32.00
+            
+            mass_h2_imp = y_h2_imp_molar * mw_h2
+            mass_o2_pure = y_o2_pure_molar * mw_o2
+            
+            # Normalization
+            w_h2_in_o2 = mass_h2_imp / (mass_h2_imp + mass_o2_pure)
+            w_o2_in_o2 = mass_o2_pure / (mass_h2_imp + mass_o2_pure)
+            
+            # Actual mass flow: we produced o2_pure_kg of O2 component.
+            # Total Stream Mass = o2_pure_kg / w_o2_in_o2
+            total_o2_stream_kg = o2_pure_kg / w_o2_in_o2 if w_o2_in_o2 > 0 else 0.0
+            
+            return Stream(
+                mass_flow_kg_h=total_o2_stream_kg * (1.0/self.dt) if self.dt > 0 else 0.0,
+                temperature_k=1073.15,
+                pressure_pa=self.out_pressure_pa, # Balanced pressure
+                composition={'O2': w_o2_in_o2, 'H2': w_h2_in_o2},
+                phase='gas'
+            )
+
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 
@@ -476,12 +536,14 @@ class SOECOperator(Component):
                 - steam_in: High-temperature steam feed.
                 - h2_out: Hydrogen product stream.
                 - steam_out: Unreacted steam recycle.
+                - o2_out: Oxygen product stream (Anode).
         """
         return {
             'power_in': {'type': 'input', 'resource_type': 'electricity', 'units': 'MW'},
             'steam_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
             'h2_out': {'type': 'output', 'resource_type': 'hydrogen', 'units': 'kg/h'},
-            'steam_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'}
+            'steam_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'},
+            'o2_out': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'}
         }
 
     def get_status(self) -> Dict[str, Any]:

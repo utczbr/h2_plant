@@ -663,7 +663,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     try:
                         h2_out = comp.get_output('h2_out')
                         print(f"   ─── Output Stream ───")
-                        self._format_stream_properties(h2_out, "H2 Out", "   ")
+                        # self._format_stream_properties(h2_out, "H2 Out", "   ")
                     except Exception:
                         pass
         
@@ -702,9 +702,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     except Exception:
                         pass
                 
-                print(f"   ─── Stream Properties ───")
-                self._format_stream_properties(gas_outlet, "Gas Outlet", "   ")
-                self._format_stream_properties(liquid_drain, "Liquid Drain", "   ")
+                # print(f"   ─── Stream Properties ───")
+                # self._format_stream_properties(gas_outlet, "Gas Outlet", "   ")
+                # self._format_stream_properties(liquid_drain, "Liquid Drain", "   ")
         
         # === Coalescer Section ===
         if components_by_type.get('coalescer'):
@@ -722,8 +722,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     except Exception:
                         pass
                 if gas_outlet:
-                    print(f"   ─── Gas Outlet ───")
-                    self._format_stream_properties(gas_outlet, "Gas Out", "   ")
+                    # print(f"   ─── Gas Outlet ───")
+                    # self._format_stream_properties(gas_outlet, "Gas Out", "   ")
+                    pass
         
         # === Chiller Section ===
         if components_by_type.get('chiller'):
@@ -758,8 +759,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                         except Exception:
                             pass
                 if gas_outlet:
-                    print(f"   ─── Gas Outlet ───")
-                    self._format_stream_properties(gas_outlet, "Gas Out", "   ")
+                    # print(f"   ─── Gas Outlet ───")
+                    # self._format_stream_properties(gas_outlet, "Gas Out", "   ")
+                    pass
         
         # === Dry Cooler Section ===
         if components_by_type.get('dry_cooler'):
@@ -786,8 +788,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                         except Exception:
                             pass
                 if gas_outlet:
-                    print(f"   ─── Gas Outlet ───")
-                    self._format_stream_properties(gas_outlet, "Gas Out", "   ")
+                    # print(f"   ─── Gas Outlet ───")
+                    # self._format_stream_properties(gas_outlet, "Gas Out", "   ")
+                    pass
         
         # === Tank Section ===
         if components_by_type.get('tank'):
@@ -1063,6 +1066,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             'Chiller': ['fluid_out'],
             'Coalescer': ['outlet'],
             'DeoxoReactor': ['outlet'],
+            'ElectricBoiler': ['fluid_out'],  # Added for thermal heater
+            'HeatExchanger': ['fluid_out'],   # Added for heat exchanger
             'PSA': ['purified_gas_out'],
             'Compressor': ['outlet', 'h2_out'],
             'Tank': ['h2_out', 'gas_out'],
@@ -1153,17 +1158,23 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 else:
                     o2_str = "0 ppm"
                 
-                # Calculate liquid vs vapor percentage of total water
-                if m_h2o_total > 1e-9:
-                    # Vapor comes only from composition['H2O'], rest is liquid
-                    m_vap_only = stream.composition.get('H2O', 0.0) * m_dot_main
-                    m_liq_only = m_h2o_total - m_vap_only  # Composition liquid + extra liquid
+                # Calculate liquid vs vapor percentage of TOTAL STREAM (not just water)
+                # Liquid mass = liquid water only (vapor H2O is NOT liquid)
+                # Total mass = H2 + H2O (all) + O2
+                m_total_stream = m_h2 + m_h2o_total + m_o2
+                
+                if m_total_stream > 1e-9:
+                    # Liquid in stream = H2O_liq (composition) + entrained liquid (extra)
+                    m_liq_only = m_h2o_liq_comp + m_dot_extra_liq
                     
-                    pct_liq = (m_liq_only / m_h2o_total) * 100.0 if m_h2o_total > 0 else 0.0
+                    pct_liq = (m_liq_only / m_total_stream) * 100.0
                     pct_vap = 100.0 - pct_liq
                 else:
                     pct_liq = 0.0
                     pct_vap = 0.0
+                
+                # Calculate total mass (sum of all species)
+                m_total = m_h2 + m_h2o_total + m_o2
                 
                 rows.append({
                     'id': comp_id,
@@ -1175,6 +1186,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     'H2O_kg_h': m_h2o_total,   # Total H2O mass flow (kg/h)
                     'O2': o2_str,
                     'O2_kg_h': m_o2,           # O2 mass flow (kg/h)
+                    'Total_kg_h': m_total,     # Total mass flow (kg/h)
                     'pct_liq': pct_liq,
                     'pct_vap': pct_vap
                 })
@@ -1184,14 +1196,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         
         # Print table (TOTAL Molar - includes entrained liquid)
         print("\n### Stream Summary Table (Topology Order) - TOTAL MOLAR (Vapor + Liquid)")
-        print("-" * 160)
-        print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>8} | {'H2%':>6} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'%Liq':>5} | {'%Vap':>5}")
-        print("-" * 160)
+        print("-" * 180)
+        print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>8} | {'H2%':>10} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'Total':>10} | {'%Liq':>5} | {'%Vap':>5}")
+        print("-" * 180)
         
         for row in rows:
-            print(f"{row['id']:<18} | {row['T_c']:>5.1f}°C | {row['P_bar']:>6.2f} bar | {row['H2_purity']:>5.2f}% | {row['H2_kg_h']:>8.3f} | {row['H2O']:>9} | {row['H2O_kg_h']:>9.4f} | {row['O2']:>9} | {row['O2_kg_h']:>8.5f} | {row['pct_liq']:>4.1f}% | {row['pct_vap']:>4.1f}%")
+            print(f"{row['id']:<18} | {row['T_c']:>5.1f}°C | {row['P_bar']:>6.2f} bar | {row['H2_purity']:>9.4f}% | {row['H2_kg_h']:>8.3f} | {row['H2O']:>9} | {row['H2O_kg_h']:>9.4f} | {row['O2']:>9} | {row['O2_kg_h']:>8.5f} | {row['Total_kg_h']:>10.2f} | {row['pct_liq']:>4.1f}% | {row['pct_vap']:>4.1f}%")
         
-        print("-" * 160)
+        print("-" * 180)
 
     def _get_topology_order(self) -> list:
         """

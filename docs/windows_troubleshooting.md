@@ -14,15 +14,24 @@ git config --system core.longpaths true
 ```
 
 #### 2. "LFS budget exceeded" (Smudge Error)
-This happens when the monthly LFS bandwidth is exhausted. You can skip downloading the large `.pkl` cache files. The system will automatically regenerate them locally on first run (takes ~1-2 min).
+This happens when the monthly LFS bandwidth is exhausted, or if you simply wish to avoid LFS entirely.
 
-**Solution:**
-1. Skip LFS download during clone:
+**Solution:** Use the provided bypass script to download the required cache files from Google Drive.
+
+1. Clone the repository skipping the LFS download:
    ```bash
-   GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/utczbr/h2_plant
+   git clone --config filter.lfs.smudge= --config filter.lfs.process= https://github.com/utczbr/h2_plant
    ```
-2. Proceed with installation as normal.
-3. On first run, ignore "Physics parameters file not found" warnings; the `LUTManager` will regenerate the tables.
+2. Run the bypass script (PowerShell):
+   ```powershell
+   .\setup.ps1
+   ```
+   This will:
+   - Download the necessary `.pkl` files into `.h2_plant\lut_cache`.
+   - Create a Python virtual environment (`.venv`).
+   - Install all dependencies.
+
+3. Proceed with setting up your environment (venvs, pip install, etc.) as normal.
 
 
 if you are having a distutil problem, run "python -m pip install --upgrade pip setuptools wheel"

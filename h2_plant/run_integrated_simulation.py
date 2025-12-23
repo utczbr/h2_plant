@@ -149,9 +149,37 @@ def run_with_dispatch_strategy(
     # Get history from dispatch strategy
     history = engine.get_dispatch_history()
 
-    # Print summary
+    # Print dispatch summary
     if dispatch_strategy:
         dispatch_strategy.print_summary()
+    
+    # Print stream summary table
+    from h2_plant.reporting.stream_table import print_stream_summary_table
+    
+    # Build connection map from topology
+    connection_map = {}
+    for node in context.topology.nodes:
+        targets = [conn.target_name for conn in node.connections]
+        connection_map[node.id] = targets
+    
+    topo_order = [node.id for node in context.topology.nodes]
+    components_dict = {cid: comp for cid, comp in registry.list_components()}
+    print_stream_summary_table(components_dict, topo_order, connection_map)
+
+    # Generate markdown report
+    from h2_plant.reporting.markdown_report import generate_simulation_report
+    report_path = output_dir / "simulation_report.md"
+    topology_name = getattr(context.topology, 'name', 'SOEC Hydrogen Production')
+    generate_simulation_report(
+        components=components_dict,
+        topo_order=topo_order,
+        connection_map=connection_map,
+        history=history,
+        duration_hours=hours,
+        output_path=report_path,
+        topology_name=topology_name
+    )
+    logger.info(f"Markdown report saved to: {report_path}")
 
     logger.info("Simulation completed successfully")
     return history
