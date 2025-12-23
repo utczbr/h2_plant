@@ -174,10 +174,24 @@ class PlantGraphBuilder:
             dp_bar = float(node.params.get('delta_p_bar', 0.05))
             species = node.params.get('gas_species', 'H2')
             return KnockOutDrum(diameter_m=d_m, delta_p_bar=dp_bar, gas_species=species)
+
+        elif node.type == "HydrogenMultiCyclone":
+            from h2_plant.components.separation.hydrogen_cyclone import HydrogenMultiCyclone
+            element_d_mm = float(node.params.get('element_diameter_mm', 50.0))
+            vane_angle = float(node.params.get('vane_angle_deg', 45.0))
+            target_vel = float(node.params.get('target_velocity_ms', 20.0))
+            gas_species = node.params.get('gas_species', 'H2')
+            return HydrogenMultiCyclone(
+                element_diameter_mm=element_d_mm,
+                vane_angle_deg=vane_angle,
+                target_velocity_ms=target_vel,
+                gas_species=gas_species
+            )
             
         elif node.type == "DeoxoReactor":
             from h2_plant.components.purification.deoxo_reactor import DeoxoReactor
             return DeoxoReactor(node.id)
+
 
         elif node.type == "PSA Unit":
             from h2_plant.components.separation.psa import PSA

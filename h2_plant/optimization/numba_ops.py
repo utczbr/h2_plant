@@ -1686,3 +1686,96 @@ def calculate_compression_realgas_jit(
     )
     
     return w_actual, T_out_k, h_out_actual
+
+
+# =============================================================================
+# CYCLONE SEPARATOR MECHANICS
+# =============================================================================
+
+@njit(cache=True)
+def solve_cyclone_mechanics(
+    Q_gas_m3s: float,
+    rho_g: float,
+    rho_l: float,
+    mu_g: float,
+    D_element_m: float,
+    vane_angle_rad: float,
+    N_tubes: int
+) -> Tuple[float, float, float, float]:
+    """
+    Computes cyclone separation performance and hydrodynamics (JIT Compiled).
+    
+    Implements the Barth/Muschelknautz critical particle cut-size model (d₅₀)
+    and Euler number pressure drop correlations for axial multi-cyclone separators.
+    
+    Physics Model:
+        1. **Velocity Decomposition**:
+           v_ax = Q / (N × A_annulus)
+           v_tan = v_ax × tan(α)
+           
+        2. **Separation (Stokes Law in Centrifugal Field)**:
+           d₅₀ = √[ 18μs_drift / ((ρ_l - ρ_g) × ω² × r × t_res) ]
+           
+        3. **Pressure Drop (Euler Method)**:
+           ΔP = ξ × ½ρv_ax²
+           
+    Args:
+        Q_gas_m3s (float): Actual gas volumetric flow (m³/s).
+        rho_g (float): Gas density (kg/m³).
+        rho_l (float): Liquid density (kg/m³).
+        mu_g (float): Gas dynamic viscosity (Pa·s).
+        D_element_m (float): Cyclone tube internal diameter (m).
+        vane_angle_rad (float): Inlet vane angle (radians).
+        N_tubes (int): Number of active cyclone elements.
+        
+    Returns:
+        Tuple[float, float, float, float]: 
+            - d50_microns: Cut-size diameter (μm).
+            - delta_P_pa: Pressure drop (Pa).
+            - v_axial: Axial velocity (m/s).
+            - v_tan: Tangential velocity (m/s).
+            
+    References:
+        Hoffmann, A.C. & Stein, L.E. (2008). Gas Cyclones and Swirl Tubes.
+        Coker, A.K. (2007). Ludwig's Applied Process Design. Vol. 1.
+    """
+    if N_tubes <= 0 or Q_gas_m3s <= 1e-9:
+        return 0.0, 0.0, 0.0, 0.0
+
+    # --- GEOMETRY DEFINITION ---
+    # Hub obstruction ratio fixed at 0.3 per Hoffmann & Stein (Ref [3])
+    D_hub = 0.3 * D_element_m
+    Area_annulus = (np.pi / 4.0) * (D_element_m**2 - D_hub**2)
+    
+    # --- VELOCITY FIELD ---
+    v_axial = Q_gas_m3s / (N_tubes * Area_annulus)
+    v_tan = v_axial * np.tan(vane_angle_rad)
+    
+    # --- SEPARATION PHYSICS (Barth/Muschelknautz) ---
+    # Geometric mean radius for spin acceleration
+    r_mean = (D_element_m + D_hub) / 4.0
+    
+    # Centrifugal acceleration: a_c = v_tan² / r
+    g_spin = (v_tan**2) / r_mean
+    
+    # Residence time (t_res) and Drift Distance (s_drift)
+    L_sep = 3.0 * D_element_m  # Separation length ~3× tube diameter
+    t_res = L_sep / v_axial if v_axial > 1e-9 else 1e6
+    s_drift = (D_element_m - D_hub) / 2.0
+    
+    # Stokes' Law application for cut-size diameter
+    # d₅₀² = 18μs / ((ρ_l - ρ_g) × g_spin × t_res)
+    # Note: 1e6 factor converts m to μm
+    density_diff = rho_l - rho_g
+    if density_diff > 0 and g_spin > 0 and t_res > 0:
+        d50_sq = (18.0 * mu_g * s_drift) / (density_diff * g_spin * t_res)
+        d50_microns = np.sqrt(d50_sq) * 1e6
+    else:
+        d50_microns = 0.0
+
+    # --- FLUID DYNAMICS (PRESSURE LOSS) ---
+    # Euler Number approximation: ξ ≈ 4.8 for 45-degree vanes (Coker/Ludwig)
+    Xi = 4.8 
+    delta_P_pa = Xi * 0.5 * rho_g * (v_axial**2)
+    
+    return d50_microns, delta_P_pa, v_axial, v_tan

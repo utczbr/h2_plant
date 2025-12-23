@@ -86,37 +86,12 @@ nodes:
       delta_p_bar: 0.05
     connections:
       - source_port: "gas_outlet"
-        target_name: "Compressor_Pre"
-        target_port: "h2_in"
+        target_name: "Chiller_1"
+        target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
         target_name: "Drain_Mixer"
         target_port: "KOD_1"
-        resource_type: "stream"
-
-
-  - id: "Compressor_Pre"
-    type: "CompressorSingle"
-    params:
-      max_flow_kg_h: 550.0
-      inlet_pressure_bar: 0.8
-      outlet_pressure_bar: 10.0 # High cap to ensure temp limit is active
-      max_temp_c: 135.0
-      temperature_limited: true
-    connections:
-      - source_port: "outlet"
-        target_name: "DryCooler_Pre"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "DryCooler_Pre"
-    type: "DryCooler"
-    params:
-      target_temp_c: 40.0
-    connections:
-      - source_port: "fluid_out"
-        target_name: "Chiller_1"
-        target_port: "fluid_in"
         resource_type: "stream"
 
   - id: "Chiller_1"
@@ -137,27 +112,15 @@ nodes:
       delta_p_bar: 0.05
     connections:
       - source_port: "gas_outlet"
-        target_name: "Coalescer_1"
-        target_port: "inlet"
+        target_name: "Compressor_S1"
+        target_port: "h2_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
         target_name: "Drain_Mixer"
         target_port: "KOD_2"
         resource_type: "stream"
 
-  - id: "Coalescer_1"
-    type: "Coalescer"
-    params:
-      d_shell: 1.9
-    connections:
-      - source_port: "outlet"
-        target_name: "Compressor_S1"  # <-- NOW GOES TO COMPRESSION
-        target_port: "h2_in"
-        resource_type: "stream"
-      - source_port: "drain"
-        target_name: "Drain_Mixer"
-        target_port: "Coalescer_1"
-        resource_type: "stream"
+
 
   # =================================================================================
   # COMPRESSION TRAIN (6-Stage, BEFORE Purification)
@@ -275,6 +238,29 @@ nodes:
       target_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
+        target_name: "Compressor_S6"
+        target_port: "h2_in"
+        resource_type: "stream"
+
+  - id: "Compressor_S6"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 400.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      outlet_pressure_bar: 40.0
+    connections:
+      - source_port: "outlet"
+        target_name: "Intercooler_6"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Intercooler_6"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
         target_name: "Deoxo_1"
         target_port: "inlet"
         resource_type: "stream"
@@ -332,7 +318,7 @@ nodes:
   - id: "PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.999995
+      purity_target: 0.99995
     connections: []  # Final product outlet
 
   # =================================================================================
@@ -342,7 +328,7 @@ nodes:
   - id: "Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["KOD_1", "KOD_2", "Coalescer_1", "Coalescer_2"]
+      source_ids: ["KOD_1", "KOD_2", "Coalescer_2"]
     connections:
       - source_port: "outlet"
         target_name: "Makeup_Mixer_1"
