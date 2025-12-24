@@ -1197,11 +1197,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # Print table (TOTAL Molar - includes entrained liquid)
         print("\n### Stream Summary Table (Topology Order) - TOTAL MOLAR (Vapor + Liquid)")
         print("-" * 180)
-        print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>8} | {'H2%':>10} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'Total':>10} | {'%Liq':>5} | {'%Vap':>5}")
+        print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>8} | {'H2%':>10} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'Total':>10} | {'%Liq':>7} | {'%Vap':>7}")
         print("-" * 180)
         
         for row in rows:
-            print(f"{row['id']:<18} | {row['T_c']:>5.1f}°C | {row['P_bar']:>6.2f} bar | {row['H2_purity']:>9.4f}% | {row['H2_kg_h']:>8.3f} | {row['H2O']:>9} | {row['H2O_kg_h']:>9.4f} | {row['O2']:>9} | {row['O2_kg_h']:>8.5f} | {row['Total_kg_h']:>10.2f} | {row['pct_liq']:>4.1f}% | {row['pct_vap']:>4.1f}%")
+            print(f"{row['id']:<18} | {row['T_c']:>5.1f}°C | {row['P_bar']:>6.2f} bar | {row['H2_purity']:>9.4f}% | {row['H2_kg_h']:>8.3f} | {row['H2O']:>9} | {row['H2O_kg_h']:>9.4f} | {row['O2']:>9} | {row['O2_kg_h']:>8.5f} | {row['Total_kg_h']:>10.2f} | {row['pct_liq']:>6.3f}% | {row['pct_vap']:>6.3f}%")
         
         print("-" * 180)
 

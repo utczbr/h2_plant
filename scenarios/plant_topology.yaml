@@ -112,12 +112,28 @@ nodes:
       delta_p_bar: 0.05
     connections:
       - source_port: "gas_outlet"
-        target_name: "Compressor_S1"
-        target_port: "h2_in"
+        target_name: "Cyclone_1"
+        target_port: "inlet"
         resource_type: "stream"
       - source_port: "liquid_drain"
         target_name: "Drain_Mixer"
         target_port: "KOD_2"
+        resource_type: "stream"
+
+  - id: "Cyclone_1"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0  # High efficiency separation of fine mist
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0   # Optimized for fine droplets
+    connections:
+      - source_port: "outlet"
+        target_name: "Compressor_S1"
+        target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Cyclone_1"
         resource_type: "stream"
 
 
@@ -169,8 +185,24 @@ nodes:
       target_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
+        target_name: "Cyclone_2"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "Cyclone_2"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
+    connections:
+      - source_port: "outlet"
         target_name: "Compressor_S3"
         target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Cyclone_2"
         resource_type: "stream"
 
   - id: "Compressor_S3"
@@ -192,8 +224,24 @@ nodes:
       target_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
+        target_name: "Cyclone_3"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "Cyclone_3"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
+    connections:
+      - source_port: "outlet"
         target_name: "Compressor_S4"
         target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Cyclone_3"
         resource_type: "stream"
 
   - id: "Compressor_S4"
@@ -215,8 +263,24 @@ nodes:
       target_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
+        target_name: "Cyclone_4"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "Cyclone_4"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
+    connections:
+      - source_port: "outlet"
         target_name: "Compressor_S5"
         target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Cyclone_4"
         resource_type: "stream"
 
   - id: "Compressor_S5"
@@ -238,8 +302,24 @@ nodes:
       target_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
+        target_name: "Cyclone_5"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "Cyclone_5"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
+    connections:
+      - source_port: "outlet"
         target_name: "Compressor_S6"
         target_port: "h2_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "Cyclone_5"
         resource_type: "stream"
 
   - id: "Compressor_S6"
@@ -328,7 +408,7 @@ nodes:
   - id: "Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["KOD_1", "KOD_2", "Coalescer_2"]
+      source_ids: ["KOD_1", "KOD_2", "Cyclone_1", "Cyclone_2", "Cyclone_3", "Cyclone_4", "Cyclone_5", "Coalescer_2"]
     connections:
       - source_port: "outlet"
         target_name: "Makeup_Mixer_1"

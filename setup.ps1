@@ -1,11 +1,11 @@
 <#
 .SYNOPSIS
-    Downloads required simulation cache files directly from Google Drive, bypassing GitHub LFS.
+    Downloads required simulation cache files and sets up the Python environment.
     
 .DESCRIPTION
-    This script is intended for users who encounter "LFS budget exceeded" errors or want to avoid
-    using GitHub LFS bandwidth. It downloads the required .pkl files for the LUT (Look-Up Table) 
-    cache directly into the .h2_plant/lut_cache directory.
+    1. Downloads LFS cache files directly from Google Drive to bypass GitHub LFS quotas.
+    2. Creates a local virtual environment (.venv).
+    3. Explicitly installs dependencies into that virtual environment.
 
 .EXAMPLE
     .\scripts\setup_lfs_bypass.ps1
@@ -13,9 +13,9 @@
 
 $ErrorActionPreference = "Stop"
 
+# --- PART 1: LFS CACHE DOWNLOAD ---
+
 # Define the target directory relative to the repo root
-# Assuming this script is run from the repo root or we can resolve it.
-# We'll stick to relative path assuming user runs from root as is common in python projects.
 $TargetDir = ".h2_plant\lut_cache"
 
 # Ensure the directory exists
@@ -57,20 +57,18 @@ foreach ($kvp in $Files.GetEnumerator()) {
     }
 }
 
-
 Write-Host "`nAll files downloaded successfully to $TargetDir" -ForegroundColor Green
 
-# 3) (Optional) Re-enable git-lfs for other LFS assets if needed
-# git lfs install --local
 
-# 4) Create venv + install dependencies
+# --- PART 2: PYTHON ENVIRONMENT SETUP ---
+
 Write-Host "`nSetting up Python environment..." -ForegroundColor Cyan
 
-# Check if python is available
+# 1. Find System Python (only used to CREATE the venv)
 if (Get-Command "python" -ErrorAction SilentlyContinue) {
-    $PythonExe = "python"
+    $SystemPython = "python"
 } elseif (Get-Command "python3" -ErrorAction SilentlyContinue) {
-    $PythonExe = "python3"
+    $SystemPython = "python3"
 } else {
     Write-Warning "Python not found! Skipping environment setup."
     exit
@@ -78,32 +76,36 @@ if (Get-Command "python" -ErrorAction SilentlyContinue) {
 
 $VenvDir = ".venv"
 
+# 2. Create Virtual Environment
 if (-not (Test-Path $VenvDir)) {
-    Write-Host "Creating virtual environment in $VenvDir..."
-    & $PythonExe -m venv $VenvDir
+    Write-Host "Creating virtual environment in $VenvDir using $SystemPython..."
+    & $SystemPython -m venv $VenvDir
 } else {
     Write-Host "Virtual environment already exists."
 }
 
-# Activate venv
-$ActivateScript = Join-Path $VenvDir "Scripts\Activate.ps1"
-if (Test-Path $ActivateScript) {
-    Write-Host "Activating virtual environment..."
-    . $ActivateScript
-} else {
-    Write-Warning "Could not find activation script: $ActivateScript"
-    # Fallback for non-Windows structure just in case (e.g. bin/activate)
-    $ActivateScriptLinux = Join-Path $VenvDir "bin/activate"
-     if (Test-Path $ActivateScriptLinux) {
-         Write-Warning "Found Linux-style venv. This script is intended for PowerShell on Windows."
-     }
+# 3. Define path to the VENV Python executable
+# This ensures we are installing into the local .venv, not the global system
+$VenvPython = Join-Path $VenvDir "Scripts\python.exe"
+
+if (-not (Test-Path $VenvPython)) {
+    Write-Error "Could not find python executable at $VenvPython. The virtual environment creation might have failed."
+    exit
 }
 
-# Install dependencies
-Write-Host "Installing dependencies..."
-& $PythonExe -m pip install --upgrade pip setuptools wheel
-pip install -r requirements.txt
-pip install -e .
+# 4. Install dependencies using the VENV python explicitly
+Write-Host "Installing dependencies into .venv..."
+# Upgrade pip inside the venv
+& $VenvPython -m pip install --upgrade pip setuptools wheel
+# Install requirements inside the venv
+& $VenvPython -m pip install -r requirements.txt
+# Install the local project in editable mode inside the venv
+& $VenvPython -m pip install -e .
 
-Write-Host "`nSetup complete! You can now run the simulation." -ForegroundColor Green
+# --- CONCLUSION ---
 
+Write-Host "`nSetup complete!" -ForegroundColor Green
+Write-Host "-----------------------------------------------------"
+Write-Host "IMPORTANT: Before running the simulation, you must activate the environment:" -ForegroundColor Yellow
+Write-Host "    $VenvDir\Scripts\Activate.ps1" -ForegroundColor White
+Write-Host "-----------------------------------------------------"

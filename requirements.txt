@@ -5,7 +5,8 @@ jsonschema>=4.0.0
 matplotlib>=3.5.0
 NodeGraphQt>=0.6.1
 numba>=0.57.0
-numpy>=1.24.0
+# IMPORTANT: Constrain numpy to <2.0.0 to prevent breakage with Numba/Scipy
+numpy>=1.24.0,<2.0.0
 pandas>=2.0.0
 plotly>=5.0.0
 pydantic>=2.0.0
@@ -14,4 +15,5 @@ pytest>=7.0.0
 PyYAML>=6.0
 scipy>=1.9.0
 setuptools>=65.0.0
-windpowerlib>=0.2.0
+# Bumped to 0.2.2 to ensure compatibility with Pandas 2.0+
+windpowerlib>=0.2.2
