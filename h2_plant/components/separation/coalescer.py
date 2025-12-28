@@ -131,6 +131,10 @@ class Coalescer(Component):
         self.drain_stream: Optional[Stream] = None
         self._step_liq_removed: float = 0.0
         self._step_gas_dissolved: float = 0.0
+        
+        # Mass Balance Tracking (Input vs Output)
+        self._last_dissolved_gas_in_kg_h: float = 0.0
+        self._last_dissolved_gas_out_kg_h: float = 0.0
 
     def initialize(self, dt: float, registry: Any) -> None:
         """
@@ -226,6 +230,40 @@ class Coalescer(Component):
             self._reset_outputs()
             return 0.0
 
+        # --- Mass Balance Tracking (IN) ---
+        m_dot_total = in_stream.mass_flow_kg_h
+        liq_frac = in_stream.composition.get('H2O_liq', 0.0)
+        m_liq_thermo = m_dot_total * liq_frac
+        m_liq_entrained = 0.0
+        if hasattr(in_stream, 'extra') and in_stream.extra:
+            m_liq_entrained = in_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+        total_liquid_in = m_liq_thermo + m_liq_entrained
+        
+        if total_liquid_in > 0 and in_stream.pressure_pa > 0:
+            # Molecular weights (kg/mol) - must convert mass fractions to mole fractions!
+            MW = {'H2': 2.016e-3, 'O2': 32.00e-3, 'H2O': 18.015e-3, 'H2O_liq': 18.015e-3}
+            
+            # Convert mass fractions to mole fractions: n_i = x_i / M_i
+            # CRITICAL: Exclude liquid species from gas phase mole fraction!
+            n_rel = {}
+            for species, x_mass in in_stream.composition.items():
+                if species.endswith('_liq'): continue
+                mw_i = MW.get(species, 28.0e-3)  # Default ~N2
+                n_rel[species] = x_mass / mw_i
+            
+            total_n = sum(n_rel.values())
+            if total_n > 0:
+                y_gas_mol = n_rel.get(self.gas_type, 0.0) / total_n
+                p_gas_partial = in_stream.pressure_pa * y_gas_mol
+            else:
+                p_gas_partial = 0.0
+            
+            solubility_in = self._calculate_dissolved_gas(in_stream.temperature_k, p_gas_partial, self.gas_type)
+            self._last_dissolved_gas_in_kg_h = total_liquid_in * (solubility_in / 1e6)
+        else:
+            self._last_dissolved_gas_in_kg_h = 0.0
+        # -----------------------------------
+
         # Calculate Viscosity (Sutherland power law)
         # Justification: Viscosity determines pressure drop behavior in porous media
         mu_ref = CoalescerConstants.MU_REF_H2_PA_S
@@ -295,9 +333,19 @@ class Coalescer(Component):
         m_dot_liq_remaining = m_dot_liq_in - m_dot_liq_removed
         
         # Calculate Dissolved Gas Loss (Henry's Law with partial pressure)
-        # Justification: modelo_coalescedor.py uses p_gas = P_total * (1 - y_H2O)
-        y_gas_approx = 1.0 - y_H2O_vapor
-        p_gas_pa = in_stream.pressure_pa * y_gas_approx
+        # Must convert mass fractions to mole fractions for correct partial pressure!
+        MW = {'H2': 2.016e-3, 'O2': 32.00e-3, 'H2O': 18.015e-3, 'H2O_liq': 18.015e-3}
+        n_rel_out = {}
+        for species, x_mass in in_stream.composition.items():
+            mw_i = MW.get(species, 28.0e-3)
+            n_rel_out[species] = x_mass / mw_i
+        total_n_out = sum(n_rel_out.values())
+        if total_n_out > 0:
+            y_gas_mol = n_rel_out.get(self.gas_type, 0.0) / total_n_out
+            p_gas_pa = in_stream.pressure_pa * y_gas_mol
+        else:
+            p_gas_pa = 0.0
+        
         solubility_mg_kg = self._calculate_dissolved_gas(
             in_stream.temperature_k, 
             p_gas_pa,  # Use partial pressure, not total
@@ -361,6 +409,7 @@ class Coalescer(Component):
 
         self._step_liq_removed = m_dot_liq_removed
         self._step_gas_dissolved = m_dot_gas_dissolved
+        self._last_dissolved_gas_out_kg_h = m_dot_gas_dissolved  # Track OUT for mass balance
 
         return in_stream.mass_flow_kg_h
     
@@ -447,12 +496,20 @@ class Coalescer(Component):
             "gas_type": self.gas_type,
             "total_liquid_removed_kg": self.total_liquid_removed_kg,
             "total_drain_removed_kg": self.total_drain_removed_kg,
-            "step_gas_dissolved_kg_h": self._step_gas_dissolved,  # Expose for loss tracking
+            "step_gas_dissolved_kg_h": self._step_gas_dissolved,
             "delta_p_bar": self.current_delta_p_bar,
             "power_loss_w": self.current_power_loss_w,
             "outlet_flow_kg_h": self.output_stream.mass_flow_kg_h if self.output_stream else 0.0,
             "drain_flow_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0,
-            "water_removed_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0,  # Alias for graph plotter
+            
+            # Rigorous Mass Balance Metrics (IN/OUT)
+            "dissolved_gas_in_kg_h": self._last_dissolved_gas_in_kg_h,
+            "dissolved_gas_out_kg_h": self._last_dissolved_gas_out_kg_h,
+            # Aliases for graph compatibility
+            "dissolved_gas_in": self._last_dissolved_gas_in_kg_h,
+            "dissolved_gas_out": self._last_dissolved_gas_out_kg_h,
+            
+            "water_removed_kg_h": self.drain_stream.mass_flow_kg_h if self.drain_stream else 0.0,
             "drain_temp_k": self.drain_stream.temperature_k if self.drain_stream else 0.0,
             "drain_pressure_bar": self.drain_stream.pressure_pa / 1e5 if self.drain_stream else 0.0,
             "dissolved_gas_ppm": (self._step_gas_dissolved / (self.drain_stream.mass_flow_kg_h * self.dt) * 1e6) 

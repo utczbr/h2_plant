@@ -89,22 +89,42 @@ def _get_phase_abbrev(stream) -> str:
         return f"M{vap_pct}V"
 
 
-# Section grouping patterns
-SECTION_PATTERNS = [
-    ("=== SOEC & Mixing ===", ["SOEC", "Mixer", "Interchanger"]),
-    ("=== Separation Train ===", ["KOD", "Chiller", "DryCooler", "Dry_Cooler", "Coalescer"]),
-    ("=== Purification ===", ["Deoxo", "PSA", "Boiler"]),
-    ("=== Compression Train ===", ["Compressor", "Intercooler"]),
-    ("=== Water Recirculation ===", ["Drain", "Makeup", "Pump", "Steam_Generator"]),
-]
-
 
 def _get_section(comp_id: str) -> str:
-    """Get section name for a component based on naming patterns."""
-    for section_name, patterns in SECTION_PATTERNS:
-        if any(p.lower() in comp_id.lower() for p in patterns):
-            return section_name
-    return "=== Other ==="
+    """
+    Determine the display section for a component based on its ID and function.
+    Prioritizes distinguishing between H2 and O2 trains.
+    """
+    id_upper = comp_id.upper()
+    
+    # === 1. Utility & Water Loop (Global) ===
+    if any(x in id_upper for x in ["DRAIN", "MAKEUP", "PUMP", "STEAM_GENERATOR", "STEAMGEN", "WATER"]):
+        return "=== Water Recirculation & Utility ==="
+
+    # === 2. O2 Purification Train (Anode) ===
+    # Identified by 'O2_' prefix or explicit reference (but not Deoxo/SOEC)
+    if "O2_" in id_upper or ("O2" in id_upper and "DEOXO" not in id_upper and "SOEC" not in id_upper):
+        return "=== O2 Purification Train (Anode) ==="
+
+    # === 3. H2 Compression Train ===
+    if "COMPRESSOR" in id_upper or "INTERCOOLER" in id_upper:
+        return "=== H2 Compression Train ==="
+
+    # === 4. H2 Purification Train ===
+    if any(x in id_upper for x in ["DEOXO", "PSA", "BOILER", "TSA"]):
+        return "=== H2 Purification Train ==="
+
+    # === 5. Electrolysis Core ===
+    if "SOEC" in id_upper or "CATHODE" in id_upper or "ELECTROLYZER" in id_upper or "PEM" in id_upper:
+        return "=== Electrolysis Core ==="
+
+    # === 6. H2 Separation & Conditioning (Cathode) ===
+    # Default bin for KODs, Chillers, etc. that are NOT O2 (already caught above)
+    if any(x in id_upper for x in ["KOD", "CHILLER", "DRYCOOLER", "DRY_COOLER", "CYCLONE", "COALESCER", "INTERCHANGER", "HEATEXCHANGER"]):
+        return "=== H2 Separation & Conditioning (Cathode) ==="
+
+    return "=== Other / General ==="
+
 
 
 def print_stream_summary_table(

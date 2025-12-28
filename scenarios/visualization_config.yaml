@@ -1,124 +1,550 @@
-# Visualization Configuration Template
-# Controls which graphs are enabled/disabled for generation
+# Visualization Configuration
+# Fully migrated to Orchestrator Architecture
 
 visualization:
-  # Enable/disable entire categories
-  categories:
-    production: true
-    performance: true
-    economics: true
-    soec_ops: true
-    storage: true 
-  
-  # Override individual graphs (takes precedence over category settings)
-  graphs:
-    # Production graphs
-    pem_h2_production_over_time: true
-    soec_h2_production_over_time: true
-    total_h2_production_stacked: true
-    cumulative_h2_production: true
-    oxygen_production_stacked: true
-    water_consumption_stacked: true
-    
-    # Performance graphs
-    pem_cell_voltage_over_time: true
-    pem_efficiency_over_time: true
-    dispatch_curve_scatter: true
-    
-    # Economics graphs
-    energy_price_over_time: true
-    dispatch_strategy_stacked: true
-    dispatch_detailed_overlay: true
-    power_consumption_breakdown_pie: true
-    price_histogram: true
-    arbitrage_scatter: true
-    
-    # SOEC operations
-    soec_active_modules_over_time: true
-    soec_modules_temporal: true
-    soec_modules_stats: true
-    
-    # Storage
-    tank_storage_timeline: true
-    compressor_power_stacked: true
-    
-    # Thermal & Separation (Matplotlib)
-    water_removal_total: true
-    drains_discarded: true
-    chiller_cooling: true
-    coalescer_separation: true
-    kod_separation: true
-    dry_cooler_performance: true
-    
-    # Profile (Matplotlib) - Always recommended for purification trains
-    process_train_profile: true
-    
-    # Energy & Thermal Analysis (From Plots.csv)
-    energy_flows: true
-    q_breakdown: true
-    mixer_comparison: true
-    individual_drains: true
-    dissolved_gas_concentration: true
-    dissolved_gas_efficiency: true  # NEW: IN vs OUT bar chart with removal %
-    crossover_impurities: true
-    deoxo_profile: true
-    drain_line_properties: true
-    drain_line_concentration: true
-    recirculation_comparison: true
-    entrained_liquid_flow: true
-    
-    # NEW: Plant Balance & Flow Tracking
-    plant_balance: true  # Control volume schematic
-    water_vapor_tracking: true  # Vapor flow with PPM labels
-    total_mass_flow: true  # Gas + Vapor + Liquid comparison
-
-    
-    # Legacy dispatch/economics (disabled - these are aliases for modern names above)
-    # Enable these ONLY if you disable the corresponding modern name
-    dispatch: false  # Same as dispatch_strategy_stacked
-    arbitrage: false  # Same as arbitrage_scatter
-    h2_production: false  # Same as total_h2_production_stacked
-    oxygen_production: false  # Same as oxygen_production_stacked
-    water_consumption: false  # Same as water_consumption_stacked
-    energy_pie: false  # Same as power_consumption_breakdown_pie
-    price_histogram: true  # Unique - no alias
-    dispatch_curve: false  # Same as dispatch_curve_scatter
-    cumulative_h2: false  # Same as cumulative_h2_production
-    cumulative_energy: true  # Unique - no alias
-    efficiency_curve: true  # Unique - no alias
-    revenue_analysis: true  # Unique - no alias
-    temporal_averages: true  # Unique - no alias
-  
-  # Export settings
   export:
     enabled: true
     output_directory: "simulation_output/{simulation_name}/graphs"
-    formats:
-      - html  # Interactive Plotly graphs
-      # - png  # Requires kaleido: pip install kaleido
-      # - pdf  # Requires kaleido
+    format: "png"
     
-    # Dashboard generation
     dashboard:
       enabled: true
       filename: "dashboard.html"
       title: "H2 Plant Simulation Dashboard"
-      include_graphs:  # Specify order (empty = all enabled)
-        - total_h2_production_stacked
-        - dispatch_strategy_stacked
-        - pem_cell_voltage_over_time
-        - soec_active_modules_over_time
-        - energy_price_over_time
-        - cumulative_h2_production
-        - power_consumption_breakdown_pie
   
-  # Performance settings
   performance:
-    # Downsample data for large simulations (>10k timesteps)
     downsample_threshold: 10000
-    downsample_factor: 10  # Keep every Nth point
-    
-    # Use WebGL for large datasets
+    downsample_factor: 10
     use_webgl: true
+  
+  # Skip the deprecated GRAPH_MAP loop in run_integrated_simulation.py
+  # Set to true once you've verified all graphs work via orchestrated_graphs
+  skip_legacy_graphs: true
 
+  # ========================================================================
+  # ORCHESTRATED GRAPH CONFIGURATION
+  # All graphs use explicit component lists - no guessing!
+  # ========================================================================
+  orchestrated_graphs:
+    
+    # 1. PRODUCTION GRAPHS
+    # ----------------------------------------------------------------------
+    production_time_series:
+      enabled: true
+      plots:
+        - title: "PEM H2 Production Rate"
+          components: ["PEM"]
+          variable: "h2_production"
+        - title: "SOEC H2 Production Rate"
+          components: ["SOEC_Cluster"]
+          variable: "h2_production"
+    
+    production_stacked:
+      enabled: true
+      plots:
+        - title: "Total H2 Production Stacked"
+          components: ["PEM", "SOEC_Cluster"]
+          variable: "h2_production"
+        - title: "Oxygen Production Stacked"
+          components: ["PEM", "SOEC_Cluster"]
+          variable: "o2_production"
+        - title: "Water Consumption Stacked"
+          components: ["PEM", "SOEC_Cluster"]
+          variable: "water_consumption"
 
+    production_cumulative:
+      enabled: true
+      plots:
+        - title: "Cumulative H2 Production"
+          components: ["PEM", "SOEC_Cluster"]
+
+    # 2. PERFORMANCE GRAPHS
+    # ----------------------------------------------------------------------
+    performance_time_series:
+      enabled: true
+      plots:
+        - title: "PEM Cell Voltage"
+          components: ["PEM"]
+          variable: "voltage"
+        - title: "PEM Efficiency"
+          components: ["PEM"]
+          variable: "efficiency"
+    
+    performance_scatter:
+      enabled: true
+      plots:
+        - title: "Dispatch Curve (Price vs Power)"
+          components: []
+          x_axis: "spot_price"
+          y_axis: "total_power"
+
+    # 3. ECONOMICS/DISPATCH GRAPHS
+    # ----------------------------------------------------------------------
+    economics_time_series:
+      enabled: true
+      plots:
+        - title: "Energy Price Profile"
+          components: []
+          variable: "energy_price"
+    
+    dispatch_stack:
+      enabled: true
+      plots:
+        - title: "Power Dispatch Strategy"
+          components: []
+    
+    economics_pie:
+      enabled: true
+      plots:
+        - title: "Power Consumption Breakdown"
+          components: ["PEM", "SOEC_Cluster", "Compressor_S1", "Chiller_1", "O2_Chiller"]
+
+    economics_scatter:
+      enabled: true
+      plots:
+        - title: "Arbitrage Opportunity"
+          components: []
+
+    # 4. SOEC OPERATIONS
+    # ----------------------------------------------------------------------
+    soec_modules_time_series:
+      enabled: true
+      plots:
+        - title: "Active SOEC Modules"
+          components: ["SOEC_Cluster"]
+    
+    soec_heatmap:
+      enabled: true
+      plots:
+        - title: "SOEC Module Activity Heatmap"
+          components: ["SOEC_Cluster"]
+    
+    soec_stats:
+      enabled: true
+      plots:
+        - title: "SOEC Module Runtime Statistics"
+          components: ["SOEC_Cluster"]
+
+    # 5. STORAGE & COMPRESSION
+    # ----------------------------------------------------------------------
+    storage_levels:
+      enabled: true
+      plots:
+        - title: "H2 Tank Levels"
+          components: ["H2_Tank_1"]
+    
+    compressor_power:
+      enabled: true
+      plots:
+        - title: "Compressor Power Usage"
+          components: ["Compressor_S1", "Compressor_S2", "Compressor_S3", "Compressor_S4", "Compressor_S5", "Compressor_S6"]
+
+    # 6. THERMAL & SEPARATION
+    # ----------------------------------------------------------------------
+    thermal_load_breakdown:
+      enabled: true
+      plots:
+        - title: "H2 Train Cooling Load"
+          components: ["DryCooler_HX", "Chiller_1", "Chiller_2", "Intercooler_1", "Intercooler_2", "Intercooler_3", "Intercooler_4", "Intercooler_5", "Intercooler_6"]
+        - title: "O2 Train Cooling Load"
+          components: ["O2_DryCooler", "O2_Chiller"]
+    
+    water_removal_bar:
+      enabled: true
+      plots:
+        - title: "H2 Train Water Removal"
+          components: ["KOD_1", "KOD_2", "Cyclone_1", "Cyclone_2", "Cyclone_3", "Cyclone_4", "Cyclone_5", "Coalescer_2"]
+        - title: "O2 Train Water Removal"
+          components: ["O2_KOD_1", "O2_KOD_2", "O2_Coalescer"]
+
+    # 7. PROCESS TRAIN PROFILES
+    # ----------------------------------------------------------------------
+    process_train_profile:
+      enabled: true
+      plots:
+        - title: "H2 Main Train Profile"
+          components: 
+            - "SOEC_Cluster"
+            - "Interchanger_1"
+            - "DryCooler_HX"
+            - "KOD_1"
+            - "Chiller_1"
+            - "KOD_2"
+            - "Cyclone_1"
+            - "Compressor_S1"
+            - "Intercooler_1"
+            - "Compressor_S2"
+            - "Intercooler_2"
+            - "Compressor_S3"
+            - "Intercooler_3"
+            - "Compressor_S4"
+            - "Intercooler_4"
+            - "Compressor_S5"
+            - "Intercooler_5"
+            - "Compressor_S6"
+            - "Intercooler_6"
+            - "Deoxo_1"
+            - "Chiller_2"
+            - "Coalescer_2"
+            - "ElectricBoiler_PSA"
+            - "PSA_1"
+        
+        - title: "O2 Train Profile"
+          components:
+            - "SOEC_Cluster"
+            - "O2_KOD_1"
+            - "O2_DryCooler"
+            - "O2_Chiller"
+            - "O2_KOD_2"
+            - "O2_Coalescer"
+
+    # =========================================================================
+    # 8. LEGACY CORE GRAPHS (Wrapped from static_graphs.py)
+    # =========================================================================
+    legacy_dispatch:
+      enabled: true
+      plots:
+        - title: "Power Dispatch"
+          components: []
+    
+    legacy_arbitrage:
+      enabled: true
+      plots:
+        - title: "Arbitrage Scatter"
+          components: []
+    
+    legacy_h2_production:
+      enabled: true
+      plots:
+        - title: "H2 Production Rate"
+          components: []
+    
+    legacy_oxygen:
+      enabled: true
+      plots:
+        - title: "Oxygen Production"
+          components: []
+    
+    legacy_water:
+      enabled: true
+      plots:
+        - title: "Water Consumption"
+          components: []
+    
+    legacy_energy_pie:
+      enabled: true
+      plots:
+        - title: "Energy Distribution"
+          components: []
+    
+    legacy_histogram:
+      enabled: true
+      plots:
+        - title: "Price Histogram"
+          components: []
+    
+    legacy_dispatch_curve:
+      enabled: true
+      plots:
+        - title: "Dispatch Curve"
+          components: []
+    
+    legacy_cumulative_h2:
+      enabled: true
+      plots:
+        - title: "Cumulative H2"
+          components: []
+    
+    legacy_cumulative_energy:
+      enabled: true
+      plots:
+        - title: "Cumulative Energy"
+          components: []
+    
+    legacy_efficiency:
+      enabled: true
+      plots:
+        - title: "Efficiency Curve"
+          components: []
+    
+    legacy_revenue:
+      enabled: true
+      plots:
+        - title: "Revenue Analysis"
+          components: []
+    
+    legacy_temporal:
+      enabled: true
+      plots:
+        - title: "Temporal Averages"
+          components: []
+
+    # =========================================================================
+    # 9. LEGACY PERFORMANCE/MONTHLY GRAPHS
+    # =========================================================================
+    legacy_monthly_performance:
+      enabled: true
+      plots:
+        - title: "Monthly Performance Overview"
+          components: []
+    
+    legacy_monthly_efficiency:
+      enabled: true
+      plots:
+        - title: "Monthly Efficiency"
+          components: []
+    
+    legacy_monthly_cf:
+      enabled: true
+      plots:
+        - title: "Monthly Capacity Factor"
+          components: []
+
+    # =========================================================================
+    # 10. LEGACY SOEC OPERATIONS
+    # =========================================================================
+    legacy_soec_power_stacked:
+      enabled: true
+      plots:
+        - title: "SOEC Module Power Stacked"
+          components: []
+    
+    legacy_soec_wear:
+      enabled: true
+      plots:
+        - title: "SOEC Module Wear Statistics"
+          components: []
+
+    # =========================================================================
+    # 11. LEGACY THERMAL GRAPHS
+    # =========================================================================
+    legacy_chiller:
+      enabled: true
+      plots:
+        - title: "Chiller Cooling Load"
+          components: []
+    
+    legacy_dry_cooler:
+      enabled: true
+      plots:
+        - title: "Dry Cooler Performance"
+          components: []
+    
+    legacy_q_breakdown:
+      enabled: true
+      plots:
+        - title: "Thermal Load Breakdown"
+          components: []
+
+    # =========================================================================
+    # 12. LEGACY SEPARATION GRAPHS
+    # =========================================================================
+    legacy_coalescer:
+      enabled: true
+      plots:
+        - title: "Coalescer Separation"
+          components: []
+    
+    legacy_kod:
+      enabled: true
+      plots:
+        - title: "Knock-Out Drum"
+          components: []
+    
+    legacy_drains_discarded:
+      enabled: true
+      plots:
+        - title: "Drains Discarded"
+          components: []
+    
+    legacy_individual_drains:
+      enabled: true
+      plots:
+        - title: "Individual Drain Properties"
+          components: []
+    
+    legacy_dissolved_gas:
+      enabled: true
+      plots:
+        - title: "Dissolved Gas Concentration"
+          components: []
+    
+    legacy_drain_concentration:
+      enabled: true
+      plots:
+        - title: "Drain Concentration Efficiency"
+          components: []
+    
+    legacy_mixer_comparison:
+      enabled: true
+      plots:
+        - title: "Mixer Comparison"
+          components: []
+    
+    legacy_deoxo:
+      enabled: true
+      plots:
+        - title: "Deoxo Reactor Profile"
+          components: []
+    
+    legacy_drain_line:
+      enabled: true
+      plots:
+        - title: "Drain Line Properties"
+          components: []
+    
+    legacy_recirculation:
+      enabled: true
+      plots:
+        - title: "Recirculation Comparison"
+          components: []
+    
+    legacy_entrained_liquid:
+      enabled: true
+      plots:
+        - title: "Entrained Liquid Flow"
+          components: []
+    
+    legacy_water_vapor:
+      enabled: true
+      plots:
+        - title: "Water Vapor Tracking"
+          components: []
+    
+    legacy_drain_mixer:
+      enabled: true
+      plots:
+        - title: "Drain Mixer Balance"
+          components: []
+
+    # =========================================================================
+    # 13. LEGACY ENERGY & SCHEMATIC GRAPHS
+    # =========================================================================
+    legacy_energy_flows:
+      enabled: true
+      plots:
+        - title: "Energy Flows & Consumption"
+          components: []
+    
+    legacy_energy_flow:
+      enabled: true
+      plots:
+        - title: "Energy Flow Breakdown"
+          components: []
+    
+    legacy_plant_balance:
+      enabled: true
+      plots:
+        - title: "Plant Balance Schematic"
+          components: []
+    
+    legacy_drain_scheme:
+      enabled: true
+      plots:
+        - title: "Drain System Schematic"
+          components: []
+    
+    legacy_process_scheme:
+      enabled: true
+      plots:
+        - title: "Process Scheme"
+          components: []
+
+    # =========================================================================
+    # 14. LEGACY QUALITY & FLOW GRAPHS
+    # =========================================================================
+    # H2 Stream Impurity (O2 in H2)
+    legacy_h2_stream_impurity:
+      enabled: true
+      plots:
+        - title: "O₂ Impurity in H₂ Stream"
+          stream_type: "H2"
+          components:
+            - "SOEC_Cluster"
+            - "Interchanger_1"
+            - "DryCooler_HX"
+            - "KOD_1"
+            - "Chiller_1"
+            - "KOD_2"
+            - "Cyclone_1"
+            - "Compressor_S1"
+            - "Intercooler_1"
+            - "Compressor_S2"
+            - "Intercooler_2"
+            - "Compressor_S3"
+            - "Intercooler_3"
+            - "Compressor_S4"
+            - "Intercooler_4"
+            - "Compressor_S5"
+            - "Intercooler_5"
+            - "Compressor_S6"
+            - "Intercooler_6"
+            - "Deoxo_1"
+            - "Chiller_2"
+            - "Coalescer_2"
+            - "ElectricBoiler_PSA"
+            - "PSA_1"
+    
+    # O2 Stream Impurity (H2 in O2)
+    legacy_o2_stream_impurity:
+      enabled: true
+      plots:
+        - title: "H₂ Impurity in O₂ Stream"
+          stream_type: "O2"
+          components:
+            - "SOEC_Cluster"
+            - "O2_KOD_1"
+            - "O2_DryCooler"
+            - "O2_Chiller"
+            - "O2_KOD_2"
+            - "O2_Coalescer"
+    
+    legacy_total_mass_flow:
+      enabled: true
+      plots:
+        - title: "Total Mass Flow"
+          components: []
+    
+    legacy_h2_stacked:
+      enabled: true
+      plots:
+        - title: "H2 Stacked Properties"
+          train: "H2"
+          components:
+            - "SOEC_Cluster"
+            - "Interchanger_1"
+            - "DryCooler_HX"
+            - "KOD_1"
+            - "Chiller_1"
+            - "KOD_2"
+            - "Cyclone_1"
+            - "Compressor_S1"
+            - "Intercooler_1"
+            - "Compressor_S2"
+            - "Intercooler_2"
+            - "Compressor_S3"
+            - "Intercooler_3"
+            - "Compressor_S4"
+            - "Intercooler_4"
+            - "Compressor_S5"
+            - "Intercooler_5"
+            - "Compressor_S6"
+            - "Intercooler_6"
+            - "Deoxo_1"
+            - "Chiller_2"
+            - "Coalescer_2"
+            - "ElectricBoiler_PSA"
+            - "PSA_1"
+    
+    legacy_o2_stacked:
+      enabled: true
+      plots:
+        - title: "O2 Stacked Properties"
+          train: "O2"
+          components:
+            - "SOEC_Cluster"
+            - "O2_KOD_1"
+            - "O2_DryCooler"
+            - "O2_Chiller"
+            - "O2_KOD_2"
+            - "O2_Coalescer"

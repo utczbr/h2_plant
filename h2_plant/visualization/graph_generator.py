@@ -36,10 +36,22 @@ class GraphGenerator:
         """
         Initialize the graph generator.
         
+        .. deprecated::
+            GraphGenerator uses MetricsCollector which is not integrated with 
+            the main simulation loop. Use GraphOrchestrator instead with the 
+            history DataFrame from `run_integrated_simulation.py`.
+        
         Args:
             metrics_collector: MetricsCollector instance with simulation data
             catalog: Optional GraphCatalog (uses global registry if None)
         """
+        import warnings
+        warnings.warn(
+            "GraphGenerator is deprecated. Use GraphOrchestrator with "
+            "visualization_config.yaml and the history DataFrame instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.collector = metrics_collector
         self.catalog = catalog or GRAPH_REGISTRY
         self._generated_graphs: Dict[str, Any] = {}

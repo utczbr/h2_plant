@@ -5,33 +5,35 @@ This module implements a two-stage indirect cooling system for hydrogen and
 oxygen process streams. The architecture separates explosive process gases
 from the large external air-cooled heat exchanger, enhancing safety.
 
-Physical Model:
-    The system models coupled heat exchangers using the ε-NTU method:
-    
-    1. **TQC (Trocador de Calor Quente)**: Counter-flow shell-and-tube exchanger
-       transferring heat from process gas to an intermediate glycol/water loop.
-       Counter-flow geometry maximizes temperature driving force and achieves
-       higher effectiveness than parallel-flow at identical NTU.
-    
-    2. **DC (Dry Cooler)**: Cross-flow finned-tube air cooler rejecting heat
-       from the glycol loop to ambient air. Cross-flow is typical for air
-       coolers due to fan arrangement constraints.
+Physical Model (Coupled Exchangers)
+-----------------------------------
+The system solves two coupled heat transfer problems using the $\varepsilon$-NTU method:
 
-    Thermodynamic Basis:
-        - ε-NTU Method: ε = f(NTU, Cr) where Cr = Cmin/Cmax
-        - Counter-flow: ε = [1 - exp(-NTU(1-Cr))] / [1 - Cr·exp(-NTU(1-Cr))]
-        - Cross-flow: Empirical correlation for unmixed fluids
-        - Q_actual = ε × Cmin × (Th,in - Tc,in)
+1.  **Stage 1: Process Gas $\to$ Glycol Loop (TQC)**:
+    *   **Type**: Counter-flow Shell & Tube.
+    *   **Physics**: Counter-flow follows:
+        $$ \varepsilon = \frac{1 - \exp[-NTU(1-C_r)]}{1 - C_r \exp[-NTU(1-C_r)]} $$
+        where $C_r = C_{min}/C_{max}$ and $NTU = UA/C_{min}$.
 
-Architecture:
-    Implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Prepares component state; geometry configured on first input.
-    - `step()`: Solves coupled TQC→DC thermal circuit for current timestep.
-    - `get_state()`: Exposes heat duties, temperatures, and effectiveness values.
+2.  **Stage 2: Glycol Loop $\to$ Atmosphere (Dry Cooler)**:
+    *   **Type**: Cross-flow Finned Tube (Unmixed/Unmixed).
+    *   **Physics**: Cross-flow follows empirical correlations for unmixed fluids.
 
-References:
-    - Incropera, F.P. & DeWitt, D.P. (2007). Fundamentals of Heat and Mass Transfer.
-    - Shah, R.K. & Sekulić, D.P. (2003). Fundamentals of Heat Exchanger Design.
+3.  **Thermal Inertia**:
+    The glycol loop temperature propagates quasi-dynamically between time steps:
+    $$ T_{glycol, cold}^{t+1} \leftarrow f(T_{glycol, hot}^t, Q_{DC}^t, C_{glycol}) $$
+
+Architecture
+------------
+*   **Component Lifecycle Contract (Layer 1)**:
+    *   `initialize()`: Defers geometry setup until first fluid receipt (Lazy Config).
+    *   **`step()`**: Executes the sequential thermal solution (Gas $\to$ TQC $\to$ DC $\to$ Air).
+    *   `get_state()`: Exposes effectiveness ($\varepsilon$) and duties ($Q$) for analysis.
+
+References
+----------
+*   Incropera, F.P. & DeWitt, D.P. (2007). Fundamentals of Heat and Mass Transfer.
+*   Shah, R.K. & Sekulić, D.P. (2003). Fundamentals of Heat Exchanger Design.
 """
 
 import logging
@@ -54,37 +56,27 @@ logger = logging.getLogger(__name__)
 
 class DryCooler(Component):
     """
-    Two-stage indirect cooling system (Process Gas → Glycol → Ambient Air).
+    Two-stage indirect cooling system (Process Gas $\to$ Glycol $\to$ Ambient Air).
 
-    Models a closed-loop heat rejection system where process gas transfers heat
-    to an intermediate glycol/water mixture, which is then cooled by forced-air
-    convection. This configuration isolates flammable gases (H₂) from the large,
-    outdoor air-cooled heat exchanger.
+    This component models a closed safety loop. Process gas heat is transferred to an intermediate 
+    glycol/water mixture, which is subsequently cooled by forced ambient air.
 
-    This component fulfills the Component Lifecycle Contract (Layer 1):
-        - `initialize()`: Validates timestep and registry; defers geometry
-          configuration until first stream is received.
-        - `step()`: Sequentially solves TQC and DC heat transfer using ε-NTU,
-          updating glycol loop temperatures quasi-dynamically.
-        - `get_state()`: Returns thermal performance metrics for monitoring,
-          including heat duties, temperatures, and effectiveness values.
+    **Architecture & Lifecycle (Layer 1)**:
+    *   **Initialization**: Lazy configuration upon first `receive_input` enables auto-detection 
+        of gas species (H2 or O2) to select appropriate heat exchanger geometries.
+    *   **Execution**: `step()` solves the thermal circuit sequentially.
+
+    **Thermodynamic State Variables**:
+    *   $T_{glycol, hot}$: Temperature leaving TQC, entering DC.
+    *   $T_{glycol, cold}$: Temperature leaving DC, entering TQC (re-circulated).
 
     Attributes:
-        fluid_type (str): Detected process gas species ('H2' or 'O2').
-        tqc_duty_kw (float): Heat transferred from gas to glycol in TQC (kW).
-        dc_duty_kw (float): Heat rejected from glycol to air in DC (kW).
-        fan_power_kw (float): Electrical power consumed by DC fans (kW).
-        glycol_hot_c (float): Glycol temperature exiting TQC (°C).
-        glycol_cold_c (float): Glycol temperature exiting DC, entering TQC (°C).
-        tqc_effectiveness (float): TQC heat exchanger effectiveness (0-1).
-        dc_effectiveness (float): DC heat exchanger effectiveness (0-1).
-
-    Example:
-        >>> cooler = DryCooler(component_id='DC-H2-01')
-        >>> cooler.initialize(dt=1/60, registry=registry)
-        >>> cooler.receive_input('fluid_in', hot_h2_stream, 'gas')
-        >>> cooler.step(t=0.0)
-        >>> cooled_gas = cooler.get_output('fluid_out')
+        fluid_type (str): Detected active species ('H2' or 'O2').
+        tqc_duty_kw (float): Thermal load on the process interchanger [kW].
+        dc_duty_kw (float): Thermal heat rejection to atmosphere [kW].
+        fan_power_kw (float): Parasitic electrical load for air movement [kW].
+        tqc_effectiveness (float): Realized effectiveness $\varepsilon_{TQC}$ [0-1].
+        dc_effectiveness (float): Realized effectiveness $\varepsilon_{DC}$ [0-1].
     """
 
     def __init__(self, component_id: str = "dry_cooler") -> None:
@@ -134,15 +126,14 @@ class DryCooler(Component):
         """
         Prepare the component for simulation execution.
 
-        Fulfills the Component Lifecycle Contract initialization phase by
-        storing the timestep and registry reference. Heat exchanger geometry
-        is configured lazily on first input receipt to allow automatic
-        detection of gas species.
+        **Lifecycle Contract**:
+        Stores simulation context. Note that physical geometry configuration is **deferred** 
+        until `_configure_geometry()` is triggered by the first mass flow, allowing 
+        runtime adaptation to the connected process fluid (H2 vs O2).
 
         Args:
-            dt (float): Simulation timestep duration in hours.
-            registry (ComponentRegistry): Central registry for cross-component
-                communication and shared services.
+            dt (float): Simulation timestep [hours].
+            registry (ComponentRegistry): Central services provider.
         """
         super().initialize(dt, registry)
 
@@ -187,32 +178,25 @@ class DryCooler(Component):
         """
         Execute one simulation timestep.
 
-        Solves the coupled two-stage thermal circuit:
-        1. TQC (Counter-Flow): Process gas transfers heat to glycol loop.
-        2. DC (Cross-Flow): Glycol loop rejects heat to ambient air.
-        
-        The solution uses the ε-NTU method for each heat exchanger, with
-        glycol loop temperatures propagating between stages. The approach
-        is quasi-dynamic: glycol cold return temperature from the DC is
-        used as TQC inlet for the next timestep, modeling thermal inertia.
+        **Coupled Thermal Solvers**:
+        The method solves two heat exchangers in series:
 
-        Fulfills the Component Lifecycle Contract step phase by advancing
-        component state and preparing output streams.
+        1.  **TQC (Process $\to$ Glycol)**:
+            *   Calculates heat capacity rates $C_{gas}, C_{glycol}$.
+            *   Solves $\varepsilon$-NTU (Counter-Flow) $\to$ $Q_{TQC}$.
+            *   Updates $T_{gas,out}$ and $T_{glycol,hot}$.
 
-        Physical Sequence:
-            1. Compute gas-side heat capacity rate: C_gas = ṁ_gas × Cp_gas
-            2. Solve TQC: ε-NTU counter-flow, Q_TQC = ε × Cmin × ΔT_max
-            3. Update gas outlet and glycol hot temperatures from TQC.
-            4. Solve DC: ε-NTU cross-flow, Q_DC = ε × Cmin × ΔT_max
-            5. Update glycol cold return temperature from DC.
-            6. Calculate fan power from volumetric air flow and pressure drop.
+        2.  **DC (Glycol $\to$ Air)**:
+            *   Calculates $C_{air}$.
+            *   Solves $\varepsilon$-NTU (Cross-Flow) $\to$ $Q_{DC}$.
+            *   Updates $T_{glycol,cold}$ for next step (thermal memory).
+
+        3.  **Condensation Logic**:
+            *   Checks partial pressure $P_{H2O} > P_{sat}(T_{out})$.
+            *   Performs mass transfer Vapor $\to$ Liquid if saturated.
 
         Args:
-            t (float): Current simulation time in hours.
-
-        Note:
-            If no inlet stream is present or flow is zero, the component
-            enters idle state with zero heat duties and power consumption.
+            t (float): Current simulation time [hours].
         """
         super().step(t)
 
@@ -304,6 +288,7 @@ class DryCooler(Component):
         self.outlet_temp_c = T_gas_out_k - 273.15
 
         # --- Flash Calculation (Condensation) ---
+        # Checks for phase change. If $y_{H2O} > y_{sat} = P_{sat}/P_{total}$, condenses excess water.
         inlet_comp = self.inlet_stream.composition.copy()
         outlet_comp = inlet_comp.copy()
         m_condensed_kg_h = 0.0
@@ -359,54 +344,36 @@ class DryCooler(Component):
                 m_condensed_kg_h = m_H2O_vapor_in * condensation_frac
                 m_H2O_vapor_out = m_H2O_vapor_in - m_condensed_kg_h
 
-        # 3. Update Composition
+        # 3. Update Composition & Mass Balance
+        # Incorporate 'extra' liquid water from upstream sources (if any)
+        # into the main stream mass definition for the outlet.
         m_total_out = self.inlet_stream.mass_flow_kg_h
         m_H2O_liq_total_out = m_H2O_liq_in + m_condensed_kg_h
         
-        if m_total_out > 0:
-            outlet_comp['H2O'] = m_H2O_vapor_out / m_total_out
-            outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_out
-            
-            # Preserve other species fractions (assumes their mass is constant)
-            # Since total mass is constant (no removal), their mass/total = fraction is constant
-            # unless we need to re-normalize? 
-            # If we shifted mass from Vapor to Liquid (or from Extra to Liquid), 
-            # we need to be careful.
-            # If Extra was NOT in m_total_out (Wait, extra IS NOT in mass_flow_kg_h usually!).
-            # STOP.
-            # Stream definition: mass_flow_kg_h encompasses composition. Extra is "accomponying".
-            # If I move Extra to Composition, I INCREASE mass_flow_kg_h?
-            # Or is Extra ALREADY in mass_flow?
-            # Usually Extra is NOT in mass_flow.
-            pass
 
-        # CRITICAL CHECK ON MASS BALANCE:
-        # If 'extra' liquid was NOT part of self.inlet_stream.mass_flow_kg_h, 
-        # and we move it to composition, we MUST increase the stream's total mass flow.
-        
-        # Let's check Stream implementation. 
-        # m_dot_extra is separate.
-        # So: m_total_new = m_total_old + m_H2O_liq_extra_in
-        
+
+        # New total mass includes the merged 'extra' liquid
         m_total_new = m_total_out + m_H2O_liq_extra_in
         
         if m_total_new > 0:
-             # Recalculate ALL fractions based on NEW total mass
+             # Recalculate fractions based on new total mass
              outlet_comp['H2O'] = m_H2O_vapor_out / m_total_new
              outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_new
              
+             # Re-normalize other species (mass conserved, fraction decreases)
              for s in inlet_comp:
                  if s not in ('H2O', 'H2O_liq'):
                      m_s = inlet_comp[s] * m_total_out
                      outlet_comp[s] = m_s / m_total_new
         
-        # Prepare output stream using NEW mass
+        # Prepare output stream using new total mass
+        # Remove the 'extra' liquid key since it's now merged into composition
         out_extra = self.inlet_stream.extra.copy() if self.inlet_stream.extra else {}
         if 'm_dot_H2O_liq_accomp_kg_s' in out_extra:
             del out_extra['m_dot_H2O_liq_accomp_kg_s']
 
         self.outlet_stream = Stream(
-            mass_flow_kg_h=m_total_new, # Updated mass
+            mass_flow_kg_h=m_total_new,
             temperature_k=T_gas_out_k,
             pressure_pa=P_out,
             composition=outlet_comp,
@@ -423,22 +390,17 @@ class DryCooler(Component):
         """
         Accept an input stream at the specified port.
 
-        Stores the incoming process gas stream for processing during the next
-        step() call. On first receipt, configures heat exchanger geometry
-        based on detected gas species.
+        **Lazy Configuration Logic**:
+        On first `fluid_in` receipt, this method triggers `_configure_geometry()` logic to 
+        specialize the component for Hydrogen or Oxygen service based on stream composition.
 
         Args:
-            port_name (str): Target port identifier. Expected: 'fluid_in' or
-                'electricity_in'.
-            value (Any): Stream object for fluid input, or float for electrical
-                power availability.
-            resource_type (str, optional): Resource classification hint.
-                Not used but included for interface consistency.
+            port_name (str): Target port ('fluid_in', 'electricity_in').
+            value (Any): Stream or float (Power).
+            resource_type (str): Optional hint.
 
         Returns:
-            float: For 'fluid_in': mass flow rate accepted (kg/h).
-                   For 'electricity_in': fan power requirement (kW).
-                   Otherwise: 0.0.
+            float: Accepted mass flow [kg/h] or Power demand [kW].
         """
         if port_name == "fluid_in" and isinstance(value, Stream):
             self.inlet_stream = value
@@ -452,18 +414,15 @@ class DryCooler(Component):
         """
         Retrieve the output stream from a specified port.
 
-        Provides access to the cooled process gas stream computed during
-        the most recent step() execution.
+        **Physics**:
+        Returns state computed by the coupled $\varepsilon$-NTU solver. Includes any condensed 
+        liquid phase if separation occurred.
 
         Args:
-            port_name (str): Port to query. Expected: 'fluid_out'.
+            port_name (str): 'fluid_out'.
 
         Returns:
-            Stream: Cooled gas stream with updated temperature and pressure.
-                Returns empty Stream if no output is available.
-
-        Raises:
-            ValueError: If port_name is not a valid output port.
+            Stream: Cooled process gas.
         """
         if port_name == "fluid_out":
             return self.outlet_stream if self.outlet_stream else Stream(0.0)
@@ -473,15 +432,11 @@ class DryCooler(Component):
         """
         Define the physical connection ports for this component.
 
-        The DryCooler has one process fluid port and one electrical port.
-        Port definitions enable the orchestrator to validate and establish
-        flow network connections.
-
         Returns:
-            Dict[str, Dict[str, str]]: Port definitions with keys:
-                - 'fluid_in': Receives hot gas from upstream process.
-                - 'electricity_in': Receives power for fan operation.
-                - 'fluid_out': Delivers cooled gas to downstream processing.
+            Dict[str, Dict[str, str]]:
+            -   **fluid_in**: Hot process gas source.
+            -   **fluid_out**: Cooled process gas destination.
+            -   **electricity_in**: Fan power supply.
         """
         return {
             'fluid_in': {'type': 'input', 'resource_type': 'stream'},
@@ -493,21 +448,16 @@ class DryCooler(Component):
         """
         Retrieve the component's current operational state.
 
-        Fulfills the Component Lifecycle Contract state access, providing
-        thermal performance metrics for monitoring dashboards, logging,
-        and simulation state persistence.
+        **Layer 1 Contract**:
+        Returns thermal telemetry for central monitoring, critical for verifying 
+        heat rejection limits ($Q_{DC}$) and process outlet temperatures.
 
         Returns:
-            Dict[str, Any]: State dictionary containing:
-                - fluid_type (str): Detected gas species ('H2' or 'O2').
-                - tqc_duty_kw (float): Heat transferred in TQC (kW).
-                - dc_duty_kw (float): Heat rejected in DC (kW).
-                - fan_power_kw (float): Fan electrical consumption (kW).
-                - outlet_temp_c (float): Gas outlet temperature (°C).
-                - glycol_hot_c (float): Glycol temperature leaving TQC (°C).
-                - glycol_cold_c (float): Glycol temperature entering TQC (°C).
-                - tqc_effectiveness (float): TQC heat exchanger effectiveness.
-                - dc_effectiveness (float): DC heat exchanger effectiveness.
+            Dict[str, Any]: State metrics:
+            -   **tqc_duty_kw** (float): Process heat load.
+            -   **dc_duty_kw** (float): Rejected heat load.
+            -   **t_glycol_hot/cold** (float): Internal loop temperatures [°C].
+            -   **effectiveness** (float): Realized $\varepsilon$ for diagnostics.
         """
         return {
             **super().get_state(),

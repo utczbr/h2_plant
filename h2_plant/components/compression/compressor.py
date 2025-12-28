@@ -7,48 +7,26 @@ respecting discharge temperature limits.
 
 Thermodynamic Model
 -------------------
-The compression process follows polytropic behavior between isentropic and
-isothermal limits. Each stage applies the isentropic efficiency relationship:
+The compression process follows polytropic behavior bounded by isentropic and
+isothermal limits. 
 
-    W_actual = (H_2s - H_1) / η_is
+1.  **Stage Work**: Each stage allows adiabatic compression corrected by isentropic efficiency:
+    $$ W_{actual} = \frac{H_{2s} - H_{in}}{\eta_{isen}} $$
+    where $H_{2s} = H(P_{out}, S_{in})$.
 
-where H_2s is the isentropic outlet enthalpy at constant entropy, and η_is
-accounts for irreversibilities. Intercooling between stages reduces gas
-temperature to the inlet value, shifting the overall process toward the
-isothermal limit and reducing total work.
+2.  **Intercooling**: Between stages, gas is cooled back to $T_{inlet}$, reducing the specific volume 
+    and total work for subsequent stages.
+    $$ Q_{cool} = H_{actual, discharge} - H(P_{out}, T_{inlet}) $$
 
-The number of stages is determined by the constraint that isentropic discharge
-temperature must not exceed the maximum allowable limit (default 85°C),
-preventing lubricant degradation and seal damage.
-
-Drive Train Model
------------------
-Electrical power consumption includes losses through the drive train:
-
-    W_electrical = W_shaft / (η_mechanical × η_electrical)
-
-where mechanical efficiency accounts for bearing and coupling losses, and
-electrical efficiency represents motor conversion losses.
-
-Fluid Property Source
----------------------
-This component uses real-gas properties from the LUTManager for accurate
-enthalpy and entropy calculations. When LUTManager is unavailable, it falls
-back to ideal gas relations with hydrogen-specific heat capacity.
+3.  **Drive Train**:
+    $$ W_{electrical} = \frac{W_{shaft}}{\eta_{mech} \cdot \eta_{elec}} $$
 
 Component Lifecycle Contract (Layer 1)
 --------------------------------------
-- ``initialize()``: Calculates optimal stage configuration using real-gas
-  thermodynamic properties from LUTManager.
-- ``step()``: Computes compression work and cooling duty for mass transferred
-  during the current timestep.
-- ``get_state()``: Exposes energy consumption, mass throughput, and stage
-  metrics for monitoring and persistence.
-
-References
-----------
-- Campbell, J.M. (2015). Gas Conditioning and Processing, Vol. 2.
-- GPSA Engineering Data Book, 14th Ed., Section 13 (Compressors).
+*   **initialize()**: Determines optimal $N_{stages}$ to satisfy $T_{discharge} \le T_{max}$ using 
+    real-gas EOS.
+*   **step()**: Computes compression work and cooling duty for time-variant mass flow.
+*   **get_state()**: Exposes energy consumption, mass throughput, and stage configuration.
 """
 
 import numpy as np
@@ -85,42 +63,24 @@ class CompressorStorage(Component):
     ratios efficiently. Stage count is automatically determined based on the
     maximum allowable discharge temperature per stage.
 
-    The compression model iterates through stages computing:
-
-    1. Isentropic outlet enthalpy via constant-entropy path: H_2s = H(P_out, S_in)
-    2. Actual shaft work accounting for efficiency: W = (H_2s - H_1) / η_is
-    3. Intercooler duty to return gas to inlet temperature: Q = H_actual - H_cooled
-    4. Electrical power including drive train losses: W_el = W_shaft / (η_m × η_el)
-
-    Component Lifecycle Contract (Layer 1):
-        - ``initialize()``: Calculates optimal stage count using real-gas
-          thermodynamic properties. Validates configuration parameters.
-        - ``step()``: Computes compression work and cooling duty for mass
-          transferred during the current timestep.
-        - ``get_state()``: Returns energy consumption, mass throughput, and
-          cumulative statistics for monitoring and persistence.
+    Architecture:
+        - **Component Lifecycle Contract (Layer 1)**: Self-configuring initialization (`initialize`) 
+          and standardized state reporting.
+        - **Thermodynamic Layer (Layer 2)**: Utilizes `LUTManager` for high-fidelity property 
+          access during stage calculation and runtime stepping.
 
     Attributes:
-        max_flow_kg_h: Maximum mass flow capacity in kg/h.
-        inlet_pressure_bar: Suction pressure in bar.
-        outlet_pressure_bar: Discharge pressure in bar.
-        num_stages: Calculated number of compression stages.
-        stage_pressure_ratio: Pressure ratio per stage (equal distribution).
-        isentropic_efficiency: Thermodynamic efficiency per stage (0-1).
-        mechanical_efficiency: Drive train mechanical efficiency (0-1).
-        electrical_efficiency: Motor electrical efficiency (0-1).
-
-    Example:
-        >>> compressor = CompressorStorage(
-        ...     max_flow_kg_h=100.0,
-        ...     inlet_pressure_bar=40.0,
-        ...     outlet_pressure_bar=140.0
-        ... )
-        >>> compressor.initialize(dt=1/60, registry=registry)
-        >>> compressor.transfer_mass_kg = 50.0
-        >>> compressor.step(t=0.0)
-        >>> print(f"Specific energy: {compressor.specific_energy_kwh_kg:.3f} kWh/kg")
+        max_flow_kg_h (float): Rated mass flow capacity [kg/h].
+        inlet_pressure_bar (float): Suction pressure design point [bar].
+        outlet_pressure_bar (float): Discharge pressure design point [bar].
+        num_stages (int): Calculated number of compression stages.
+        stage_pressure_ratio (float): Pressure ratio per stage assuming equal distribution.
+        isentropic_efficiency (float): Thermodynamic efficiency per stage ($\eta_s$) [0-1].
+        mechanical_efficiency (float): Drive train mechanical efficiency ($\eta_m$) [0-1].
+        electrical_efficiency (float): Motor electrical efficiency ($\eta_e$) [0-1].
+        chiller_cop (float): Coefficient of Performance for intercooling.
     """
+
 
     def __init__(
         self,
@@ -137,36 +97,20 @@ class CompressorStorage(Component):
         """
         Configure the multi-stage compressor design parameters.
 
-        Stage configuration is computed during ``initialize()`` using real-gas
-        properties from LUTManager when available.
-
-        The efficiency chain models complete drive train losses:
-
-            W_electrical = W_isentropic / (η_is × η_m × η_el)
+        Stage configuration ($N_{stages}$) is computed during `initialize()` using real-gas
+        properties to respect `max_temperature_c`.
 
         Args:
-            max_flow_kg_h: Maximum mass flow rate in kg/h. Constrains mass
-                transfer per timestep.
-            inlet_pressure_bar: Suction pressure in bar. Typically set by
-                upstream process conditions.
-            outlet_pressure_bar: Target discharge pressure in bar. Determines
-                overall compression ratio.
-            inlet_temperature_c: Suction temperature in °C. Also serves as
-                intercooler target temperature. Defaults to 10°C.
-            max_temperature_c: Maximum allowable discharge temperature per
-                stage in °C. Constrains stage pressure ratio to prevent
-                lubricant degradation. Defaults to 85°C.
-            isentropic_efficiency: Stage isentropic efficiency (0-1).
-                Accounts for internal thermodynamic irreversibilities.
-                Defaults to 0.65.
-            mechanical_efficiency: Drive train mechanical efficiency (0-1).
-                Accounts for bearing and coupling losses. Defaults to 0.96.
-            electrical_efficiency: Motor electrical efficiency (0-1).
-                Accounts for electrical-to-mechanical conversion losses.
-                Defaults to 0.93.
-            chiller_cop: Coefficient of performance for intercooler chillers.
-                Relates cooling thermal duty to electrical consumption.
-                Defaults to 3.0.
+            max_flow_kg_h (float): Maximum mass flow capacity [kg/h].
+            inlet_pressure_bar (float): Suction pressure design point [bar].
+            outlet_pressure_bar (float): Target discharge pressure [bar].
+            inlet_temperature_c (float): Suction/Interstage temperature [°C]. Defaults to 10.0.
+            max_temperature_c (float): Maximum allowable discharge temperature per stage [°C].
+                Defaults to 85.0.
+            isentropic_efficiency (float): Stage isentropic efficiency [0-1]. Defaults to 0.65.
+            mechanical_efficiency (float): Drive train mechanical efficiency [0-1]. Defaults to 0.96.
+            electrical_efficiency (float): Motor electrical efficiency [0-1]. Defaults to 0.93.
+            chiller_cop (float): Chiller Coefficient of Performance. Defaults to 3.0.
         """
         super().__init__()
 
@@ -212,23 +156,18 @@ class CompressorStorage(Component):
         """
         Prepare the compressor for simulation execution.
 
-        Fulfills the Component Lifecycle Contract (Layer 1) initialization
-        phase by calculating the optimal number of compression stages using
-        real-gas thermodynamic properties.
+        **Strategic Action**:
+        Calculates the optimal number of compression stages ($N$) during initialization to 
+        safeguard against runtime temperature excursions. This static configuration 
+        optimization is key to the "Design Once, Run Many" philosophy of the simulator.
 
-        The stage calculation determines the maximum pressure ratio that keeps
-        isentropic discharge temperature below the specified limit, then
-        distributes the total compression ratio equally across stages.
+        **Method**:
+        Determines max pressure ratio per stage, then distributes total ratio equally:
+        $$ N_{stages} = \lceil \frac{\ln(P_{target}/P_{suction})}{\ln(r_{max})} \rceil $$
 
         Args:
-            dt: Simulation timestep in hours.
-            registry: Central component registry providing access to LUTManager
-                for real-gas property lookups.
-
-        Note:
-            Stage calculation requires CoolProp for inverse property lookups
-            (pressure from entropy and temperature). Falls back to a
-            conservative fixed ratio of 4.0 when CoolProp is unavailable.
+            dt (float): Simulation timestep [hours].
+            registry (ComponentRegistry): Central component registry providing access to `LUTManager`.
         """
         super().initialize(dt, registry)
 
@@ -245,19 +184,15 @@ class CompressorStorage(Component):
         """
         Execute one simulation timestep.
 
-        Fulfills the Component Lifecycle Contract (Layer 1) step phase by
-        computing compression and cooling work for the requested mass transfer.
-
-        The step sequence:
-
-        1. Limit mass transfer to maximum flow capacity for the timestep.
-        2. Compute multi-stage compression work using real-gas properties.
-        3. Calculate intercooler thermal duty and chiller electrical consumption.
-        4. Accumulate energy for current timestep (supports multiple calls).
-        5. Update cumulative statistics and expose power for orchestrator.
+        **Physics Sequence**:
+        1.  **Mass Intake**: Limits transfer to available capacity.
+        2.  **Compression Cycle**: Invokes `_calculate_compression_physics` (or fallbacks).
+            -   Iterates through stages.
+            -   Computes work ($W$) and heat rejection ($Q$).
+        3.  **State Update**: Accumulates energy counters for integration.
 
         Args:
-            t: Current simulation time in hours.
+            t (float): Current simulation time [hours].
         """
         super().step(t)
 
@@ -308,31 +243,14 @@ class CompressorStorage(Component):
         """
         Retrieve the component's current operational state.
 
-        Fulfills the Component Lifecycle Contract (Layer 1) state access,
-        providing compression metrics for monitoring, logging, and state
-        persistence.
+        **Layer 1 Contract**:
+        Returns standardized telemetry for orchestrator.
 
         Returns:
-            State dictionary containing:
-
-            - **mode** (int): Operating mode (IDLE=0, LP_TO_HP=1).
-            - **num_stages** (int): Number of compression stages.
-            - **stage_pressure_ratio** (float): Pressure ratio per stage.
-            - **compression_work_kwh** (float): Electrical compression work
-              this timestep in kWh.
-            - **chilling_work_kwh** (float): Chiller electrical consumption
-              this timestep in kWh.
-            - **energy_consumed_kwh** (float): Total electrical energy this
-              timestep in kWh.
-            - **specific_energy_kwh_kg** (float): Specific energy consumption
-              in kWh/kg.
-            - **cumulative_energy_kwh** (float): Total energy consumed since
-              initialization in kWh.
-            - **cumulative_mass_kg** (float): Total mass compressed since
-              initialization in kg.
-            - **isentropic_efficiency** (float): Configured stage efficiency.
-            - **mechanical_efficiency** (float): Configured drive efficiency.
-            - **electrical_efficiency** (float): Configured motor efficiency.
+            Dict[str, Any]: 
+            -   **mode** (int): Operating mode (IDLE=0, LP_TO_HP=1).
+            -   **num_stages** (int): Configured stage count ($N$).
+            -   **specific_energy_kwh_kg** (float): Total energy intensity.
         """
         cumulative_specific = 0.0
         if self.cumulative_mass_kg > 0:
@@ -365,21 +283,16 @@ class CompressorStorage(Component):
 
     def _calculate_stage_configuration(self) -> None:
         """
-        Determine optimal number of compression stages.
+        Determine optimal number of compression stages using Real Gas EOS.
 
-        Uses real-gas thermodynamic properties to find the maximum stage
-        pressure ratio that keeps isentropic discharge temperature below the
-        specified limit. The algorithm:
-
-        1. Obtain inlet entropy S_1 at (P_in, T_in) from LUTManager.
-        2. Find pressure P where isentropic compression reaches T_max using
-           CoolProp inverse lookup: P = f(S_1, T_max).
-        3. Maximum stage ratio r_max = P / P_in (floor at 2.0 for stability).
-        4. Number of stages n = ceil(ln(r_total) / ln(r_max)).
-        5. Actual stage ratio = r_total^(1/n) for equal pressure distribution.
-
-        When CoolProp is unavailable, falls back to a conservative fixed
-        maximum stage ratio of 4.0.
+        **Algorithm**:
+        1.  **Entropy Lookup**: $S_{in} = S(P_{in}, T_{in})$ via LUTManager.
+        2.  **Isentropic Limit**: Find pressure $P$ where isentropic compression reaches $T_{max}$:
+            $$ P(S_{in}, T_{max}) = \text{InverseProps}(S_{in}, T_{max}) $$
+        3.  **Max Ratio**: $r_{max} = P / P_{in}$ (floored at 2.0).
+        4.  **Stage Count**: 
+            $$ N = \lceil \frac{\ln(P_{target}/P_{suction})}{\ln(r_{max})} \rceil $$
+        5.  **Actual Ratio**: $r_{actual} = (P_{target}/P_{suction})^{1/N}$.
         """
         if not COOLPROP_AVAILABLE:
             logger.warning(
@@ -432,10 +345,9 @@ class CompressorStorage(Component):
     def _calculate_trivial_pass_through(self) -> None:
         """
         Handle case where no compression is required.
-
-        When outlet pressure is at or below inlet pressure, the compressor
-        acts as a pass-through with zero energy consumption. This prevents
-        division-by-zero and negative work calculations.
+        
+        **Logic**:
+        Check valve open ($P_{out} \le P_{in}$). Zero energy operation.
         """
         self.compression_work_kwh = 0.0
         self.chilling_work_kwh = 0.0
@@ -444,11 +356,11 @@ class CompressorStorage(Component):
 
     def _calculate_stages_fallback(self) -> None:
         """
-        Calculate stage configuration using ideal gas assumptions.
+        Calculate stage configuration using ideal gas assumptions (Safe Mode).
 
-        Fallback method when CoolProp or LUTManager are unavailable. Uses a
-        conservative maximum stage pressure ratio of 4.0, typical for
-        hydrogen compressors with standard temperature limits.
+        **Logic**:
+        Defaults to a conservative fixed maximum stage ratio of 4.0, typical for
+        hydrogen compressors to stay within temperature limits without real-gas data.
         """
         p_in_pa = self.inlet_pressure_bar * self.BAR_TO_PA
         p_out_pa = self.outlet_pressure_bar * self.BAR_TO_PA
@@ -463,19 +375,13 @@ class CompressorStorage(Component):
         """
         Calculate compression energy using ideal gas relations.
 
-        Fallback method when LUTManager is unavailable. Uses the ideal gas
-        isentropic temperature-pressure relationship:
+        **Approximation**:
+        Uses the isentropic ideal gas temperature-pressure relationship:
+        $$ T_{2s} = T_{in} \cdot \left(\frac{P_{out}}{P_{in}}\right)^{\frac{\gamma-1}{\gamma}} $$
+        With Hydrogen constants: $C_p \approx 14.3 \text{ kJ/kgK}$, $\gamma = 1.41$.
 
-            T_2s = T_1 × (P_2/P_1)^((γ-1)/γ)
-
-        with hydrogen-specific heat capacity (Cp = 14.3 kJ/kg·K) and heat
-        ratio (γ = 1.41).
-
-        Stage work is computed as:
-
-            W = Cp × ΔT_actual = Cp × (T_2s - T_1) / η_is
-
-        Intercooler duty returns gas to inlet temperature after each stage.
+        **Work**:
+        $$ W = C_p \cdot (T_{2s} - T_{in}) / \eta_{isen} $$
         """
         gamma = 1.41
         cp = 14300.0
@@ -519,28 +425,20 @@ class CompressorStorage(Component):
 
     def _calculate_compression_physics(self) -> None:
         """
-        Calculate compression energy using real-gas thermodynamics.
+        Calculate compression energy using real-gas thermodynamics (Step Logic).
 
-        Implements multi-stage compression with intercooling using enthalpy
-        and entropy from LUTManager. Each stage follows the isentropic
-        efficiency model:
-
-        1. **Isentropic compression**: Outlet enthalpy at constant entropy
-           H_2s = H(P_out, S_in) from LUTManager or CoolProp.
-
-        2. **Actual shaft work**: Accounting for thermodynamic irreversibilities
-           W_shaft = (H_2s - H_1) / η_is
-
-        3. **Electrical work**: Including drive train losses
-           W_el = W_shaft / (η_m × η_el)
-
-        4. **Intercooler duty**: Heat removal to return gas to inlet temperature
-           Q = H_actual - H(P_out, T_inlet)
-
-        5. **Chiller consumption**: Electrical power for cooling
-           W_chill = Q / COP
-
-        Total electrical consumption is the sum of compression and chilling work.
+        **Loop Invariant**:
+        For each stage $i \in [0, N-1]$:
+        1.  **Isentropic Compression**:
+            $$ H_{2s} = H(P_{out,i}, S_{in,i}) $$
+            Where $S_{in,i} = S(P_{in,i}, T_{inlet})$ due to intercooling.
+        2.  **Work**:
+            $$ W_{shaft,i} = \frac{H_{2s} - H_{in,i}}{\eta_{isen}} $$
+        3.  **Real State**:
+            $$ H_{real,i} = H_{in,i} + W_{shaft,i} $$
+        4.  **Intercooling Duty**:
+            $$ Q_{cool,i} = H_{real,i} - H(P_{out,i}, T_{inlet}) $$
+            (Assumes perfect intercooling back to $T_{inlet}$).
         """
         lut = self.get_registry_safe(ComponentID.LUT_MANAGER)
 
@@ -617,22 +515,18 @@ class CompressorStorage(Component):
         """
         Retrieve the output stream from a specified port.
 
-        Returns compressed hydrogen at outlet pressure and inlet temperature
-        (after final aftercooling stage).
+        **Physics**:
+        Returns hydrogen at outlet pressure and *inlet temperature* (stage intercooling + aftercooling).
+        Assumes perfect heat rejection to $T_{in}$.
 
         Args:
-            port_name: Port identifier. Valid values are 'h2_out' or 'outlet'.
+            port_name (str): 'h2_out' or 'outlet'.
 
         Returns:
-            Stream object containing compressed hydrogen with:
-
-            - mass_flow_kg_h: Flow rate based on mass transferred this step.
-            - temperature_k: Inlet temperature (gas is aftercooled).
-            - pressure_pa: Design outlet pressure.
-            - composition: Pure hydrogen {'H2': 1.0}.
+            Stream: Product stream with $\{P_{out}, T_{in}, 100\% H_2\}$.
 
         Raises:
-            ValueError: If port_name is not a recognized output port.
+            ValueError: If `port_name` unknown.
         """
         if port_name == 'h2_out' or port_name == 'outlet':
             return Stream(
@@ -652,23 +546,17 @@ class CompressorStorage(Component):
         """
         Accept an input stream at the specified port.
 
-        Accumulates incoming hydrogen into the transfer buffer, respecting
-        maximum flow capacity. Supports both hydrogen streams and electricity
-        acknowledgment.
+        **Interface**:
+        -   **Hydrogen**: Buffers mass up to max capacity.
+        -   **Electricity**: Virtual power connection.
 
         Args:
-            port_name: Target port identifier. Valid values are 'h2_in',
-                'inlet', or 'electricity_in'.
-            value: Input value. Stream object for hydrogen ports, float for
-                electricity port.
-            resource_type: Resource classification hint (unused but required
-                by interface).
+            port_name (str): 'h2_in', 'inlet', 'electricity_in'.
+            value (Any): Stream or float.
+            resource_type (str): Hint.
 
         Returns:
-            Amount accepted in appropriate units:
-
-            - Hydrogen ports: Mass accepted in kg.
-            - Electricity port: Power value echoed back.
+            float: Accepted amount.
         """
         if port_name == 'h2_in' or port_name == 'inlet':
             if isinstance(value, Stream):
@@ -691,12 +579,10 @@ class CompressorStorage(Component):
         Define the physical connection ports for this component.
 
         Returns:
-            Port definitions dictionary with keys:
-
-            - **h2_in**: Low-pressure hydrogen feed input.
-            - **electricity_in**: Grid power for motor and chiller.
-            - **h2_out**: High-pressure hydrogen product output.
-            - **outlet**: Alias for h2_out (backward compatibility).
+            Dict[str, Dict[str, str]]:
+            -   **h2_in**: Low-pressure hydrogen feed.
+            -   **h2_out**: High-pressure product.
+            -   **electricity_in**: Drive power (MW).
         """
         return {
             'h2_in': {

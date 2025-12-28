@@ -49,6 +49,8 @@ class Component(ABC):
             config: Optional component configuration object (Pydantic model)
             **kwargs: Additional keyword arguments for forward compatibility:
                 - component_id: Optional explicit ID (for tests/manual wiring)
+                - system_group: Optional group identifier for graph categorization (e.g., "H2_Train")
+                - process_step: Optional integer for ordering within a group (e.g., 10, 20, 30)
         """
         # Extract optional component_id if provided (enables direct instantiation in tests)
         component_id = kwargs.pop("component_id", None)
@@ -59,6 +61,10 @@ class Component(ABC):
         self._registry: Optional['ComponentRegistry'] = None
         self._initialized: bool = False
         self.config = config  # Store config object (Pydantic model)
+        
+        # Metadata for graph grouping (populated by PlantGraphBuilder from topology params)
+        self.system_group: Optional[str] = kwargs.pop("system_group", None)
+        self.process_step: int = int(kwargs.pop("process_step", 0))
         
         # Allow tests or manual code to set the ID directly
         if component_id is not None:

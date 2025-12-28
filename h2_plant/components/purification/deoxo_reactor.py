@@ -97,6 +97,9 @@ class DeoxoReactor(Component):
         self.last_delta_t_ad_k = 0.0  # Adiabatic temperature rise
         self.last_zone_temps: list = []  # Per-zone outlet temps (K)
         
+        # Stoichiometry Tracking (O2/H2/H2O balance)
+        self._last_o2_in_kg_h: float = 0.0
+        
         # Profile data for plotting (L, T, X)
         self.last_profiles: Dict[str, np.ndarray] = {
             'L': np.array([]),
@@ -195,8 +198,31 @@ class DeoxoReactor(Component):
         if delta_t_ad > DeoxoConstants.DELTA_T_AD_MAX_K:
             logger.warning(f"[DEOXO] {self.component_id}: ΔT_ad = {delta_t_ad:.1f}K exceeds catalyst limit ({DeoxoConstants.DELTA_T_AD_MAX_K}K)!")
         
-        # Edge case: Skip zones if negligible O2
-        if y_o2_in < 1e-6:
+        # Edge case: Skip zones if negligible O2 or very low flow (instability risk)
+        MIN_FLOW_KG_H = 1.0 # 1% of nominal is a safe cutoff
+        
+        if stream.mass_flow_kg_h < MIN_FLOW_KG_H:
+             # Low flow regime: High residence time -> Equilibrium
+             # Conversion -> 100% (if T > T_activation, else 0%)
+             # Temperature -> T_jacket (Heat transfer dominates heat gen)
+             
+             # Assume active catalyst:
+             X_total = 1.0 if stream.temperature_k > DeoxoConstants.CRITICAL_INLET_T_K else 0.0
+             t_out = DeoxoConstants.T_JACKET_K if X_total > 0 else stream.temperature_k
+             
+             # Sanity for T_out (can't cool below jacket if exothermic)
+             # Actually at low flow, T->T_jacket equilibrium matches.
+             
+             self.last_conversion_o2 = X_total
+             self.last_peak_temp_k = t_out
+             self.last_zone_temps = [t_out] * len(DeoxoConstants.L_ZONE_FRAC)
+             # Dummy profiles
+             self.last_profiles = {'L': np.array([0, DeoxoConstants.L_REACTOR_M]), 
+                                   'T': np.array([stream.temperature_k, t_out]), 
+                                   'X': np.array([0.0, X_total])}
+             
+             # Bypass numerical solver
+        elif y_o2_in < 1e-6:
             self.last_conversion_o2 = 0.0
             self.last_peak_temp_k = stream.temperature_k
             self.last_zone_temps = [stream.temperature_k] * len(DeoxoConstants.L_ZONE_FRAC)
@@ -352,6 +378,7 @@ class DeoxoReactor(Component):
     def receive_input(self, port_name: str, value: Any, resource_type: str = 'stream') -> float:
         """
         Accept inlet stream from upstream component.
+        Also tracks O2 mass flow entering for stoichiometry balance.
 
         Args:
             port_name (str): Target port ('inlet').
@@ -363,6 +390,9 @@ class DeoxoReactor(Component):
         """
         if port_name == 'inlet' and isinstance(value, Stream):
             self.input_stream = value
+            # Track inlet O2 mass for stoichiometry balance
+            y_o2 = value.composition.get('O2', 0.0)
+            self._last_o2_in_kg_h = value.mass_flow_kg_h * y_o2
             return value.mass_flow_kg_h
         return 0.0
 
@@ -403,7 +433,23 @@ class DeoxoReactor(Component):
                 - conversion_o2_percent (float): O₂ conversion (%).
                 - peak_temperature_c (float): Maximum reactor temperature (°C).
                 - pressure_drop_mbar (float): Total pressure drop (mbar).
+                - o2_in_kg_h (float): O₂ mass flow entering (kg/h).
+                - o2_consumed_kg_h (float): O₂ mass consumed in reaction (kg/h).
+                - h2_consumed_kg_h (float): H₂ mass consumed in reaction (kg/h).
+                - h2o_generated_kg_h (float): H₂O mass generated (kg/h).
         """
+        # Calculate O2 slip and stoichiometry
+        o2_slip = 0.0
+        if self.output_stream:
+            y_o2_out = self.output_stream.composition.get('O2', 0.0)
+            o2_slip = self.output_stream.mass_flow_kg_h * y_o2_out
+        
+        o2_consumed = self._last_o2_in_kg_h - o2_slip
+        # Stoichiometry: 2H₂ + O₂ → 2H₂O
+        # Mass ratio: H2 consumed = O2 consumed * (4.032 / 32.00)
+        h2_consumed = o2_consumed * (4.032 / 32.00)
+        h2o_generated = o2_consumed * (36.03 / 32.00)
+        
         return {
             **super().get_state(),
             'conversion_o2_percent': self.last_conversion_o2 * 100.0,
@@ -413,7 +459,14 @@ class DeoxoReactor(Component):
             'outlet_o2_ppm_mol': (self.output_stream.get_total_mole_frac('O2') * 1e6) if self.output_stream else 0.0,
             'delta_t_ad_k': getattr(self, 'last_delta_t_ad_k', 0.0),
             'delta_t_real_k': self.last_peak_temp_k - (self.input_stream.temperature_k if self.input_stream else 0.0),
-            't_zone_outlets_c': [t - 273.15 for t in getattr(self, 'last_zone_temps', [])]
+            't_zone_outlets_c': [t - 273.15 for t in getattr(self, 'last_zone_temps', [])],
+            
+            # Stoichiometry Tracking
+            'o2_in_kg_h': self._last_o2_in_kg_h,
+            'o2_out_slip_kg_h': o2_slip,
+            'o2_consumed_kg_h': o2_consumed,
+            'h2_consumed_kg_h': h2_consumed,
+            'h2o_generated_kg_h': h2o_generated
         }
 
     def get_last_profiles(self) -> Dict[str, np.ndarray]:

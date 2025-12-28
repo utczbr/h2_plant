@@ -650,7 +650,7 @@ class GraphCatalog:
             graph_id='dissolved_gas_efficiency',
             title='Dissolved Gas Removal Efficiency',
             description='IN vs OUT concentration with removal % - plot_concentracao_dreno (bar chart)',
-            function=sg.create_dissolved_gas_efficiency_figure,
+            function=sg.create_drain_concentration_figure,
             library=GraphLibrary.MATPLOTLIB,
             data_required=['history'],
             priority=GraphPriority.HIGH,
@@ -748,17 +748,7 @@ class GraphCatalog:
             category='separation',
             enabled=True
         ))
-        self.register(GraphMetadata(
-            graph_id='drain_line_concentration',
-            title='Drain Line Concentration',
-            description='Dissolved gas PPM in drain line - plot_concentracao_linha_dreno',
-            function=sg.create_drain_concentration_figure,
-            library=GraphLibrary.MATPLOTLIB,
-            data_required=['history'],
-            priority=GraphPriority.MEDIUM,
-            category='separation',
-            enabled=True
-        ))
+        # NOTE: drain_line_concentration removed - duplicate of dissolved_gas_efficiency
         self.register(GraphMetadata(
             graph_id='recirculation_comparison',
             title='Recirculation Comparison',
@@ -801,6 +791,153 @@ class GraphCatalog:
             data_required=['history'],
             priority=GraphPriority.MEDIUM,
             category='flow',
+            enabled=True
+        ))
+
+        # ========================================================================
+        # ORPHANED FUNCTIONS (Previously unregistered) - Added 2025-12
+        # ========================================================================
+        
+        # Monthly Performance (combined figure)
+        self.register(GraphMetadata(
+            graph_id='monthly_performance',
+            title='Monthly Performance Overview',
+            description='Combined: Efficiency + Capacity Factor + SOEC Heatmap',
+            function=sg.create_monthly_performance_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='performance',
+            enabled=True
+        ))
+        
+        # Monthly Efficiency (standalone)
+        self.register(GraphMetadata(
+            graph_id='monthly_efficiency',
+            title='Monthly Efficiency',
+            description='System efficiency aggregated by month',
+            function=sg.create_monthly_efficiency_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='performance',
+            enabled=True
+        ))
+        
+        # Monthly Capacity Factor (standalone)
+        self.register(GraphMetadata(
+            graph_id='monthly_capacity_factor',
+            title='Monthly Capacity Factor',
+            description='System capacity factor aggregated by month',
+            function=sg.create_monthly_capacity_factor_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='performance',
+            enabled=True
+        ))
+        
+        # SOEC Module Heatmap
+        self.register(GraphMetadata(
+            graph_id='soec_module_heatmap',
+            title='SOEC Module Activity Heatmap',
+            description='Heatmap of module power over time',
+            function=sg.create_soec_module_heatmap_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='soec_ops',
+            enabled=True
+        ))
+        
+        # SOEC Module Power Stacked
+        self.register(GraphMetadata(
+            graph_id='soec_module_power_stacked',
+            title='SOEC Module Power Stacked',
+            description='Stacked area chart of individual module power',
+            function=sg.create_soec_module_power_stacked_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='soec_ops',
+            enabled=True
+        ))
+        
+        # SOEC Module Wear Statistics
+        self.register(GraphMetadata(
+            graph_id='soec_module_wear_stats',
+            title='SOEC Module Wear Statistics',
+            description='Runtime hours and start/stop cycles per module',
+            function=sg.create_soec_module_wear_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='soec_ops',
+            enabled=True
+        ))
+        
+        # Drain Scheme Schematic
+        self.register(GraphMetadata(
+            graph_id='drain_scheme',
+            title='Drain System Schematic',
+            description='Static diagram of drain system topology',
+            function=sg.create_drain_scheme_schematic,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.LOW,
+            category='schematic',
+            enabled=True
+        ))
+        
+        # Energy Flow Figure
+        self.register(GraphMetadata(
+            graph_id='energy_flow',
+            title='Energy Flow Breakdown',
+            description='Thermal (Q) and Electrical (W) power by component',
+            function=sg.create_energy_flow_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='energy',
+            enabled=True
+        ))
+        
+        # Process Scheme Schematic
+        self.register(GraphMetadata(
+            graph_id='process_scheme',
+            title='Process Scheme Schematic',
+            description='Dynamic PFD with energy/mass annotations',
+            function=sg.create_process_scheme_schematic,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.LOW,
+            category='schematic',
+            enabled=True
+        ))
+        
+        # Drain Mixer Figure
+        self.register(GraphMetadata(
+            graph_id='drain_mixer_balance',
+            title='Drain Mixer Balance',
+            description='Mass and energy balance for drain mixers',
+            function=sg.create_drain_mixer_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        
+        # Q Breakdown Figure (verify not duplicate)
+        self.register(GraphMetadata(
+            graph_id='thermal_load_breakdown_time_series',
+            title='Thermal Load Time Series',
+            description='Cooling load by component over time',
+            function=sg.create_q_breakdown_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
             enabled=True
         ))
 

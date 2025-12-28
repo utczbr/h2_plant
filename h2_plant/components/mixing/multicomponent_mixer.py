@@ -486,10 +486,16 @@ class MultiComponentMixer(Component):
         h_mix = 0.0
         for species, mole_frac in comp.items():
             if mole_frac > 1e-12:
-                data = GasConstants.SPECIES_DATA[species]
-                h_form = data['h_formation']
-                delta_h = self._integrate_cp(data['cp_coeffs'], 298.15, T)
-                h_mix += mole_frac * (h_form + delta_h)
+                # Map liquid water to gas properties (simplified) or ignore
+                lookup_species = species
+                if species == 'H2O_liq':
+                    lookup_species = 'H2O'
+                
+                if lookup_species in GasConstants.SPECIES_DATA:
+                    data = GasConstants.SPECIES_DATA[lookup_species]
+                    h_form = data['h_formation']
+                    delta_h = self._integrate_cp(data['cp_coeffs'], 298.15, T)
+                    h_mix += mole_frac * (h_form + delta_h)
         return h_mix
 
     def _integrate_cp(self, coeffs: List[float], T1: float, T2: float) -> float:

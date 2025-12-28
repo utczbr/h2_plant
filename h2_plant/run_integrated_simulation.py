@@ -29,6 +29,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Module-level storage for component metadata (populated by run_with_dispatch_strategy)
+_component_metadata: Dict[str, Dict[str, Any]] = {}
+
 
 def run_with_dispatch_strategy(
     scenarios_dir: str,
@@ -166,6 +169,14 @@ def run_with_dispatch_strategy(
     components_dict = {cid: comp for cid, comp in registry.list_components()}
     print_stream_summary_table(components_dict, topo_order, connection_map)
 
+    # Extract component metadata for visualization grouping
+    component_metadata = {}
+    for cid, comp in components_dict.items():
+        component_metadata[cid] = {
+            'system_group': getattr(comp, 'system_group', None),
+            'process_step': getattr(comp, 'process_step', 0)
+        }
+
     # Generate markdown report
     from h2_plant.reporting.markdown_report import generate_simulation_report
     report_path = output_dir / "simulation_report.md"
@@ -182,6 +193,12 @@ def run_with_dispatch_strategy(
     logger.info(f"Markdown report saved to: {report_path}")
 
     logger.info("Simulation completed successfully")
+    
+    # Return history and metadata for graph generation (if called externally)
+    # Store metadata on module level for generate_graphs
+    global _component_metadata
+    _component_metadata = component_metadata
+    
     return history
 
 
@@ -192,6 +209,12 @@ def generate_graphs(
 ) -> None:
     """
     Generate graphs based on visualization_config.yaml settings.
+    
+    .. deprecated:: 2025-12
+        The legacy GRAPH_MAP loop in this function is deprecated.
+        Use `GraphOrchestrator` with `orchestrated_graphs` section in 
+        visualization_config.yaml instead. The GRAPH_MAP loop will be 
+        removed in a future version.
     
     Args:
         history: Simulation history dictionary.
@@ -231,16 +254,29 @@ def generate_graphs(
             create_mixer_comparison_figure,
             create_individual_drains_figure,
             create_dissolved_gas_figure,
-            create_dissolved_gas_efficiency_figure,
             create_crossover_impurities_figure,
             create_thermal_load_breakdown_figure,
-            create_drain_concentration_figure,
-            create_recirculation_comparison_figure,
-            create_entrained_liquid_figure,
-            create_drain_line_properties_figure,
             # Profile & Flow tracking graphs
             create_water_vapor_tracking_figure,
             create_total_mass_flow_figure,
+            create_monthly_performance_figure,
+            create_monthly_efficiency_figure,
+            create_monthly_capacity_factor_figure,
+            create_soec_module_heatmap_figure,
+            create_soec_module_power_stacked_figure,
+            create_soec_module_wear_figure,
+            create_q_breakdown_figure,
+            create_drain_line_properties_figure,
+            create_deoxo_profile_figure,
+            create_drain_mixer_figure,
+            create_drain_scheme_schematic,
+            create_energy_flow_figure,
+            create_process_scheme_schematic,
+            create_drain_concentration_figure,
+            create_recirculation_comparison_figure,
+            create_entrained_liquid_figure,
+            create_h2_stacked_properties,
+            create_o2_stacked_properties,
         )
         GRAPHS_AVAILABLE = True
     except ImportError as e:
@@ -299,7 +335,12 @@ def generate_graphs(
         df['time'] = df['minute'] / 60.0  # Convert minutes to hours
         df['hour'] = df['time']
     
-    # Map of graph names to creation functions
+    # =========================================================================
+    # DEPRECATED: GRAPH_MAP
+    # This legacy mapping is deprecated. Use GraphOrchestrator with 
+    # visualization_config.yaml 'orchestrated_graphs' section instead.
+    # Will be removed in future version.
+    # =========================================================================
     GRAPH_MAP = {
         # Core dispatch/economics (primary names)
         'dispatch_strategy_stacked': create_dispatch_figure,
@@ -315,6 +356,12 @@ def generate_graphs(
         'efficiency_curve': create_efficiency_curve_figure,
         'revenue_analysis': create_revenue_analysis_figure,
         'temporal_averages': create_temporal_averages_figure,
+        'monthly_performance': create_monthly_performance_figure,
+        'monthly_efficiency': create_monthly_efficiency_figure,
+        'monthly_capacity_factor': create_monthly_capacity_factor_figure,
+        'soec_module_heatmap': create_soec_module_heatmap_figure,
+        'soec_module_power_stacked': create_soec_module_power_stacked_figure,
+        'soec_module_wear_stats': create_soec_module_wear_figure,
         
         # Thermal & Separation graphs
         'water_removal_total': create_water_removal_total_figure,
@@ -326,17 +373,25 @@ def generate_graphs(
         
         # Energy & Thermal Analysis
         'energy_flows': create_energy_flows_figure,
-        'q_breakdown': create_thermal_load_breakdown_figure,
+        'q_breakdown': create_q_breakdown_figure,
+        'thermal_load_breakdown_time_series': create_thermal_load_breakdown_figure, # Rename old one to clearer name
         'plant_balance': create_plant_balance_schematic,
         'mixer_comparison': create_mixer_comparison_figure,
         'individual_drains': create_individual_drains_figure,
         'dissolved_gas_concentration': create_dissolved_gas_figure,
-        'dissolved_gas_efficiency': create_dissolved_gas_efficiency_figure,
+        'dissolved_gas_efficiency': create_drain_concentration_figure,
         'crossover_impurities': create_crossover_impurities_figure,
         'drain_line_properties': create_drain_line_properties_figure,
+        'deoxo_profile': create_deoxo_profile_figure,
+        'drain_mixer_balance': create_drain_mixer_figure,
+        'drain_scheme': create_drain_scheme_schematic,
+        'energy_flow': create_energy_flow_figure,
+        'process_scheme': create_process_scheme_schematic,
         'drain_line_concentration': create_drain_concentration_figure,
         'recirculation_comparison': create_recirculation_comparison_figure,
         'entrained_liquid_flow': create_entrained_liquid_figure,
+        'h2_stacked_properties': create_h2_stacked_properties,
+        'o2_stacked_properties': create_o2_stacked_properties,
         
         # Flow tracking
         'water_vapor_tracking': create_water_vapor_tracking_figure,
@@ -355,30 +410,64 @@ def generate_graphs(
     
     generated_count = 0
     
-    for graph_name, is_enabled in enabled_graphs.items():
-        if not is_enabled:
-            continue
-        
-        create_func = GRAPH_MAP.get(graph_name)
-        if create_func is None:
-            continue  # Graph type not implemented in basic set
-        
-        try:
-            fig = create_func(df)
-            if fig is not None:
-                # Save as PNG
-                output_path = graphs_dir / f"{graph_name}.png"
-                fig.savefig(output_path, dpi=100, bbox_inches='tight')
-                logger.info(f"Generated: {output_path.name}")
-                generated_count += 1
-                
-                # Close figure to free memory
-                import matplotlib.pyplot as plt
-                plt.close(fig)
-        except Exception as e:
-            logger.warning(f"Failed to generate {graph_name}: {e}")
+    # Access global metadata extracted during simulation
+    global _component_metadata
+    metadata = _component_metadata
     
-    print(f"\n### Graphs Generated: {generated_count} files saved to {graphs_dir}")
+    # =========================================================================
+    # LEGACY GRAPH_MAP LOOP (DEPRECATED)
+    # Skip if 'skip_legacy_graphs' is set in config (default: False)
+    # This loop will be removed in a future version.
+    # =========================================================================
+    skip_legacy = viz_config.get('visualization', {}).get('skip_legacy_graphs', False)
+    
+    if skip_legacy:
+        logger.info("Skipping legacy GRAPH_MAP loop (skip_legacy_graphs=true)")
+    else:
+        for graph_name, is_enabled in enabled_graphs.items():
+            if not is_enabled:
+                continue
+            
+            create_func = GRAPH_MAP.get(graph_name)
+            if create_func is None:
+                continue  # Graph type not implemented in basic set
+            
+            try:
+                # Pass metadata to crossover_impurities graph for grouping/sorting
+                if graph_name == 'crossover_impurities':
+                    fig = create_func(df, metadata=metadata)
+                else:
+                    fig = create_func(df)
+                if fig is not None:
+                    # Save as PNG
+                    output_path = graphs_dir / f"{graph_name}.png"
+                    fig.savefig(output_path, dpi=100, bbox_inches='tight')
+                    logger.info(f"Generated: {output_path.name}")
+                    generated_count += 1
+                    
+                    # Close figure to free memory
+                    import matplotlib.pyplot as plt
+                    plt.close(fig)
+            except Exception as e:
+                logger.warning(f"Failed to generate {graph_name}: {e}")
+    
+    print(f"\n### Legacy Graphs Generated: {generated_count} files saved to {graphs_dir}")
+    
+    # ========================================================================
+    # ORCHESTRATED GRAPHS (New Architecture)
+    # ========================================================================
+    try:
+        from h2_plant.visualization.graph_orchestrator import GraphOrchestrator
+        
+        orchestrator = GraphOrchestrator(graphs_dir)
+        orchestrated_count = orchestrator.generate_all(df, viz_config)
+        
+        if orchestrated_count > 0:
+            print(f"### Orchestrated Graphs Generated: {orchestrated_count} files")
+    except ImportError as e:
+        logger.debug(f"Graph orchestrator not available: {e}")
+    except Exception as e:
+        logger.warning(f"Orchestrated graph generation failed: {e}")
 
 
 def main():

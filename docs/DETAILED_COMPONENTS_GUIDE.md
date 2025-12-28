@@ -3,16 +3,16 @@
 ## Overview
 The Hydrogen Plant GUI now supports **component-level design**, allowing you to build plants using individual components (PEM stacks, heat exchangers, pumps, etc.) rather than just system-level nodes.
 
-**Version**: 2.0  
-**Replaces**: System-level nodes (Electrolyzer, ATR)  
-**Adds**: 24 detailed component nodes across 10 categories
+**Version**: 2.1  
+**Updated**: December 27, 2025  
+**Component Categories**: 20 subdirectories with 50+ component implementations
 
 ---
 
 ## Component Categories
 
 ### 1. Electrolysis Components
-**Category**: `h2_plant.electrolysis`
+**Category**: `h2_plant.components.electrolysis`
 
 - **PEM Stack** - Proton Exchange Membrane electrolyzer
   - Properties: `max_power_kw`, `cells_per_stack`, `parallel_stacks`
@@ -74,6 +74,11 @@ The Hydrogen Plant GUI now supports **component-level design**, allowing you to 
   - Physics: Coupled Mass/Energy PFR with JIT solver
   - Ports: inlet → outlet
 
+- **Hydrogen Multi-Cyclone** - Centrifugal droplet separation
+  - Properties: `design_flow_kg_h`, `num_cyclones`
+  - Physics: Stokes law separation efficiency
+  - Ports: inlet → gas_outlet, liquid_drain
+
 ### 4. Thermal Components
 **Category**: `h2_plant.thermal`
 
@@ -85,8 +90,25 @@ The Hydrogen Plant GUI now supports **component-level design**, allowing you to 
   - Properties: `cooling_capacity_kw`, `target_temp_k`
   - Ports: fluid_in → fluid_out
 
-### 5. Fluid Handling Components
-**Category**: `h2_plant.fluid`
+- **Electric Boiler** - Steam/water heating
+  - Properties: `max_power_kw`, `target_temp_k`
+  - Ports: water_in → steam_out
+
+- **Interchanger** - Gas-to-gas heat exchange
+  - Properties: `effectiveness`, `hot_side_id`
+  - Ports: hot_in, cold_in → hot_out, cold_out
+
+### 5. Compression Components
+**Category**: `h2_plant.components.compression`
+
+- **Compressor** - Multi-stage compression train
+  - Properties: `num_stages`, `pressure_ratio_per_stage`, `intercooling`
+  - Physics: Isentropic efficiency with interstage cooling
+  - Ports: gas_in → gas_out
+
+- **CompressorSingle** - Single-stage compressor unit
+  - Properties: `pressure_ratio`, `isentropic_efficiency`
+  - Ports: inlet → outlet
 
 - **Process Compressor** - Gas compression
   - Properties: `max_flow_kg_h`, `pressure_ratio`, **`system` (PEM/SOEC/ATR)**
@@ -111,8 +133,42 @@ The Hydrogen Plant GUI now supports **component-level design**, allowing you to 
 - **Natural Gas Supply** - Biogas/NG feed
   - Properties: `max_flow_kg_h`, `pressure_bar`, `cost_per_kg`
 
-### 7. Storage, Compression, Logic, Utilities
-Same as before (no changes from Phase 1-3)
+### 7. Storage Components
+**Category**: `h2_plant.components.storage`
+
+- **H2StorageTankEnhanced** - Pressurized hydrogen storage
+  - Properties: `volume_m3`, `max_pressure_bar`, `initial_level_kg`
+  - Ports: h2_in → h2_out
+
+- **OxygenBuffer** - O₂ intermediate storage
+  - Properties: `volume_m3`, `max_pressure_bar`
+
+- **TankArray** - Multiple tank management
+  - Properties: `num_tanks`, `tank_volume_m3`
+
+### 8. Water System Components
+**Category**: `h2_plant.components.water`
+
+- **WaterPumpThermodynamic** - Circulation pump with thermodynamics
+  - Properties: `max_flow_kg_h`, `pressure_rise_bar`
+  - Ports: inlet → outlet
+
+- **DrainRecorderMixer** - Drain collection and mixing
+  - Properties: `num_inlets`
+  - Ports: drain_in[] → mixed_out
+
+- **UltrapureWaterStorageTank** - DI water storage
+  - Properties: `volume_m3`, `max_level_m3`
+
+### 9. Mixing Components
+**Category**: `h2_plant.components.mixing`
+
+- **MultiComponentMixer** - Gas stream mixing
+  - Properties: `num_inlets`
+  - Physics: Adiabatic mixing with composition tracking
+
+- **WaterMixer** - Steam/water stream combining
+- **OxygenMixer** - O₂ stream combining
 
 ---
 

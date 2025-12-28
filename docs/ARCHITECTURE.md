@@ -1,7 +1,7 @@
 # Dual-Path Hydrogen Production System v2.0 - System Architecture
 
-**Document Version:** 1.2
-**Last Updated:** December 13, 2025
+**Document Version:** 1.3
+**Last Updated:** December 27, 2025
 **Target Audience:** Senior Engineers, System Architects, New Maintainers
 
 ---
@@ -35,46 +35,46 @@ The core execution pattern follows a **registry-driven event loop** where the `S
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant SimEngine as SimulationEngine
-    participant EventSched as EventScheduler
+    participant CLI as run_integrated_simulation.py
+    participant Loader as ConfigLoader
+    participant Builder as PlantGraphBuilder
     participant Registry as ComponentRegistry
+    participant Strategy as HybridArbitrageEngineStrategy
+    participant Engine as SimulationEngine
     participant Components as Component[]
-    participant FlowTracker
-    participant StateManager
+    participant FlowNet as FlowNetwork
 
-    User->>SimEngine: run(start_hour=0, end_hour=8760)
-    SimEngine->>Registry: initialize_all(dt=0.0167)
+    CLI->>Loader: load_context(scenarios_dir)
+    Loader-->>CLI: SimulationContext
+    CLI->>Builder: build(context)
+    Builder-->>CLI: components dict
+    CLI->>Registry: register(cid, comp) for each
+    CLI->>Strategy: HybridArbitrageEngineStrategy()
+    CLI->>Engine: SimulationEngine(registry, config, dispatch_strategy)
+    CLI->>Engine: initialize()
+    Engine->>Registry: initialize_all(dt=0.0167)
     Registry->>Components: initialize(dt, registry)
-    Components-->>Registry: ✓ Initialized
+    CLI->>Engine: set_dispatch_data(prices, wind)
+    CLI->>Engine: initialize_dispatch_strategy(context, total_steps)
+    CLI->>Engine: run(end_hour=hours)
 
-    loop Every Minute (t = 0..8760)
-        SimEngine->>EventSched: process_events(t)
-        
-        SimEngine->>Registry: step_all(t)
-        Registry->>Components: step(t)
-        Components->>Components: Internal Physics & Logic
-        Components-->>Registry: ✓ Timestep complete
-        
-        SimEngine->>FlowTracker: record_flows(t)
-        SimEngine->>Monitoring: collect_metrics(t)
-        
-        alt Checkpoint Interval (e.g., Daily)
-            SimEngine->>Registry: get_all_states()
-            Registry->>Components: get_state()
-            Components-->>Registry: Deep State Dicts
-            SimEngine->>StateManager: save_checkpoint(t, state)
-        end
+    loop Every Minute (t = 0..end_hour*60)
+        Engine->>Strategy: decide_and_apply(t, prices, wind)
+        Strategy->>Components: receive_input(power_kw)
+        Engine->>Components: step(t) [causal order]
+        Engine->>FlowNet: execute_flows(t)
+        Engine->>Strategy: record_post_step()
     end
 
-    SimEngine-->>User: Simulation complete
+    Engine-->>CLI: results dict
+    CLI->>CLI: generate_graphs(history)
 ```
 
 ---
 
 ## Layered Architecture (6 Layers)
 
-The system is organized into **six distinct layers**, plus a set of **Advanced Capabilities** that cut across layers.
+The system is organized into **six distinct layers**.
 
 ### Layer 1: Core Foundation
 **Purpose:** Establish standardized interfaces and shared abstractions.
@@ -111,22 +111,28 @@ The system is organized into **six distinct layers**, plus a set of **Advanced C
 
 ### Layer 5: Simulation Engine
 **Purpose:** Execution and monitoring.
--   **`SimulationEngine`:** Main loop and event scheduling.
--   **`Integrated Dispatch`:** Replaces legacy orchestration with a high-performance control loop[file:8][file:9].
+-   **`SimulationEngine`:** Main loop and event scheduling (`simulation/engine.py`).
+-   **`Integrated Dispatch`:** Replaces legacy orchestration with a high-performance control loop.
     -   **`dispatch.py`:** Pure logic for power allocation (Grid vs Electrolyzer vs Sales).
-    -   **`engine_dispatch.py`:** Binds logic to the engine with **pre-allocated NumPy arrays** for history.
+    -   **`HybridArbitrageEngineStrategy`:** Binds logic to the engine with **pre-allocated NumPy arrays** for history.
     -   **Pattern:** Separation of *Intention* (Dispatch sets inputs) vs *Outcome* (Physics determines outputs).
 -   **`EventScheduler`:** Time-based and recurring event management (maintenance, price updates).
 -   **`StateManager`:** Checkpoint persistence (JSON/Pickle).
 -   **`MonitoringSystem`:** Real-time metrics.
--   **`FlowTracker`:** Topology-aware flow tracking for Sankey diagrams.
--   **`MetricsCollector`:** Centralized data gathering for the visualization system.
+-   **`FlowNetwork`:** Topology-aware flow routing between components.
+-   **`FlowTracker`:** Stream tracking for Sankey diagrams.
 
-### Layer 6: User Interface
-**Purpose:** Visual configuration and interaction.
+### Layer 6: User Interface & Reporting
+**Purpose:** Visual configuration, interaction, and output generation.
 -   **`PlantEditorWindow`:** Main GUI entry point (PySide6).
 -   **`NodeEditor`:** Visual programming interface for connecting components.
--   **`GraphGenerator`:** Post-simulation reporting engine.
+-   **`reporting/`:** Post-simulation reporting module:
+    -   `markdown_report.py`: Markdown report generator.
+    -   `stream_table.py`: Stream summary tables.
+-   **`visualization/`:** Graph and dashboard generation:
+    -   `static_graphs.py`: Matplotlib graph functions.
+    -   `graph_orchestrator.py`: Config-driven graph generation.
+    -   `dashboard_generator.py`: Interactive HTML reports.
 
 ---
 
@@ -135,13 +141,13 @@ The system is organized into **six distinct layers**, plus a set of **Advanced C
 The system employs a **Split-Layer Control Architecture** to manage plant dispatch and power arbitration. This design separates economic decision-making from physical execution, enabling high-frequency optimization without coupling physics to control logic.
 
 ### 1. Architecture Overview
-The control system replaces the legacy `Orchestrator` with a two-part implementation:
+The control system replaces the legacy `Orchestrator` with a dispatch-driven implementation:
 
-*   **Logic Layer (`control/dispatch.py`)**: Pure Python classes (e.g., `ReferenceHybridStrategy`) that determine *intent*. They process market signals (price, wind availability) and output power setpoints (MW to SOEC, MW to PEM, MW to Grid). This layer is stateless regarding physics but stateful regarding control decisions (e.g., hysteresis, arbitrage mode).
-*   **Binding Layer (`control/engine_dispatch.py`)**: The `HybridArbitrageEngineStrategy` binds the logic to the `SimulationEngine`. It handles:
-    *   **Pre-allocation**: Creates NumPy arrays for the entire simulation duration (8760 hours) at initialization, providing 10-50x speedup over dynamic lists.
+*   **Logic Layer (`control/dispatch.py`)**: Pure Python classes (e.g., `ReferenceHybridStrategy`, `SoecOnlyStrategy`) that determine *intent*. They process market signals (price, wind availability) and output power setpoints (MW to SOEC, MW to PEM, MW to Grid). This layer is stateless regarding physics but stateful regarding control decisions (e.g., hysteresis, arbitrage mode).
+*   **Engine Integration (`HybridArbitrageEngineStrategy`)**: Imported in `run_integrated_simulation.py`, this class binds the dispatch logic to the `SimulationEngine`. It handles:
+    *   **Pre-allocation**: Creates NumPy arrays for the entire simulation duration at initialization, providing 10-50x speedup over dynamic lists.
     *   **Application**: Injects setpoints into standard components via `receive_input()` before the physics step.
-    *   **Recording**: collecting *actual* outcomes (real power consumed, H2 produced) after the physics step.
+    *   **Recording**: Collects *actual* outcomes (real power consumed, H₂ produced) after the physics step.
 
 ### 2. Execution Cycle
 The `SimulationEngine` executes the control loop in three precise phases per timestep:
@@ -184,39 +190,53 @@ Understanding the project layout helps you navigate quickly to the right locatio
 
 ```
 h2_plant/
-├── components/           # Layer 3: All simulation entities
-│   ├── electrolysis/     #   PEM, SOEC electrolyzers
-│   ├── storage/          #   Tank arrays, oxygen buffers
+├── components/           # Layer 3: All simulation entities (20 subdirectories)
+│   ├── balance_of_plant/ #   Balance-of-plant utilities
+│   ├── carbon/           #   CO₂ capture and storage
 │   ├── compression/      #   Multi-stage compressors
-│   ├── separation/       #   PSA, TSA, Coalescer, Knock-out drums
-│   ├── thermal/          #   Chillers, heat exchangers
-│   ├── water/            #   Water treatment, pumps, tanks
-│   ├── mixing/           #   Gas mixers
-│   ├── carbon/           #   CO2 capture and storage
-│   ├── external/         #   External sources (biogas, heat)
-│   └── utility/          #   Price tracker, demand scheduler
+│   ├── control/          #   Component-level control (valves)
+│   ├── cooling/          #   Dry coolers
+│   ├── coordination/     #   Wind coordination
+│   ├── electrolysis/     #   PEM, SOEC electrolyzers
+│   ├── environment/      #   Environment manager
+│   ├── external/         #   External sources (biogas, heat, O₂)
+│   ├── logistics/        #   Consumer, logistics manager
+│   ├── mixing/           #   Gas/water mixers
+│   ├── power/            #   Rectifiers, power components
+│   ├── purification/     #   Deoxo reactor
+│   ├── reforming/        #   ATR, WGS reactors
+│   ├── separation/       #   PSA, TSA, Coalescer, KOD, Cyclone
+│   ├── storage/          #   Tank arrays, oxygen buffers
+│   ├── thermal/          #   Chillers, heat exchangers, boilers
+│   ├── utility/          #   Price tracker, demand scheduler
+│   └── water/            #   Water treatment, pumps, tanks
 │
-├── control/              # Layer 5: Dispatch logic
-│   ├── dispatch.py       #   Pure control strategies (Intent)
-│   └── engine_dispatch.py#   Engine binding with NumPy arrays (Outcome)
+├── control/              # Dispatch logic
+│   └── dispatch.py       #   Pure control strategies (Intent): ReferenceHybridStrategy, SoecOnlyStrategy
 │
 ├── core/                 # Layer 1: Foundation
 │   ├── component.py      #   Component ABC
+│   ├── component_ids.py  #   ComponentID enum
 │   ├── component_registry.py  #   Central registry
+│   ├── composite_component.py #   Base for nested components
+│   ├── graph_builder.py  #   PlantGraphBuilder - topology to components
 │   ├── stream.py         #   Stream dataclass for flow
 │   ├── constants.py      #   Physical constants
-│   └── enums.py          #   State enumerations
+│   ├── enums.py          #   State enumerations
+│   ├── exceptions.py     #   Custom exceptions
+│   └── types.py          #   Type definitions
 │
 ├── simulation/           # Layer 5: Engine and infrastructure
 │   ├── engine.py         #   SimulationEngine main loop
 │   ├── event_scheduler.py#   Time-based events
 │   ├── state_manager.py  #   Checkpoint persistence
 │   ├── flow_network.py   #   Topology-aware flow routing
-│   └── monitoring.py     #   Real-time metrics collection
+│   ├── flow_tracker.py   #   Stream tracking for Sankey diagrams
+│   ├── monitoring.py     #   Real-time metrics collection
+│   └── runner.py         #   Simulation runner utilities
 │
 ├── optimization/         # Layer 2: Performance
 │   ├── lut_manager.py    #   Lookup tables for thermodynamics
-│   ├── numba_ops.py      #   JIT-compiled hot paths
 │   └── coolprop_lut.py   #   CoolProp wrapper with caching
 │
 ├── pathways/             # Layer 4: Orchestration strategies
@@ -225,22 +245,41 @@ h2_plant/
 │   └── allocation_strategies.py     #   Demand splitting logic
 │
 ├── config/               # Configuration files
-│   ├── plant_config.py   #   Pydantic models for validation
-│   ├── constants_physics.py  #   Physical constants (SI units)
-│   └── simulation_config.yaml  #   Default simulation settings
+│   ├── loader.py         #   ConfigLoader - YAML to SimulationContext
+│   ├── models.py         #   Pydantic models (SimulationContext, ComponentNode)
+│   ├── plant_config.py   #   ConnectionConfig, SimulationConfig
+│   └── constants_physics.py  #   Physical constants (SI units)
+│
+├── reporting/            # Post-simulation reporting
+│   ├── markdown_report.py    #   Markdown report generator
+│   ├── report_generator.py   #   Detailed report engine
+│   └── stream_table.py       #   Stream summary tables
+│
+├── visualization/        # Graphs and dashboards
+│   ├── static_graphs.py      #   Matplotlib graph functions
+│   ├── graph_orchestrator.py #   Config-driven graph generation
+│   ├── graph_catalog.py      #   Graph definitions catalogue
+│   ├── plotly_graphs.py      #   Interactive Plotly graphs
+│   ├── dashboard_generator.py#   Interactive HTML reports
+│   ├── metrics_collector.py  #   Metrics aggregation
+│   └── graphs/               #   Graph component modules
+│
+├── data/                 # Data loaders and input files
+│   ├── price_loader.py   #   EnergyPriceLoader
+│   └── ATR_model_functions.pkl  #   Pre-fitted ATR models
+│
+├── models/               # Trained models and utilities
+│
+├── utils/                # Utility functions
+│   └── henry_solubility.py  #   Henry's law calculations
 │
 ├── gui/                  # Layer 6: User interface (PySide6)
 │   ├── main_window.py    #   Application entry point
 │   ├── node_editor/      #   Visual component wiring
 │   └── core/             #   Backend-GUI bridge
 │
-├── visualization/        # Post-simulation reporting
-│   └── dashboard_generator.py  #   Interactive HTML reports
-│
-└── data/                 # Input data files
-    ├── prices/           #   Electricity price timeseries
-    ├── wind/             #   Wind availability profiles
-    └── demand/           #   Demand schedules
+├── run_integrated_simulation.py  #   CLI entry point
+└── orchestrator.py       #   Legacy orchestrator (deprecated)
 ```
 
 ---
@@ -257,8 +296,8 @@ h2_plant/
 1.  **Intent changes** → Edit `h2_plant/control/dispatch.py`
     -   Modify `ReferenceHybridStrategy.decide()` for arbitrage logic
     -   Add new strategy by subclassing `DispatchStrategy`
-2.  **Recording changes** → Edit `h2_plant/control/engine_dispatch.py`
-    -   Add fields to `_history` dict in `initialize()`
+2.  **Recording changes** → Edit `HybridArbitrageEngineStrategy` class in `run_integrated_simulation.py`
+    -   Add fields to history dict in strategy initialization
     -   Update `record_post_step()` to capture new metrics
 
 ### "I need to modify the simulation loop"

@@ -122,8 +122,8 @@ sequenceDiagram
 |---------|-------------|
 | **Intent** | Power setpoints calculated by `dispatch.py` based on prices and availability. |
 | **Outcome** | Actual consumption/production after physics constraints (temperature limits, ramp rates). |
-| **Pre-allocation** | `engine_dispatch.py` creates NumPy arrays for entire simulation duration at initialization. |
-| **Arbitrage Threshold** | `P_threshold = P_PPA + (1000/η) × P_H2`. Below threshold, produce H2; above, sell to grid. |
+| **Pre-allocation** | `HybridArbitrageEngineStrategy` creates NumPy arrays for entire simulation duration at initialization. |
+| **Arbitrage Threshold** | `P_threshold = P_PPA + (1000/η) × P_H2`. Below threshold, produce H₂; above, sell to grid. |
 
 ---
 
@@ -192,10 +192,10 @@ flowchart LR
 | **SimulationEngine** | Main loop, timestep management | `simulation/engine.py` |
 | **ComponentRegistry** | Central component directory | `core/component_registry.py` |
 | **DispatchStrategy** | Power allocation logic (Intent) | `control/dispatch.py` |
-| **HybridArbitrageEngineStrategy** | Engine binding (Outcome recording) | `control/engine_dispatch.py` |
+| **HybridArbitrageEngineStrategy** | Engine binding (Outcome recording) | Imported in `run_integrated_simulation.py` |
 | **EventScheduler** | Time-based event injection | `simulation/event_scheduler.py` |
 | **MonitoringSystem** | Real-time metrics collection | `simulation/monitoring.py` |
-| **MetricsCollector** | Visualization data pipeline | `visualization/metrics_collector.py` |
+| **FlowNetwork** | Topology-aware flow routing | `simulation/flow_network.py` |
 | **StateManager** | Checkpoint persistence | `simulation/state_manager.py` |
 
 ---
@@ -210,13 +210,14 @@ The Integrated Control Architecture achieves 10-50x speedup through:
 4. **Numba JIT**: Hot paths (PFR solver, flash equilibrium) compiled to machine code.
 
 ```python
-# Example: Pre-allocation in engine_dispatch.py
-def initialize(self, dt, registry):
-    n_steps = int(8760 * 60)  # 1-minute resolution for 1 year
+# Example: Pre-allocation in HybridArbitrageEngineStrategy
+def initialize(self, registry, context, total_steps):
+    # Pre-allocate arrays for entire simulation duration
     self._history = {
-        'pem_power_kw': np.zeros(n_steps, dtype=np.float32),
-        'soec_power_kw': np.zeros(n_steps, dtype=np.float32),
-        'h2_produced_kg': np.zeros(n_steps, dtype=np.float32),
+        'minute': np.zeros(total_steps, dtype=np.int32),
+        'P_soec_actual': np.zeros(total_steps, dtype=np.float32),
+        'H2_soec_kg': np.zeros(total_steps, dtype=np.float32),
+        'spot_price': np.zeros(total_steps, dtype=np.float32),
     }
 ```
 

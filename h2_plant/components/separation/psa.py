@@ -100,6 +100,9 @@ class PSA(Component):
         # Cycle tracking
         self.cycle_position: float = 0.0
         self.active_beds: int = num_beds // 2
+        
+        # H2 Recovery Tracking
+        self._last_h2_in_kg_h: float = 0.0
 
     def initialize(self, dt: float, registry: Any) -> None:
         """
@@ -436,6 +439,7 @@ class PSA(Component):
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """
         Accept input at specified port.
+        Also tracks H2 mass flow entering for recovery balance.
 
         Args:
             port_name (str): Target port ('gas_in' or 'electricity_in').
@@ -447,6 +451,9 @@ class PSA(Component):
         """
         if port_name == "gas_in" and isinstance(value, Stream):
             self.inlet_stream = value
+            # Track inlet H2 mass for recovery balance
+            y_h2 = value.composition.get('H2', 0.0)
+            self._last_h2_in_kg_h = value.mass_flow_kg_h * y_h2
             return value.mass_flow_kg_h
         elif port_name == "electricity_in" and isinstance(value, (int, float)):
             return min(value, self.power_consumption_kw)
@@ -489,7 +496,19 @@ class PSA(Component):
                 - tail_gas_flow_kg_h (float): Tail gas rate (kg/h).
                 - cycle_position (float): Current cycle phase (0-1).
                 - power_consumption_kw (float): Electrical power (kW).
+                - h2_in_kg_h (float): H2 mass entering (kg/h).
+                - h2_product_kg_h (float): H2 mass in product (kg/h).
+                - h2_tail_loss_kg_h (float): H2 mass lost to tail gas (kg/h).
+                - h2_recovery_actual (float): Actual H2 recovery fraction (0-1).
         """
+        # Calculate H2 loss to tail gas
+        h2_loss = 0.0
+        h2_product = 0.0
+        if self.tail_gas_outlet:
+            h2_loss = self.tail_gas_outlet.mass_flow_kg_h * self.tail_gas_outlet.composition.get('H2', 0.0)
+        if self.product_outlet:
+            h2_product = self.product_outlet.mass_flow_kg_h * self.product_outlet.composition.get('H2', 0.0)
+        
         return {
             **super().get_state(),
             'component_id': self.component_id,
@@ -497,5 +516,11 @@ class PSA(Component):
             'tail_gas_flow_kg_h': self.tail_gas_outlet.mass_flow_kg_h,
             'cycle_position': self.cycle_position,
             'power_consumption_kw': self.power_consumption_kw,
-            'outlet_o2_ppm_mol': (self.product_outlet.get_total_mole_frac('O2') * 1e6) if self.product_outlet else 0.0
+            'outlet_o2_ppm_mol': (self.product_outlet.get_total_mole_frac('O2') * 1e6) if self.product_outlet else 0.0,
+            
+            # H2 Recovery Tracking
+            'h2_in_kg_h': self._last_h2_in_kg_h,
+            'h2_product_kg_h': h2_product,
+            'h2_tail_loss_kg_h': h2_loss,
+            'h2_recovery_actual': (1.0 - h2_loss / self._last_h2_in_kg_h) if self._last_h2_in_kg_h > 0 else 0.0
         }

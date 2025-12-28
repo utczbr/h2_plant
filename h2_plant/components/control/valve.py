@@ -5,32 +5,39 @@ This module implements an isenthalpic throttling valve for pressure reduction
 in process streams. The valve models real-gas expansion behavior, correctly
 capturing the Joule-Thomson effect for hydrogen.
 
-Thermodynamic Principles:
-    - **Isoenthalpic Expansion**: Throttling is an irreversible process where
-      enthalpy is conserved (H_in = H_out). No work is extracted and heat
-      transfer is negligible for rapid expansion.
-    - **Joule-Thomson Effect**: Real gases experience temperature change during
-      throttling. The direction depends on whether the gas is above or below
-      its inversion temperature.
-    - **Hydrogen Behavior**: H₂ has an inversion temperature of ~202 K. Above
-      this (typical operating conditions), the Joule-Thomson coefficient is
-      negative: expansion causes HEATING, not cooling.
+Thermodynamic Principles
+------------------------
+1.  **Isoenthalpic Expansion**:
+    Throttling is modeled as an adiabatic, irreversible process where enthalpy is conserved despite 
+    pressure loss and entropy generation.
+    $$ H_{in}(P_{in}, T_{in}) = H_{out}(P_{out}, T_{out}) $$
 
-Architecture:
-    Implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Connects to LUTManager for thermodynamic property lookups.
-    - `step()`: Calculates outlet temperature via isoenthalpic flash.
-    - `get_state()`: Reports pressure drop and temperature change.
+2.  **Joule-Thomson Effect**:
+    Real gases experience a temperature change characterized by the Joule-Thomson coefficient 
+    $\mu_{JT} = (\partial T / \partial P)_H$.
+    $$ \Delta T \approx \int_{P_{in}}^{P_{out}} \mu_{JT} \, dP $$
 
-Model Approach:
-    The outlet temperature is found by solving H(P_out, T_out) = H_in using
-    bisection on temperature. This captures real-gas non-idealities including
-    the anomalous heating behavior of hydrogen at room temperature.
+3.  **Hydrogen Inversion**:
+    Hydrogen has an inversion temperature of approx. 202 K. At typical operating temperatures ($> 202$ K), 
+    $\mu_{JT} < 0$, meaning expansion ($dP < 0$) causes **heating** ($dT > 0$).
 
-References:
-    - Smith, Van Ness & Abbott (2005). Introduction to Chemical Engineering
-      Thermodynamics, 7th Ed., Section 3.3.
-    - NIST Chemistry WebBook: Hydrogen thermophysical properties.
+Architecture
+------------
+*   **Component Lifecycle Contract (Layer 1)**:
+    *   `initialize()`: Establishes connection to `LUTManager` (Layer 2).
+    *   `step()`: Executes the isoenthalpic flash solve.
+    *   `get_state()`: Reports thermodynamic performance ($\Delta T$, $\Delta P$).
+
+Model Approach
+--------------
+The outlet temperature is determined by numerically solving the energy conservation equation 
+$H(P_{out}, T_{out}) - H_{in} = 0$ using the Bisection Method. This captures all real-gas 
+non-idealities encoded in the Equation of State.
+
+References
+----------
+*   Smith, Van Ness & Abbott (2005). Introduction to Chemical Engineering Thermodynamics.
+*   NIST Chemistry WebBook: Hydrogen thermophysical properties.
 """
 
 from typing import Any, Dict, Optional
@@ -48,32 +55,22 @@ class ThrottlingValve(Component):
     """
     Isenthalpic throttling valve for pressure reduction.
 
-    Models irreversible expansion through a valve or restriction, where
-    enthalpy is conserved but entropy increases. Uses real-gas properties
-    from LUTManager to calculate the temperature change accurately.
+    Models irreversible expansion through a restriction. Enthalpy is conserved ($H_{in} = H_{out}$) 
+    while entropy increases ($S_{out} > S_{in}$).
 
-    This component fulfills the Component Lifecycle Contract (Layer 1):
-        - `initialize()`: Acquires reference to LUTManager for enthalpy lookups.
-        - `step()`: Solves isoenthalpic flash to determine outlet temperature.
-        - `get_state()`: Returns pressure drop and temperature change metrics.
+    **Key Physical Behavior**:
+    For hydrogen at standard conditions ($T > T_{inv} \approx 202 \text{ K}$), the Joule-Thomson 
+    coefficient is negative. A pressure drop from 40 bar to 1 bar at 300 K results in a temperature 
+    **increase** of approximately 5-10 K.
 
-    Key Physical Behavior:
-        For hydrogen above its inversion temperature (~202 K), throttling
-        causes heating rather than cooling. At 300 K and 40 bar → 1 bar,
-        expect a temperature rise of approximately 5-10 K.
+    **Architecture**:
+    *   **Layer 1**: Standard component interface for flow and state.
+    *   **Layer 2**: Direct `LUTManager` integration for high-speed property inversion.
 
     Attributes:
-        P_out_pa (float): Target outlet pressure in Pa.
-        fluid (str): Fluid species identifier for property lookups.
-        delta_T (float): Temperature change across valve (K), positive = heating.
-
-    Example:
-        >>> valve = ThrottlingValve({'P_out_pa': 101325.0, 'fluid': 'H2'})
-        >>> valve.initialize(dt=1/60, registry=registry)
-        >>> valve.receive_input('inlet', high_pressure_stream, 'gas')
-        >>> valve.step(t=0.0)
-        >>> outlet = valve.get_output('outlet')
-        >>> print(f"ΔT = {valve.delta_T:.2f} K")
+        P_out_pa (float): Target outlet pressure [Pa].
+        fluid (str): Fluid species identifier for EOS lookup (e.g., 'H2').
+        delta_T (float): Temperature change across valve [K]. Positive indicates heating.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -102,17 +99,14 @@ class ThrottlingValve(Component):
         """
         Prepare the valve for simulation execution.
 
-        Fulfills the Component Lifecycle Contract initialization phase by
-        acquiring a reference to the LUTManager for thermodynamic property
-        lookups during step execution.
+        **Lifecycle Contract**:
+        Acquires reference to `LUTManager` (Layer 2 service) to enable real-gas property 
+        lookups during the `step()` phase. This dependency injection is critical for 
+        accurate Joule-Thomson modeling.
 
         Args:
-            dt (float): Simulation timestep in hours.
+            dt (float): Simulation timestep [hours].
             registry (ComponentRegistry): Central registry for component access.
-
-        Note:
-            If LUTManager is unavailable, the valve falls back to ideal gas
-            behavior (constant temperature throttling).
         """
         super().initialize(dt, registry)
         if registry.has(ComponentID.LUT_MANAGER.value):
@@ -145,16 +139,15 @@ class ThrottlingValve(Component):
         """
         Execute one simulation timestep.
 
-        Performs isoenthalpic expansion calculation:
-        1. If outlet pressure ≥ inlet pressure, no throttling occurs (pass-through).
-        2. Otherwise, inlet enthalpy is computed from LUT.
-        3. Outlet temperature is found by bisection: solve H(P_out, T) = H_in.
-
-        The resulting temperature change reflects real-gas behavior, including
-        the Joule-Thomson heating effect for hydrogen above inversion temperature.
+        **Physics Logic**:
+        1.  **Check Pass-Through**: If $P_{target} \ge P_{in}$, no expansion occurs.
+        2.  **State Determination**:
+            -   Lookup Inlet Enthalpy: $H_{in} = H(P_{in}, T_{in})$ via LUT.
+            -   Solve Flash: Find $T_{out}$ such that $H(P_{target}, T_{out}) = H_{in}$.
+        3.  **Result**: Updates `outlet_stream` with new state $(P_{target}, T_{out})$.
 
         Args:
-            t (float): Current simulation time in hours.
+            t (float): Current simulation time [hours].
         """
         super().step(t)
 
@@ -256,21 +249,24 @@ class ThrottlingValve(Component):
 
     def _solve_T_isoenthalpic(self, P_target_pa: float, h_target: float) -> float:
         """
-        Solve for temperature at constant enthalpy using bisection.
+        Solve for temperature at constant enthalpy using Bisection.
 
-        Finds T such that H(P_target, T) = h_target. Uses bisection method
-        which is robust for monotonic enthalpy-temperature relationships.
+        **Root Finding Problem**:
+        Find $T$ such that $f(T) = H(P_{target}, T) - h_{target} = 0$.
+
+        **Algorithm (Bisection)**:
+        1.  **Bracket**: Establish $[T_{low}, T_{high}]$ such that $f(T_{low}) \cdot f(T_{high}) < 0$. 
+            Expands bounds if necessary (robustness).
+        2.  **Iterate**: $T_{mid} = (T_{low} + T_{high}) / 2$.
+        3.  **Update**: Check sign of $f(T_{mid})$ and contract interval.
+        4.  **Converge**: Tolerance $\epsilon_H = 1.0 \text{ J/kg}$ or max iterations.
 
         Args:
-            P_target_pa (float): Target pressure in Pa.
-            h_target (float): Target enthalpy in J/kg (conserved from inlet).
+            P_target_pa (float): Target pressure [Pa].
+            h_target (float): Conserved enthalpy [J/kg].
 
         Returns:
-            float: Solution temperature in K.
-
-        Note:
-            Convergence tolerance is 1 J/kg, adequate for engineering accuracy.
-            Expands search bounds if initial guess brackets fail.
+            float: Solution temperature [K].
         """
         T_guess = self.inlet_stream.temperature_k
         T_low = T_guess - 50.0

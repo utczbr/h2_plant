@@ -27,9 +27,12 @@ nodes:
       gas_species: "O2"      # Requested
     connections:
       - source_port: "gas_outlet"
-        target_name: "DryCooler1"
         target_port: "fluid_in"
         resource_type: "gas"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Collector"
+        target_port: "inlet_0"
+        resource_type: "water"
 
   # === 2. DryCooler1 (DryCooler) ===
   # "Initial air-cooled cooling of two-phase stream"
@@ -68,9 +71,12 @@ nodes:
       gas_species: "O2"      # Requested
     connections:
       - source_port: "gas_outlet"
-        target_name: "Coalescer1"
         target_port: "inlet"
         resource_type: "gas"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Collector"
+        target_port: "inlet_1"
+        resource_type: "water"
 
   # === 5. Coalescer1 (Coalescer) ===
   # "Final mist eliminator"
@@ -79,4 +85,28 @@ nodes:
     params:
       component_id: "Coalescer1"
       gas_type: "O2"         # Important for properties
+    connections:
+      - source_port: "outlet"
+        target_name: "Valve1"
+        target_port: "inlet"
+        resource_type: "gas"
+      - source_port: "drain"
+        target_name: "Drain_Collector"
+        target_port: "inlet_2"
+        resource_type: "water"
+
+  # === 6. Valve (Throttling to Atmosphere/Storage) ===
+  - id: "Valve1"
+    type: "Valve"
+    params:
+      P_out_pa: 101325.0   # Vent to atmosphere
+      fluid: "O2"
+    connections: []
+
+  # === 7. Drain Collector (Water Recovery) ===
+  - id: "Drain_Collector"
+    type: "WaterMixer"
+    params:
+      outlet_pressure_kpa: 101.325
+      max_inlet_streams: 5
     connections: []

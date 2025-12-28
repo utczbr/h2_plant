@@ -26,6 +26,35 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def log_graph_errors(func):
+    """
+    Decorator to wrap graph generation functions with error logging.
+    
+    Catches exceptions during graph generation and logs them instead of
+    failing silently. Also logs entry for debugging data availability.
+    """
+    from functools import wraps
+    
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        func_name = func.__name__
+        try:
+            logger.debug(f"Generating graph: {func_name}")
+            result = func(*args, **kwargs)
+            logger.debug(f"Graph generated successfully: {func_name}")
+            return result
+        except KeyError as e:
+            logger.warning(f"[{func_name}] Missing data column: {e}")
+            raise
+        except ValueError as e:
+            logger.warning(f"[{func_name}] Value error: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[{func_name}] Failed to generate graph: {e}", exc_info=True)
+            raise
+    return wrapper
+
+
 def _check_dependencies():
     """Check if required dependencies are available."""
     if not PLOTLY_AVAILABLE:
@@ -34,6 +63,7 @@ def _check_dependencies():
         raise ImportError("NumPy is required. Install with: pip install numpy")
 
 
+@log_graph_errors
 def plot_pem_production_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     Plot PEM H2 production rate over time.
@@ -72,6 +102,7 @@ def plot_pem_production_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_soec_production_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot SOEC H2 production rate over time."""
     _check_dependencies()
@@ -101,6 +132,7 @@ def plot_soec_production_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_total_production_stacked(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot stacked area chart showing PEM + SOEC contributions."""
     _check_dependencies()
@@ -143,6 +175,7 @@ def plot_total_production_stacked(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_cumulative_production(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot cumulative H2 production from both systems."""
     _check_dependencies()
@@ -191,6 +224,7 @@ def plot_cumulative_production(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_pem_voltage_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot PEM cell voltage over time."""
     _check_dependencies()
@@ -225,6 +259,7 @@ def plot_pem_voltage_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_pem_efficiency_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot PEM system efficiency over time."""
     _check_dependencies()
@@ -253,6 +288,7 @@ def plot_pem_efficiency_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_energy_price_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot energy price over time."""
     _check_dependencies()
@@ -285,6 +321,7 @@ def plot_energy_price_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_dispatch_strategy(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot dispatch strategy as stacked area chart."""
     _check_dependencies()
@@ -293,6 +330,10 @@ def plot_dispatch_strategy(data: Dict[str, Any], **kwargs) -> go.Figure:
     pem_power = data['coordinator'].get('pem_setpoint_mw', [])
     soec_power = data['coordinator'].get('soec_setpoint_mw', [])
     sell_power = data['coordinator'].get('sell_power_mw', [])
+    
+    # Get auxiliary power (convert kW to MW for consistency)
+    aux_power_kw = data.get('auxiliary_power_kw', [])
+    aux_power_mw = [p / 1000.0 for p in aux_power_kw] if aux_power_kw else [0] * len(timestamps)
     
     fig = go.Figure()
     
@@ -318,6 +359,16 @@ def plot_dispatch_strategy(data: Dict[str, Any], **kwargs) -> go.Figure:
     
     fig.add_trace(go.Scatter(
         x=timestamps,
+        y=aux_power_mw,
+        mode='lines',
+        name='Auxiliary',
+        stackgroup='one',
+        line=dict(color='#9467bd', width=0.5),
+        fillcolor='rgba(148, 103, 189, 0.7)'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=timestamps,
         y=sell_power,
         mode='lines',
         name='Grid Export',
@@ -337,6 +388,7 @@ def plot_dispatch_strategy(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_power_breakdown_pie(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot power consumption breakdown as pie chart."""
     _check_dependencies()
@@ -360,6 +412,7 @@ def plot_power_breakdown_pie(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_soec_modules_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot number of active SOEC modules over time."""
     _check_dependencies()
@@ -390,6 +443,7 @@ def plot_soec_modules_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_tank_storage_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot tank storage levels over time (placeholder)."""
     _check_dependencies()
@@ -450,6 +504,7 @@ def plot_storage_fatigue_cycling_3d(data: Dict[str, Any], **kwargs) -> go.Figure
     return fig
 
 
+@log_graph_errors
 def plot_ramp_rate_stress_distribution(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     Plot distribution of ramp rates (Stress Analysis).
@@ -477,6 +532,7 @@ def plot_ramp_rate_stress_distribution(data: Dict[str, Any], **kwargs) -> go.Fig
     return fig
 
 
+@log_graph_errors
 def plot_wind_utilization_duration_curve(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     Plot wind utilization duration curve (Grid Integration).
@@ -517,6 +573,7 @@ def plot_wind_utilization_duration_curve(data: Dict[str, Any], **kwargs) -> go.F
     return fig
 
 
+@log_graph_errors
 def plot_grid_interaction_phase_portrait(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     Plot phase portrait of Grid Exchange vs Wind Power.
@@ -549,6 +606,7 @@ def plot_grid_interaction_phase_portrait(data: Dict[str, Any], **kwargs) -> go.F
     return fig
 
 
+@log_graph_errors
 def plot_lcoh_waterfall_breakdown(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     Plot LCOH breakdown waterfall chart (Economics).
@@ -582,6 +640,7 @@ def plot_lcoh_waterfall_breakdown(data: Dict[str, Any], **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
 def plot_pem_performance_surface(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     3D Surface: Current Density vs Time vs Voltage.

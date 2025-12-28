@@ -14,6 +14,8 @@ nodes:
 
   # 1. SOEC Cluster
   # -------------------------------------------------------------------------
+  # The h2_out port now outputs the combined Cathode Exhaust (Wet Hydrogen):
+  # H2 (produced) + H2O (unreacted steam) + trace O2 (crossover)
   - id: "SOEC_Cluster"
     type: "SOEC"
     params:
@@ -23,36 +25,28 @@ nodes:
       steam_input_ratio_kg_per_kg_h2: 10.5
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
+      process_step: 10
     connections:
+      # DIRECT CONNECTION: Wet H2 (H2 + H2O + trace O2) goes straight to Heat Recovery
       - source_port: "h2_out"
-        target_name: "Cathode_Mixer"
-        target_port: "inlet_1"
-        resource_type: "stream"
-      - source_port: "steam_out"
-        target_name: "Cathode_Mixer"
-        target_port: "inlet_2"
-        resource_type: "stream"
-
-  # -------------------------------------------------------------------------
-  # 2. Cathode Mixer (Recombines H2 and Steam to simulate Exhaust)
-  # -------------------------------------------------------------------------
-  - id: "Cathode_Mixer"
-    type: "Mixer"
-    params:
-      volume_m3: 5.0
-      continuous_flow: true
-    connections:
-      - source_port: "outlet"
         target_name: "Interchanger_1"
         target_port: "hot_in"
         resource_type: "stream"
+      # Anode side O2
+      - source_port: "o2_out"
+        target_name: "O2_DryCooler"
+        target_port: "fluid_in"
+        resource_type: "stream"
 
-  # 3. Heat Recovery (Interchanger)
+  # NOTE: Cathode_Mixer has been REMOVED. The SOEC now outputs combined exhaust.
+
+  # 2. Heat Recovery (Interchanger)
   - id: "Interchanger_1"
     type: "Interchanger"
     params:
       min_approach_temp_k: 10.0
       target_cold_out_temp_c: 95.0
+      process_step: 20
     connections:
       - source_port: "hot_out"
         target_name: "DryCooler_HX"  # Changed: Now goes to DryCooler first
@@ -63,12 +57,14 @@ nodes:
         target_port: "water_in"
         resource_type: "stream"
 
+
   # 3b. Dry Cooler (Post-Heat Recovery) - Matches legacy "Dry Cooler 1"
   # Cools gas to 90°C to ensure proper condensation before KOD_1
   - id: "DryCooler_HX"
     type: "DryCooler"
     params:
       target_temp_c: 90.0  # Legacy target: T_DRY_COOLER_OUT_H2_C = 90°C
+      process_step: 30
     connections:
       - source_port: "fluid_out"
         target_name: "KOD_1"
@@ -84,6 +80,7 @@ nodes:
     params:
       diameter_m: 0.8
       delta_p_bar: 0.05
+      process_step: 40
     connections:
       - source_port: "gas_outlet"
         target_name: "Chiller_1"
@@ -99,6 +96,7 @@ nodes:
     params:
       target_temp_k: 277.15 # 4°C
       cooling_capacity_kw: 200.0
+      process_step: 50
     connections:
       - source_port: "fluid_out"
         target_name: "KOD_2"
@@ -110,6 +108,7 @@ nodes:
     params:
       diameter_m: 0.6
       delta_p_bar: 0.05
+      process_step: 60
     connections:
       - source_port: "gas_outlet"
         target_name: "Cyclone_1"
@@ -126,6 +125,7 @@ nodes:
       element_diameter_mm: 50.0  # High efficiency separation of fine mist
       vane_angle_deg: 45.0
       target_velocity_ms: 22.0   # Optimized for fine droplets
+      process_step: 70
     connections:
       - source_port: "outlet"
         target_name: "Compressor_S1"
@@ -150,6 +150,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       outlet_pressure_bar: 200.0
+      process_step: 100
     connections:
       - source_port: "outlet"
         target_name: "Intercooler_1"
@@ -160,6 +161,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      process_step: 101
     connections:
       - source_port: "fluid_out"
         target_name: "Compressor_S2"
@@ -173,6 +175,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       outlet_pressure_bar: 200.0
+      process_step: 110
     connections:
       - source_port: "outlet"
         target_name: "Intercooler_2"
@@ -183,6 +186,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      process_step: 111
     connections:
       - source_port: "fluid_out"
         target_name: "Cyclone_2"
@@ -195,6 +199,7 @@ nodes:
       element_diameter_mm: 50.0
       vane_angle_deg: 45.0
       target_velocity_ms: 22.0
+      process_step: 112
     connections:
       - source_port: "outlet"
         target_name: "Compressor_S3"
@@ -212,6 +217,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       outlet_pressure_bar: 200.0
+      process_step: 120
     connections:
       - source_port: "outlet"
         target_name: "Intercooler_3"
@@ -222,6 +228,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      process_step: 121
     connections:
       - source_port: "fluid_out"
         target_name: "Cyclone_3"
@@ -234,6 +241,7 @@ nodes:
       element_diameter_mm: 50.0
       vane_angle_deg: 45.0
       target_velocity_ms: 22.0
+      process_step: 122
     connections:
       - source_port: "outlet"
         target_name: "Compressor_S4"
@@ -251,6 +259,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       outlet_pressure_bar: 200.0
+      process_step: 130
     connections:
       - source_port: "outlet"
         target_name: "Intercooler_4"
@@ -261,6 +270,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      process_step: 131
     connections:
       - source_port: "fluid_out"
         target_name: "Cyclone_4"
@@ -273,6 +283,7 @@ nodes:
       element_diameter_mm: 50.0
       vane_angle_deg: 45.0
       target_velocity_ms: 22.0
+      process_step: 132
     connections:
       - source_port: "outlet"
         target_name: "Compressor_S5"
@@ -290,6 +301,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       outlet_pressure_bar: 200.0
+      process_step: 140
     connections:
       - source_port: "outlet"
         target_name: "Intercooler_5"
@@ -300,6 +312,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      process_step: 141
     connections:
       - source_port: "fluid_out"
         target_name: "Cyclone_5"
@@ -312,6 +325,7 @@ nodes:
       element_diameter_mm: 50.0
       vane_angle_deg: 45.0
       target_velocity_ms: 22.0
+      process_step: 142
     connections:
       - source_port: "outlet"
         target_name: "Compressor_S6"
@@ -329,6 +343,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       outlet_pressure_bar: 40.0
+      process_step: 150
     connections:
       - source_port: "outlet"
         target_name: "Intercooler_6"
@@ -339,6 +354,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      process_step: 151
     connections:
       - source_port: "fluid_out"
         target_name: "Deoxo_1"
@@ -353,7 +369,8 @@ nodes:
 
   - id: "Deoxo_1"
     type: "DeoxoReactor"
-    params: {}
+    params:
+      process_step: 200
     connections:
       - source_port: "outlet"
         target_name: "Chiller_2"
@@ -364,6 +381,7 @@ nodes:
     type: "Chiller"
     params:
       target_temp_k: 277.15 # 4°C heavy cooling for condensation
+      process_step: 210
     connections:
       - source_port: "fluid_out"
         target_name: "Coalescer_2"
@@ -374,6 +392,7 @@ nodes:
     type: "Coalescer"
     params:
       d_shell: 0.3  # Post-Deoxo coalescer (high pressure, low liquid load)
+      process_step: 220
     connections:
       - source_port: "outlet"
         target_name: "ElectricBoiler_PSA"
@@ -389,6 +408,7 @@ nodes:
     params:
       max_power_kw: 50.0
       target_temp_c: 40.0 
+      process_step: 230
     connections:
       - source_port: "fluid_out"
         target_name: "PSA_1"
@@ -399,7 +419,89 @@ nodes:
     type: "PSA Unit"
     params:
       purity_target: 0.99995
+      process_step: 300
     connections: []  # Final product outlet
+
+  # =================================================================================
+  # O2 PURIFICATION TRAIN (Anode Side)
+  # Sequence: SOEC(o2_out) -> KOD1 -> DryCooler -> Chiller -> KOD2 -> Coalescer -> Vent
+  # =================================================================================
+
+
+
+  # === 2. O2_DryCooler (DryCooler) ===
+  # "Initial air-cooled cooling"
+  - id: "O2_DryCooler"
+    type: "DryCooler"
+    params:
+      component_id: "O2_DryCooler"
+      process_step: 20
+    connections:
+      - source_port: "fluid_out"
+        target_name: "O2_Chiller"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  # === 3. O2_Chiller (Chiller) ===
+  # "Deep cooling/condensation to ~4°C"
+  - id: "O2_Chiller"
+    type: "Chiller"
+    params:
+      target_temp_k: 277.15  # 4°C
+      cooling_capacity_kw: 200.0 # Increased for O2 flow
+      cop: 4.0
+      pressure_drop_bar: 0.2
+      process_step: 30
+    connections:
+      - source_port: "fluid_out"
+        target_name: "O2_KOD_2"
+        target_port: "gas_inlet"
+        resource_type: "stream"
+
+  # === 4. O2_KOD_2 (KnockOutDrum) ===
+  # "Post-chill water knockout"
+  - id: "O2_KOD_2"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05
+      gas_species: "O2"
+      process_step: 40
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "O2_Coalescer"
+        target_port: "inlet"
+        resource_type: "stream"
+      - source_port: "liquid_drain"
+        target_name: "Drain_Mixer"
+        target_port: "O2_KOD_2"
+        resource_type: "stream"
+
+  # === 5. O2_Coalescer (Coalescer) ===
+  # "Final mist eliminator"
+  - id: "O2_Coalescer"
+    type: "Coalescer"
+    params:
+      component_id: "O2_Coalescer"
+      gas_type: "O2"
+      process_step: 50
+    connections:
+      - source_port: "outlet"
+        target_name: "O2_Vent_Valve"
+        target_port: "inlet"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "Drain_Mixer"
+        target_port: "O2_Coalescer"
+        resource_type: "stream"
+
+  # === 6. O2_Vent_Valve (Valve) ===
+  - id: "O2_Vent_Valve"
+    type: "Valve"
+    params:
+      P_out_pa: 101325.0   # Vent to atmosphere
+      fluid: "O2"
+    connections: []
 
   # =================================================================================
   # WATER RECIRCULATION LOOP
@@ -408,7 +510,7 @@ nodes:
   - id: "Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["KOD_1", "KOD_2", "Cyclone_1", "Cyclone_2", "Cyclone_3", "Cyclone_4", "Cyclone_5", "Coalescer_2"]
+      source_ids: ["KOD_1", "KOD_2", "Cyclone_1", "Cyclone_2", "Cyclone_3", "Cyclone_4", "Cyclone_5", "Coalescer_2", "O2_KOD_2", "O2_Coalescer"]
     connections:
       - source_port: "outlet"
         target_name: "Makeup_Mixer_1"

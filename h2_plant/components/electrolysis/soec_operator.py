@@ -440,8 +440,12 @@ class SOECOperator(Component):
         """
         Retrieve output from a specified port.
 
+        The `h2_out` port now returns the combined **Cathode Exhaust** stream,
+        containing H2 (produced), H2O (unreacted steam), and trace O2 (crossover).
+        This reflects the physical reality of the SOEC cathode.
+
         Args:
-            port_name (str): Port identifier ('h2_out', 'steam_out', or 'o2_out').
+            port_name (str): Port identifier ('h2_out' or 'o2_out').
 
         Returns:
             Stream: Output stream with mass flow, temperature, and composition.
@@ -449,77 +453,91 @@ class SOECOperator(Component):
         Raises:
             ValueError: If port_name is not a valid output port.
         """
-        h2_kg = getattr(self, 'last_step_h2_kg', 0.0)
-        mass_flow_base = h2_kg * (1.0/self.dt) if self.dt > 0 else 0.0
+        h2_kg_total = getattr(self, 'last_step_h2_kg', 0.0)
+        unreacted_steam_kg = getattr(self, 'last_water_output_kg', 0.0)
+
+        # Calculate flow rates (kg/h)
+        h2_flow = h2_kg_total * (1.0 / self.dt) if self.dt > 0 else 0.0
+        steam_flow = unreacted_steam_kg * (1.0 / self.dt) if self.dt > 0 else 0.0
 
         if port_name == 'h2_out':
-            # Crossover Modeling (Molar Basis -> Mass Fraction)
-            # Reference: constants_and_config.py
-            # Y_O2_IN_H2 (Molar) = 0.0002 (200 ppm)
+            # === CATHODE EXHAUST (Wet Hydrogen) ===
+            # Composition: H2 (Produced) + H2O (Unreacted) + O2 (Crossover leak)
+
+            # 1. Determine Mass of Crossover O2
+            # Assumption: Y_O2_IN_H2 (Molar) = 0.0002 (200 ppm) relative to H2
             y_o2_molar = 0.0002
-            y_h2_molar = 1.0 - y_o2_molar
-            
             mw_h2 = 2.016
             mw_o2 = 32.00
-            
-            mass_h2_rel = y_h2_molar * mw_h2
-            mass_o2_rel = y_o2_molar * mw_o2
-            total_mass_rel = mass_h2_rel + mass_o2_rel
-            
-            w_h2 = mass_h2_rel / total_mass_rel
-            w_o2 = mass_o2_rel / total_mass_rel
+
+            # Molar ratio -> Mass ratio for H2/O2 pair
+            mass_ratio_o2_h2 = (y_o2_molar * mw_o2) / ((1.0 - y_o2_molar) * mw_h2)
+            o2_flow = h2_flow * mass_ratio_o2_h2
+
+            # 2. Total Mass Flow
+            total_mass_flow = h2_flow + steam_flow + o2_flow
+
+            # 3. Calculate Mass Fractions
+            if total_mass_flow > 0:
+                w_h2 = h2_flow / total_mass_flow
+                w_h2o = steam_flow / total_mass_flow
+                w_o2 = o2_flow / total_mass_flow
+            else:
+                # Default safety state (Steam purge)
+                w_h2, w_h2o, w_o2 = 0.0, 1.0, 0.0
 
             return Stream(
-                mass_flow_kg_h=mass_flow_base,
-                temperature_k=1073.15, # ~800 °C
+                mass_flow_kg_h=total_mass_flow,
+                temperature_k=1073.15,  # 800 °C
                 pressure_pa=self.out_pressure_pa,
-                composition={'H2': w_h2, 'O2': w_o2},
+                composition={'H2': w_h2, 'H2O': w_h2o, 'O2': w_o2},
+                phase='gas'
+            )
+
+        elif port_name == 'o2_out':
+            # === ANODE EXHAUST (Oxygen) ===
+            from h2_plant.core.constants import ProductionConstants
+
+            # Theoretical pure O2 production (Stoichiometric)
+            o2_pure_flow = h2_flow * ProductionConstants.O2_TO_H2_MASS_RATIO
+
+            # Impurity: H2 leak into O2 (e.g., 4000 ppm molar)
+            y_h2_imp_molar = 0.0040
+            mw_h2 = 2.016
+            mw_o2 = 32.00
+
+            # Calculate Mass of H2 impurity associated with this O2 production
+            mass_ratio_h2_o2 = (y_h2_imp_molar * mw_h2) / ((1.0 - y_h2_imp_molar) * mw_o2)
+
+            h2_leak_flow = o2_pure_flow * mass_ratio_h2_o2
+            total_anode_flow = o2_pure_flow + h2_leak_flow
+
+            if total_anode_flow > 0:
+                w_o2 = o2_pure_flow / total_anode_flow
+                w_h2 = h2_leak_flow / total_anode_flow
+            else:
+                w_o2, w_h2 = 1.0, 0.0
+
+            return Stream(
+                mass_flow_kg_h=total_anode_flow,
+                temperature_k=1073.15,
+                pressure_pa=self.out_pressure_pa,
+                composition={'O2': w_o2, 'H2': w_h2},
                 phase='gas'
             )
 
         elif port_name == 'steam_out':
-            water_kg = getattr(self, 'last_water_output_kg', 0.0)
-            return Stream(
-                mass_flow_kg_h=water_kg * (1.0/self.dt) if self.dt > 0 else 0.0,
-                temperature_k=1073.15,
-                pressure_pa=self.out_pressure_pa, # Pressure balanced with H2
-                composition={'H2O': 1.0},
-                phase='gas'
+            # DEPRECATED: steam_out has been merged into h2_out (Wet Hydrogen).
+            # Return a zero-flow stream with a warning for backward compatibility.
+            import logging
+            logging.getLogger(__name__).warning(
+                "Port 'steam_out' is deprecated. Unreacted steam is now included in 'h2_out'."
             )
-            
-        elif port_name == 'o2_out':
-            # Stoichiometry O2 = 7.94 * H2 (Mass) approx
-            # Precise: 0.5 mol O2 per 1 mol H2
-            # 16 g O2 per 2.016 g H2 = 7.9365...
-            
-            from h2_plant.core.constants import ProductionConstants
-            
-            # Theoretical pure O2 production
-            o2_pure_kg = h2_kg * ProductionConstants.O2_TO_H2_MASS_RATIO
-            
-            # Crossover: 4000 ppm H2 in O2 (Molar)
-            y_h2_imp_molar = 0.0040 
-            y_o2_pure_molar = 1.0 - y_h2_imp_molar
-            
-            mw_h2 = 2.016
-            mw_o2 = 32.00
-            
-            mass_h2_imp = y_h2_imp_molar * mw_h2
-            mass_o2_pure = y_o2_pure_molar * mw_o2
-            
-            # Normalization
-            w_h2_in_o2 = mass_h2_imp / (mass_h2_imp + mass_o2_pure)
-            w_o2_in_o2 = mass_o2_pure / (mass_h2_imp + mass_o2_pure)
-            
-            # Actual mass flow: we produced o2_pure_kg of O2 component.
-            # Total Stream Mass = o2_pure_kg / w_o2_in_o2
-            total_o2_stream_kg = o2_pure_kg / w_o2_in_o2 if w_o2_in_o2 > 0 else 0.0
-            
             return Stream(
-                mass_flow_kg_h=total_o2_stream_kg * (1.0/self.dt) if self.dt > 0 else 0.0,
+                mass_flow_kg_h=0.0,
                 temperature_k=1073.15,
-                pressure_pa=self.out_pressure_pa, # Balanced pressure
-                composition={'O2': w_o2_in_o2, 'H2': w_h2_in_o2},
+                pressure_pa=self.out_pressure_pa,
+                composition={'H2O': 1.0},
                 phase='gas'
             )
 
@@ -534,15 +552,13 @@ class SOECOperator(Component):
             Dict[str, Dict[str, str]]: Port definitions with keys:
                 - power_in: Electrical power from grid/coordinator.
                 - steam_in: High-temperature steam feed.
-                - h2_out: Hydrogen product stream.
-                - steam_out: Unreacted steam recycle.
-                - o2_out: Oxygen product stream (Anode).
+                - h2_out: Cathode exhaust (Wet Hydrogen: H2 + H2O + trace O2).
+                - o2_out: Anode exhaust (Oxygen + trace H2).
         """
         return {
             'power_in': {'type': 'input', 'resource_type': 'electricity', 'units': 'MW'},
             'steam_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
-            'h2_out': {'type': 'output', 'resource_type': 'hydrogen', 'units': 'kg/h'},
-            'steam_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'},
+            'h2_out': {'type': 'output', 'resource_type': 'gas', 'units': 'kg/h'},  # Wet H2
             'o2_out': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'}
         }
 
@@ -574,5 +590,7 @@ class SOECOperator(Component):
         """
         return {
             **super().get_state(),
-            **self.get_status()
+            **self.get_status(),
+            # Expose unreacted steam for external logging (was previously steam_out)
+            'last_water_output_kg': getattr(self, 'last_water_output_kg', 0.0)
         }

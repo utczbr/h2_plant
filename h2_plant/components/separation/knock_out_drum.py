@@ -146,6 +146,11 @@ class KnockOutDrum(Component):
         self._power_consumption_w: float = 0.0
         self._dissolved_gas_kg_h: float = 0.0
         self.total_drain_removed_kg: float = 0.0  # Cumulative drain tracking
+        
+        # Mass Balance Tracking (Input vs Output)
+        self._last_dissolved_gas_in_kg_h: float = 0.0
+        self._last_dissolved_gas_out_kg_h: float = 0.0
+        self._total_liquid_in_kg_h: float = 0.0
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
@@ -258,8 +263,8 @@ class KnockOutDrum(Component):
         Accept an input stream at the specified port.
 
         Stores the incoming Stream object for processing during the next step()
-        call. Only the 'gas_inlet' port accepts input; other port names are
-        silently ignored to allow flexible network topologies.
+        call. Also calculates the potential dissolved gas (IN) based on inlet
+        liquid content and equilibrium conditions.
 
         Args:
             port_name (str): Target port identifier. Expected: 'gas_inlet'.
@@ -273,6 +278,57 @@ class KnockOutDrum(Component):
         """
         if port_name == 'gas_inlet' and isinstance(value, Stream):
             self._input_stream = value
+            
+            # --- Mass Balance Tracking (IN) ---
+            m_dot_total = value.mass_flow_kg_h
+            
+            # 1. Total Incoming Liquid (Thermodynamic + Entrained)
+            liq_frac = value.composition.get('H2O_liq', 0.0)
+            m_liq_thermo = m_dot_total * liq_frac
+            
+            m_liq_entrained = 0.0
+            if hasattr(value, 'extra') and value.extra:
+                m_liq_entrained = value.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+            
+            total_liquid_in = m_liq_thermo + m_liq_entrained
+            self._total_liquid_in_kg_h = total_liquid_in
+            
+            # 2. Calculate Inlet Dissolved Gas Potential (equilibrium at inlet P, T)
+            #    Must convert MASS fractions to MOLE fractions for correct partial pressure!
+            #    Using mass fractions directly would underestimate p_gas for light H2.
+            if total_liquid_in > 0 and value.pressure_pa > 0:
+                # Molecular weights (kg/mol)
+                MW = {'H2': 2.016e-3, 'O2': 32.00e-3, 'H2O': 18.015e-3, 'H2O_liq': 18.015e-3}
+                MW_gas = MW.get(self.gas_species, 2.016e-3)
+                
+                # Convert mass fractions to mole fractions
+                # n_i = x_i / M_i  =>  y_i = n_i / sum(n_i)
+                # CRITICAL: Exclude liquid species from gas phase mole fraction!
+                n_rel = {}
+                for species, x_mass in value.composition.items():
+                    if species.endswith('_liq'):  # e.g. 'H2O_liq'
+                        continue
+                    mw_i = MW.get(species, 28.0e-3)  # Default ~N2 for unknowns
+                    n_rel[species] = x_mass / mw_i
+                
+                total_n = sum(n_rel.values())
+                if total_n > 0:
+                    # Mole fraction of primary gas
+                    y_gas_mol = n_rel.get(self.gas_species, 0.0) / total_n
+                    # Partial pressure using MOLE fraction (correct thermodynamics)
+                    p_gas_partial = value.pressure_pa * y_gas_mol
+                else:
+                    p_gas_partial = 0.0
+                
+                solubility_mg_kg = self._calculate_dissolved_gas(
+                    value.temperature_k, p_gas_partial, self.gas_species
+                )
+                
+                self._last_dissolved_gas_in_kg_h = total_liquid_in * (solubility_mg_kg / 1e6)
+            else:
+                self._last_dissolved_gas_in_kg_h = 0.0
+            # -----------------------------------
+            
             return value.mass_flow_kg_h
         return 0.0
 
@@ -566,12 +622,23 @@ class KnockOutDrum(Component):
             gas_comp = {self.gas_species: 1.0}
 
         # Calculate dissolved gas loss using Henry's Law with PARTIAL PRESSURE
-        # y_gas * P_out gives partial pressure of gas for accurate solubility
-        y_gas_approx = 1.0 - y_H2O
-        p_gas_pa = P_out * y_gas_approx
+        # Must convert mass fractions to mole fractions for correct partial pressure!
+        MW = {'H2': 2.016e-3, 'O2': 32.00e-3, 'H2O': 18.015e-3, 'H2O_liq': 18.015e-3}
+        n_rel_out = {}
+        for species, x_mass in gas_comp.items():
+            mw_i = MW.get(species, 28.0e-3)
+            n_rel_out[species] = x_mass / mw_i
+        total_n_out = sum(n_rel_out.values())
+        if total_n_out > 0:
+            y_gas_mol = n_rel_out.get(self.gas_species, 0.0) / total_n_out
+            p_gas_pa = P_out * y_gas_mol
+        else:
+            p_gas_pa = 0.0
+        
         dissolved_gas_mg_kg = self._calculate_dissolved_gas(T_in, p_gas_pa, self.gas_species)
         dissolved_gas_kg_h = (m_liq_removed_kg_h * dissolved_gas_mg_kg) / 1e6
         self._dissolved_gas_kg_h = dissolved_gas_kg_h
+        self._last_dissolved_gas_out_kg_h = dissolved_gas_kg_h  # Track OUT for mass balance
         
         # Subtract dissolved gas from gas outlet flow
         m_gas_out_corrected = max(0.0, m_gas_out_total - dissolved_gas_kg_h)
@@ -681,6 +748,14 @@ class KnockOutDrum(Component):
             'delta_p_bar': self.delta_p_bar,
             'gas_species': self.gas_species,
             'separation_efficiency': self.separation_efficiency,
+            
+            # Rigorous Mass Balance Metrics (IN/OUT)
+            'dissolved_gas_in_kg_h': self._last_dissolved_gas_in_kg_h,
+            'dissolved_gas_out_kg_h': self._last_dissolved_gas_out_kg_h,
+            # Aliases for graph compatibility
+            'dissolved_gas_in': self._last_dissolved_gas_in_kg_h,
+            'dissolved_gas_out': self._last_dissolved_gas_out_kg_h,
+            
             'water_removed_kg_h': self._liquid_drain_stream.mass_flow_kg_h if self._liquid_drain_stream else 0.0,
             'drain_temp_k': self._liquid_drain_stream.temperature_k if self._liquid_drain_stream else 0.0,
             'drain_pressure_bar': self._liquid_drain_stream.pressure_pa / 1e5 if self._liquid_drain_stream else 0.0,

@@ -53,6 +53,12 @@ class PlantGraphBuilder:
             component = self._create_component(node)
             if component:
                 component.set_component_id(node.id)
+                
+                # Inject graph grouping metadata from topology params
+                if node.params:
+                    component.system_group = node.params.get('system_group')
+                    component.process_step = int(node.params.get('process_step', 0))
+                
                 self.components[node.id] = component
                 logger.info(f"Created component: {node.id} ({node.type})")
                 
@@ -70,6 +76,29 @@ class PlantGraphBuilder:
     def _create_component_internal(self, node: ComponentNode) -> Component:
         """Factory method to create component based on type."""
         
+        # Strip metadata keys used for graph grouping (injected later in build())
+        # This prevents components that don't accept **kwargs from failing
+        METADATA_KEYS = {'system_group', 'process_step'}
+        if node.params:
+            # Create a filtered copy of params
+            filtered_params = {k: v for k, v in node.params.items() if k not in METADATA_KEYS}
+            # Temporarily replace node.params for component construction
+            original_params = node.params
+            node.params = filtered_params
+        else:
+            original_params = None
+        
+        try:
+            component = self._create_component_by_type(node)
+        finally:
+            # Restore original params to avoid mutation
+            if original_params is not None:
+                node.params = original_params
+        
+        return component
+    
+    def _create_component_by_type(self, node: ComponentNode) -> Component:
+        """Internal factory - creates component by type after params are filtered."""
         if node.type == "PEM":
             # Inject PEM Physics Spec AND merge with node.params for overrides
             # Convert physics_spec Pydantic model to dict, then merge node.params

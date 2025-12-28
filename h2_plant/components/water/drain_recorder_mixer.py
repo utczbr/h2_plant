@@ -253,10 +253,33 @@ class DrainRecorderMixer(Component):
                 - history_length (int): Number of recorded timesteps.
         """
         state = super().get_state()
+        
+        # Base metrics
+        mass_kg_h = self.outlet_stream.mass_flow_kg_h if self.outlet_stream else 0.0
+        temp_k = self.outlet_stream.temperature_k if self.outlet_stream else 0.0
+        pressure_pa = self.outlet_stream.pressure_pa if self.outlet_stream else 101325.0
+        
+        # Calculate dissolved gas PPM from stream composition
+        # Sum all non-water species mass fractions
+        ppm = 0.0
+        if self.outlet_stream and self.outlet_stream.composition:
+            non_water_mass_frac = sum(
+                frac for sp, frac in self.outlet_stream.composition.items()
+                if sp not in ('H2O', 'H2O_liq')
+            )
+            ppm = non_water_mass_frac * 1e6
+        
         state.update({
-            'outlet_mass_kg_h': self.outlet_stream.mass_flow_kg_h if self.outlet_stream else 0.0,
-            'outlet_temp_k': self.outlet_stream.temperature_k if self.outlet_stream else 0.0,
+            # Original keys
+            'outlet_mass_kg_h': mass_kg_h,
+            'outlet_temp_k': temp_k,
             'total_mass_kg': self._total_mass_kg.copy(),
-            'history_length': self._history_index
+            'history_length': self._history_index,
+            # Aliased keys for visualization compatibility
+            'outlet_mass_flow_kg_h': mass_kg_h,
+            'outlet_temperature_c': temp_k - 273.15 if temp_k > 0 else 0.0,
+            'outlet_temperature_k': temp_k,
+            'outlet_pressure_kpa': pressure_pa / 1000.0,
+            'dissolved_gas_ppm': ppm,
         })
         return state

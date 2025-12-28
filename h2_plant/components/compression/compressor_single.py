@@ -1,31 +1,42 @@
 """
 Single-Stage Hydrogen Compressor.
 
-This component models an adiabatic compression process using isentropic efficiency.
-It is designed for hydrogen systems where accurate temperature rise prediction is
-critical for material limits and cooling requirements.
+This component models an adiabatic compression process using isentropic efficiency relations.
+It is designed for hydrogen systems where accurate temperature rise prediction is critical 
+for material limits and cooling requirements.
 
-Physics Model (Isentropic Compression):
-    1. **Ideal Path**: Entropy remains constant (ds = 0).
-       H_2s = H(P_discharge, S_suction)
-    
-    2. **Real Path**: Irreversibilities increase discharge enthalpy.
-       W_ideal = H_2s - H_suction
-       W_actual = W_ideal / η_isentropic
-       H_discharge = H_suction + W_actual
+Physics Model (Isentropic Compression)
+--------------------------------------
+The compression process is modeled as an adiabatic reversible (isentropic) process corrected 
+by an isentropic efficiency factor.
 
-    3. **Temperature Rise**:
-       T_discharge = T(P_discharge, H_discharge)
+1.  **Ideal Path (Isentropic)**:
+    Entropy remains constant ($ds = 0$).
+    $$ S_{suction} = S(P_{suction}, T_{suction}) $$
+    $$ H_{2s} = H(P_{discharge}, S_{suction}) $$
 
-Computational Strategy:
-    - **Primary**: Numba-compiled Look-Up Tables (LUTs) for 100x speedup.
-    - **Fallback**: Real-gas EOS (Equation of State) via CoolProp.
-    - **Last Resort**: Ideal Gas Law (PV=nRT) if properties are unavailable.
+2.  **Real Path (Adiabatic with Irreversibilities)**:
+    Irreversibilities increase discharge enthalpy relative to the ideal path.
+    $$ W_{ideal} = H_{2s} - H_{suction} $$
+    $$ W_{actual} = \frac{W_{ideal}}{\eta_{isentropic}} $$
+    $$ H_{discharge} = H_{suction} + W_{actual} $$
 
-Operating Modes:
-    - **Fixed Pressure**: Standard mode, compresses to outlet_pressure_bar.
-    - **Temperature Limited**: Uses max_temp_c to find maximum pressure that keeps
-      discharge temperature ≤ target, capped by max_pressure_bar.
+3.  **Temperature Rise**:
+    The final discharge temperature is determined from the fluid state at the discharge pressure 
+    and actual enthalpy.
+    $$ T_{discharge} = T(P_{discharge}, H_{discharge}) $$
+
+Computational Strategy
+----------------------
+*   **Primary**: Numba-compiled Look-Up Tables (LUTs) for ~100x speedup in property queries.
+*   **Fallback**: Real-gas EOS (Equation of State) via CoolProp (HEOS).
+*   **Last Resort**: Ideal Gas Law ($PV=nRT$) if property databases are unavailable.
+
+Operating Modes
+---------------
+*   **Fixed Pressure**: Standard mode. Compresses to `outlet_pressure_bar`.
+*   **Temperature Limited**: Uses `max_temp_c` to iteratively solve for the maximum discharge 
+    pressure that satisfies the constraint $T_{discharge} \le T_{max}$.
 """
 
 import numpy as np
@@ -64,22 +75,25 @@ class CompressorSingle(Component):
     hydrogen plant. It can be chained in series to form multi-stage trains with
     intercooling.
 
-    Attributes:
-        max_flow_kg_h (float): Rated mass flow capacity.
-        inlet_pressure_bar (float): Suction pressure design point.
-        outlet_pressure_bar (float): Discharge pressure design point (or max cap).
-        max_temp_c (float): Maximum allowable discharge temperature in °C.
-            If set, enables temperature-limited operation.
-        temperature_limited (bool): If True, dynamically calculates outlet pressure
-            to maintain max_temp_c constraint.
-        isentropic_efficiency (float): Ratio of ideal to actual work (η_s).
-        mechanical_efficiency (float): Shaft/Bearing efficiency (η_m).
-        electrical_efficiency (float): Motor drive efficiency (η_e).
-
     Architecture:
-        - Fulfills **Component Lifecycle Contract (Layer 1)**.
-        - Supports optimized **JIT Execution** via `numba_ops`.
+        - **Component Lifecycle Contract (Layer 1)**: Fulfills standard initialization, stepping,
+          and state reporting requirements.
+        - **Optimization Layer (Layer 2)**: Supports optimized JIT execution via `numba_ops` 
+          and utilizes `LUTManager` for thermodynamic property lookups.
+
+    Attributes:
+        max_flow_kg_h (float): Rated mass flow capacity [kg/h].
+        inlet_pressure_bar (float): Suction pressure design point [bar].
+        outlet_pressure_bar (float): Discharge pressure design point (or max cap) [bar].
+        max_temp_c (float): Maximum allowable discharge temperature [°C]. 
+            If set, enables temperature-limited operation.
+        temperature_limited (bool): If True, dynamically calculates outlet pressure 
+            to maintain `max_temp_c` constraint.
+        isentropic_efficiency (float): Ratio of ideal to actual work ($\eta_s$) [0-1].
+        mechanical_efficiency (float): Shaft/Bearing efficiency ($\eta_m$) [0-1].
+        electrical_efficiency (float): Motor drive efficiency ($\eta_e$) [0-1].
     """
+
 
     def __init__(
         self,
@@ -98,25 +112,24 @@ class CompressorSingle(Component):
         Configure the single-stage compressor.
 
         Args:
-            max_flow_kg_h: Maximum mass flow rate in kg/h.
-            inlet_pressure_bar: Suction pressure in bar (design point).
-            outlet_pressure_bar: Target discharge pressure in bar.
-                In temperature_limited mode, this acts as the maximum cap.
-            inlet_temperature_c: Suction temperature in °C. Defaults to 25°C.
-            isentropic_efficiency: Stage isentropic efficiency (0-1).
+            max_flow_kg_h (float): Maximum mass flow rate [kg/h].
+            inlet_pressure_bar (float): Suction pressure design point [bar].
+            outlet_pressure_bar (float): Target discharge pressure [bar].
+                In `temperature_limited` mode, this acts as the maximum cap.
+            inlet_temperature_c (float): Suction temperature [°C]. Defaults to 25.0.
+            isentropic_efficiency (float): Stage isentropic efficiency [0-1].
                 Defaults to 0.65.
-            mechanical_efficiency: Drive train mechanical efficiency (0-1).
+            mechanical_efficiency (float): Drive train mechanical efficiency [0-1].
                 Defaults to 0.96.
-            electrical_efficiency: Motor electrical efficiency (0-1).
+            electrical_efficiency (float): Motor electrical efficiency [0-1].
                 Defaults to 0.93.
-            max_temp_c: Maximum allowable discharge temperature in °C.
-                If set with temperature_limited=True, compressor will dynamically
-                limit pressure to keep T_out ≤ max_temp_c. Defaults to None.
-            temperature_limited: If True, enables temperature-limited operation
-                where outlet pressure is calculated to meet max_temp_c constraint.
+            max_temp_c (Optional[float]): Maximum allowable discharge temperature [°C].
+                If set with `temperature_limited=True`, the component will dynamically
+                limit discharge pressure to satisfy $T_{out} \le T_{max}$. Defaults to None.
+            temperature_limited (bool): If True, enables temperature-limited operation mode.
                 Defaults to False.
-            max_pressure_bar: Absolute maximum pressure cap in bar.
-                Used as upper bound in temperature-limited binary search.
+            max_pressure_bar (float): Absolute maximum pressure cap [bar].
+                Used as the upper bound in the binary search algorithm for temperature limiting.
                 Defaults to 1000.0.
         """
         super().__init__()
@@ -187,14 +200,15 @@ class CompressorSingle(Component):
         """
         Executes initialization phase of Component Lifecycle.
 
-        Strategic Action:
-        Pre-fetches Numba-optimized Look-Up Tables (LUTs) from the `LUTManager`.
+        **Strategic Action**:
+        Pre-fetches Numba-optimized Look-Up Tables (LUTs) from the `LUTManager` (Layer 2).
         Mapping these arrays to local variables enables the `_calculate_compression_lut`
-        method to bypass Python object overhead during high-frequency stepping.
+        method to bypass Python object overhead during high-frequency stepping, crucial
+        for simulation performance.
 
         Args:
-            dt (float): Simulation timestep (hours).
-            registry (ComponentRegistry): Central service registry.
+            dt (float): Simulation timestep [hours].
+            registry (ComponentRegistry): Central service registry for dependency injection.
         """
         super().initialize(dt, registry)
 
@@ -234,16 +248,16 @@ class CompressorSingle(Component):
         """
         Executes the physics simulation step.
 
-        Process Logic:
-        1. **Mass Transfer**: Accepts mass pushed by upstream or pulled by downstream.
-        2. **Mode Selection**: 
-           - **Compression**: P_out > P_in (Standard operation)
-           - **Pass-Through**: P_out <= P_in (Free flow/Check valve open)
-        3. **Work Calculation**: Computes energy required for the mass transfer.
-        4. **Accumulation**: Updates cumulative energy/mass counters.
+        **Process Logic**:
+        1.  **Mass Transfer**: Accepts mass pushed by upstream or pulled by downstream (Pressure-driven flow abstraction).
+        2.  **Mode Selection**: 
+            -   **Compression**: $P_{out} > P_{in}$ (Standard operation).
+            -   **Pass-Through**: $P_{out} \le P_{in}$ (Free flow/Check valve open).
+        3.  **Work Calculation**: Computes energy required for the mass transfer based on thermodynamic path.
+        4.  **Accumulation**: Updates cumulative energy/mass counters for solving system-wide mass/energy balance.
 
         Args:
-            t (float): Current simulation time (hours).
+            t (float): Current simulation time [hours].
         """
         super().step(t)
 
@@ -296,7 +310,11 @@ class CompressorSingle(Component):
             self.power_kw = 0.0
 
     def _calculate_trivial_pass_through(self) -> None:
-        """Handle case where no compression is required."""
+        """
+        Handle case where no compression is required (Check Valve logic).
+        
+        If $P_{out} \le P_{in}$, the compressor acts as a passive pipe, consuming zero energy.
+        """
         self.compression_work_kwh = 0.0
         self.specific_energy_kwh_kg = 0.0
         self.outlet_temperature_k = self.inlet_temperature_k
@@ -309,8 +327,13 @@ class CompressorSingle(Component):
         """
         Determine fluid properties based on inlet composition.
         
+        Selects appropriate Equation of State (EOS) backend or ideal gas constants.
+
         Returns:
-            Tuple[str, float, float]: (CoolProp_Fluid_Name, Cp_J_kg_K, Gamma)
+            Tuple[str, float, float]: 
+                - **CoolProp_Fluid_Name** (str): Key for CoolProp EOS (e.g., 'Hydrogen', 'Oxygen').
+                - **Cp_J_kg_K** (float): Specific heat capacity at constant pressure [$J/(kg \cdot K)$].
+                - **Gamma** (float): Heat capacity ratio ($\gamma = C_p / C_v$).
         """
         # Default to Hydrogen if no stream
         if not self._inlet_stream:
@@ -333,13 +356,13 @@ class CompressorSingle(Component):
         Compute discharge temperature for a given outlet pressure.
         
         This helper is used by the binary search solver to find the maximum
-        pressure that keeps T_out ≤ max_temp_c.
+        pressure that keeps $T_{out} \le T_{max}$.
         
         Args:
-            p_out_pa: Outlet pressure in Pascals.
+            p_out_pa (float): Outlet pressure [Pa].
             
         Returns:
-            Outlet temperature in Kelvin.
+            float: Outlet temperature [K].
         """
         p_in_pa = self.actual_inlet_pressure_pa
         fluid_name, cp, gamma = self._get_fluid_properties()
@@ -387,10 +410,18 @@ class CompressorSingle(Component):
 
     def _solve_pressure_for_temp_limit(self) -> float:
         """
-        Use binary search to find maximum outlet pressure that keeps T_out ≤ max_temp_c.
+        Numerically solve for maximum outlet pressure satisfying temperature constraint.
+        
+        **Algorithm**:
+        Solves the root finding problem $f(P) = T_{discharge}(P) - T_{max} = 0$ using 
+        the Bisection Method (Binary Search) over the domain $[P_{in}, P_{target}]$.
+
+        **Convergence Criteria**:
+        - Iterates until relative pressure error $\frac{|P_{high} - P_{low}|}{P_{low}} < 0.1\%$.
+        - Max iterations: 30 (guarantees convergence for monotonic $T(P)$).
         
         Returns:
-            Maximum outlet pressure in Pa that satisfies the temperature constraint.
+            float: Maximum outlet pressure [Pa] that satisfies $T_{out} \le T_{max}$.
         """
         if self.max_temp_k is None:
             return self.outlet_pressure_bar * self.BAR_TO_PA
@@ -435,11 +466,14 @@ class CompressorSingle(Component):
         """
         Calculate single-stage adiabatic compression.
 
-        In temperature-limited mode, first solves for maximum pressure that
-        satisfies the temperature constraint, then computes work and final state.
-        
-        Uses LUT-based Numba JIT when available (fastest), falls back to
-        CoolProp real-gas, then ideal gas if neither is available.
+        **Logic Flow**:
+        1.  **Pressure Determination**:
+            -   If `temperature_limited`: Call `_solve_pressure_for_temp_limit()` to finding limiting discharge pressure.
+            -   Else: Use fixed `outlet_pressure_bar`.
+        2.  **Property Evaluation**:
+            -   **LUT (Fast Path)**: If fluid is Hydrogen and LUTs available, invoke JIT kernel.
+            -   **CoolProp (Precision)**: Fallback for other fluids or out-of-bounds states.
+            -   **Ideal Gas (Backup)**: Approximate if EOS fails.
         """
         p_in_pa = self.actual_inlet_pressure_pa
         
@@ -467,13 +501,14 @@ class CompressorSingle(Component):
         """
         Calculate compression using Numba JIT-compiled LUT lookups.
 
-        Why JIT?
-        Compressor calculation is the "inner loop" of the plant optimization. 
-        Using Numba-compiled interpolation (~0.1μs) vs CoolProp (~100μs) provides
-        a 1000x speedup, enabling real-time optimization of the compressor train.
+        **Performance Rationale**:
+        Compressor calculation is the "inner loop" of the system optimization. 
+        Using Numba-compiled interpolation on pre-loaded arrays (~0.1$\mu$s) vs CoolProp calls (~100$\mu$s) 
+        provides a ~1000x speedup, enabling real-time optimization of complex compressor trains.
 
-        Method:
-        Calls `calculate_compression_realgas_jit` in `numba_ops`.
+        **Method**:
+        Invokes `calculate_compression_realgas_jit` from `numba_ops`, passing raw numpy arrays 
+        to avoid Python-C API overhead.
         """
         try:
             # Call JIT function (imported at module level)
@@ -525,16 +560,15 @@ class CompressorSingle(Component):
         """
         Calculates compression using CoolProp High-Precision EOS.
 
-        Fallback Strategy:
-        This method is invoked only when LUTs are unavailable (e.g., non-Hydrogen fluids
-        or out-of-bounds conditions). It is thermodynamically exact but computationally
-        expensive.
+        **Fallback Strategy**:
+        Invoked when LUTs are unavailable (e.g., non-Hydrogen fluids or out-of-bounds conditions). 
+        Thermodynamically exact but computationally expensive.
 
-        Algorithm:
-        1. S_in = Entropy(P_in, T_in)
-        2. H_out_isen = Enthalpy(P_out, S_in)  (Isentropic Flash)
-        3. W_actual = (H_out_isen - H_in) / Efficiency
-        4. T_out = Temperature(P_out, H_out_actual)
+        **Algorithm**:
+        1.  Determine Inlet Entropy: $$ S_{in} = S(P_{in}, T_{in}) $$
+        2.  Isentropic Flash: $$ H_{2s} = H(P_{out}, S_{in}) $$
+        3.  Actual Work: $$ W_{actual} = \frac{H_{2s} - H_{in}}{\eta_{isen}} $$
+        4.  Discharge Temperature: $$ T_{out} = T(P_{out}, H_{in} + W_{actual}) $$
         """
         fluid, _, _ = self._get_fluid_properties()
 
@@ -566,12 +600,14 @@ class CompressorSingle(Component):
         """
         Calculates compression using Ideal Gas Law approximation.
 
-        Last Resort Strategy:
-        Used when no property databases are available. Accuracy degrades significantly
-        above 50 bar for Hydrogen (Compressibility Z deviating from 1.0).
+        **Applicability**:
+        Used as a last resort when property databases are missing. Accuracy degrades 
+        significantly above 50 bar for Hydrogen due to compressibility ($Z$) deviating from 1.0.
 
-        Formula:
-        **T_out_isen = T_in * (P_out/P_in)^((γ-1)/γ)**
+        **Formula**:
+        $$ T_{2s} = T_{in} \cdot \left(\frac{P_{out}}{P_{in}}\right)^{\frac{\gamma-1}{\gamma}} $$
+        $$ \Delta T_{actual} = \frac{T_{2s} - T_{in}}{\eta_{isen}} $$
+        $$ W_{actual} = C_p \cdot \Delta T_{actual} $$
         """
         _, cp, gamma = self._get_fluid_properties()
 
@@ -600,11 +636,14 @@ class CompressorSingle(Component):
         """
         Retrieves component operational telemetry.
 
-        Fulfills Layer 1 Contract for GUI and Data Logging.
+        **Layer 1 Contract Fulfillment**:
+        Provides real-time state data for:
+        -   **GUI Visualization**: Status, temperature, pressure.
+        -   **Data Logging**: Energy consumption, mass throughput.
+        -   **Orchestration**: System-wide energy balance verification.
 
         Returns:
-            Dict[str, Any]: Key metrics including specific energy (kWh/kg) and
-                            efficiency factors.
+            Dict[str, Any]: Key metrics including specific energy [kWh/kg] and efficiency factors.
         """
         cumulative_specific = 0.0
         if self.cumulative_mass_kg > 0:
@@ -644,17 +683,19 @@ class CompressorSingle(Component):
         """
         Retrieve the output stream from a specified port.
 
-        Returns compressed hydrogen at outlet pressure and actual discharge
-        temperature (no aftercooling).
+        **Physics**:
+        Returns compressed hydrogen at the defined `outlet_pressure_bar` and the calculated 
+        discharge temperature. Note that this component does **not** include an aftercooler; 
+        discharge gas is hot ($T_{out} > T_{in}$).
 
         Args:
-            port_name: Port identifier ('h2_out' or 'outlet').
+            port_name (str): Port identifier ('h2_out' or 'outlet').
 
         Returns:
-            Stream object with outlet conditions.
+            Stream: Object encapsulating mass flow, thermodynamic state ($P, T$), and composition.
 
         Raises:
-            ValueError: If port_name is not recognized.
+            ValueError: If `port_name` is not recognized.
         """
         if port_name == 'h2_out' or port_name == 'outlet':
             # Propagate inlet composition (compression doesn't change composition)
@@ -687,13 +728,17 @@ class CompressorSingle(Component):
         """
         Accept an input stream at the specified port.
 
+        **Logic**:
+        -   **Hydrogen**: Accepts mass up to `max_flow_kg_h` limit. Prioritizes filling available capacity.
+        -   **Electricity**: Acknowledges power availability (virtual connection).
+
         Args:
-            port_name: Target port ('h2_in', 'inlet', or 'electricity_in').
-            value: Stream object or power value.
-            resource_type: Resource classification hint.
+            port_name (str): Target port ('h2_in', 'inlet', or 'electricity_in').
+            value (Any): Stream object (for mass) or power value (for electricity).
+            resource_type (str): Resource classification hint from the graph traversal engine.
 
         Returns:
-            Amount accepted (kg for hydrogen, value for power).
+            float: Amount accepted (kg for hydrogen, arbitrary value for power).
         """
         if port_name == 'h2_in' or port_name == 'inlet' or port_name == 'gas_in':
             if isinstance(value, Stream):
@@ -729,8 +774,11 @@ class CompressorSingle(Component):
         """
         Define the physical connection ports for this component.
 
+        **Topology Definition**:
+        Declares inputs/outputs for the `PlantGraphBuilder` to construct the system node graph.
+
         Returns:
-            Port definitions dictionary.
+            Dict[str, Dict[str, str]]: Port definitions showing type, resource, and units.
         """
         return {
             'h2_in': {

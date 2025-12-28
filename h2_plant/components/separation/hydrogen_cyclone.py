@@ -145,6 +145,10 @@ class HydrogenMultiCyclone(Component):
         self._outlet_stream: Optional[Stream] = None
         self._drain_stream: Optional[Stream] = None
         
+        # Mass Balance Tracking (Input vs Output)
+        self._last_dissolved_gas_in_kg_h: float = 0.0
+        self._last_dissolved_gas_out_kg_h: float = 0.0
+        
         # LUTManager reference (acquired during initialize)
         self.lut_manager = None
 
@@ -208,6 +212,7 @@ class HydrogenMultiCyclone(Component):
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """
         Accept an input stream at the specified port.
+        Also calculates the potential dissolved gas (IN) based on inlet liquid content.
         
         Args:
             port_name (str): Target port identifier. Expected: 'inlet'.
@@ -220,8 +225,77 @@ class HydrogenMultiCyclone(Component):
         """
         if port_name == 'inlet' and isinstance(value, Stream):
             self._input_stream = value
+            
+            # --- Mass Balance Tracking (IN) ---
+            m_dot_total = value.mass_flow_kg_h
+            liq_frac = value.composition.get('H2O_liq', 0.0)
+            m_liq_thermo = m_dot_total * liq_frac
+            m_liq_entrained = 0.0
+            if hasattr(value, 'extra') and value.extra:
+                m_liq_entrained = value.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
+            total_liquid_in = m_liq_thermo + m_liq_entrained
+            
+            if total_liquid_in > 0 and value.pressure_pa > 0:
+                # Molecular weights (kg/mol) - must convert mass fractions to mole fractions!
+                MW = {'H2': 2.016e-3, 'O2': 32.00e-3, 'H2O': 18.015e-3, 'H2O_liq': 18.015e-3}
+                
+                # Convert mass fractions to mole fractions: n_i = x_i / M_i
+                # CRITICAL: Exclude liquid species from gas phase mole fraction!
+                n_rel = {}
+                for species, x_mass in value.composition.items():
+                    if species.endswith('_liq'): continue
+                    mw_i = MW.get(species, 28.0e-3)  # Default ~N2
+                    n_rel[species] = x_mass / mw_i
+                
+                total_n = sum(n_rel.values())
+                if total_n > 0:
+                    y_gas_mol = n_rel.get(self.gas_species, 0.0) / total_n
+                    p_gas_partial = value.pressure_pa * y_gas_mol
+                else:
+                    p_gas_partial = 0.0
+                
+                solubility_in = self._calculate_dissolved_gas(value.temperature_k, p_gas_partial)
+                self._last_dissolved_gas_in_kg_h = total_liquid_in * (solubility_in / 1e6)
+            else:
+                self._last_dissolved_gas_in_kg_h = 0.0
+            # -----------------------------------
+            
             return value.mass_flow_kg_h
         return 0.0
+    
+    def _calculate_dissolved_gas(self, temp_k: float, pressure_pa: float) -> float:
+        """
+        Calculate gas solubility in liquid water using Henry's Law.
+        
+        Args:
+            temp_k: Temperature in Kelvin.
+            pressure_pa: Partial pressure of gas in Pascals.
+            
+        Returns:
+            float: Solubility in mg/kg water.
+        """
+        import math
+        from h2_plant.core.constants import HenryConstants
+        
+        if self.gas_species == 'H2':
+            H_298 = HenryConstants.H2_H_298_L_ATM_MOL
+            C = HenryConstants.H2_DELTA_H_R_K
+            MW = HenryConstants.H2_MOLAR_MASS_KG_MOL
+        elif self.gas_species == 'O2':
+            H_298 = HenryConstants.O2_H_298_L_ATM_MOL
+            C = HenryConstants.O2_DELTA_H_R_K
+            MW = HenryConstants.O2_MOLAR_MASS_KG_MOL
+        else:
+            return 0.0
+        
+        T0 = 298.15
+        if temp_k <= 0 or pressure_pa <= 0:
+            return 0.0
+        
+        H_T = H_298 * math.exp(C * (1.0 / temp_k - 1.0 / T0))
+        p_atm = pressure_pa / 101325.0
+        c_mol_L = p_atm / H_T
+        return c_mol_L * (MW * 1000.0) * 1000.0
 
     def step(self, t: float) -> None:
         """
@@ -322,7 +396,8 @@ class HydrogenMultiCyclone(Component):
         m_liq_carryover_kg_h = m_liq_in_kg_h - m_liq_removed_kg_h
 
         # 7. Output Stream Formulation
-        P_out = max(P_in - self.delta_P_pa, 1e5)  # Minimum 1 bar
+        # NOTE: Removed artificial 1 bar clamp - allow vacuum operation
+        P_out = max(P_in - self.delta_P_pa, 1000.0)  # Minimum 10 mbar (avoid zero/negative)
         
         # Gas outlet composition (remove captured liquid)
         m_gas_out = m_total_kg_h - m_liq_removed_kg_h
@@ -355,12 +430,35 @@ class HydrogenMultiCyclone(Component):
             extra={'m_dot_H2O_liq_accomp_kg_s': m_liq_carryover_kg_h / 3600.0}
         )
         
-        # Drain stream (pure liquid water)
+        # Calculate dissolved gas in drain (OUT) using MOLE FRACTIONS
+        # Must convert mass fractions to mole fractions for correct partial pressure!
+        MW = {'H2': 2.016e-3, 'O2': 32.00e-3, 'H2O': 18.015e-3, 'H2O_liq': 18.015e-3}
+        n_rel_out = {}
+        for species, x_mass in out_comp.items():
+            mw_i = MW.get(species, 28.0e-3)
+            n_rel_out[species] = x_mass / mw_i
+        total_n_out = sum(n_rel_out.values())
+        if total_n_out > 0:
+            y_gas_mol = n_rel_out.get(self.gas_species, 0.0) / total_n_out
+            p_gas_partial = P_out * y_gas_mol
+        else:
+            p_gas_partial = 0.0
+        
+        solubility_out = self._calculate_dissolved_gas(T_in, p_gas_partial)
+        dissolved_gas_kg_h = m_liq_removed_kg_h * (solubility_out / 1e6)
+        self._last_dissolved_gas_out_kg_h = dissolved_gas_kg_h
+        
+        # Drain stream with dissolved gas
+        m_drain_total = m_liq_removed_kg_h + dissolved_gas_kg_h
+        drain_comp = {'H2O': m_liq_removed_kg_h / m_drain_total} if m_drain_total > 0 else {'H2O': 1.0}
+        if dissolved_gas_kg_h > 0 and m_drain_total > 0:
+            drain_comp[self.gas_species] = dissolved_gas_kg_h / m_drain_total
+        
         self._drain_stream = Stream(
-            mass_flow_kg_h=m_liq_removed_kg_h,
+            mass_flow_kg_h=m_drain_total,
             temperature_k=T_in,
             pressure_pa=P_out,
-            composition={'H2O': 1.0},
+            composition=drain_comp,
             phase='liquid'
         )
         
@@ -399,8 +497,15 @@ class HydrogenMultiCyclone(Component):
                 - axial_velocity_ms: Gas axial velocity (m/s)
                 - tangential_velocity_ms: Gas tangential velocity (m/s)
                 - separation_efficiency: Fraction of liquid captured (0-1)
+                - outlet_o2_ppm_mol: O2 impurity in outlet stream (ppm molar)
         """
         state = super().get_state()
+        
+        # Calculate outlet O2 impurity for crossover graph
+        outlet_o2_ppm = 0.0
+        if self._outlet_stream and self._outlet_stream.mass_flow_kg_h > 0:
+            outlet_o2_ppm = self._outlet_stream.get_total_mole_frac('O2') * 1e6
+        
         state.update({
             'd50_microns': self.d50_microns,
             'pressure_drop_mbar': self.delta_P_pa / 100.0,
@@ -411,7 +516,19 @@ class HydrogenMultiCyclone(Component):
             'separation_efficiency': self.efficiency,
             'element_diameter_mm': self.D_element_m * 1000.0,
             'vane_angle_deg': np.degrees(self.vane_angle_rad),
-            'gas_species': self.gas_species
+            'gas_species': self.gas_species,
+            'outlet_o2_ppm_mol': outlet_o2_ppm,
+            
+            # Rigorous Mass Balance Metrics (IN/OUT)
+            'dissolved_gas_in_kg_h': self._last_dissolved_gas_in_kg_h,
+            'dissolved_gas_out_kg_h': self._last_dissolved_gas_out_kg_h,
+            # Aliases for graph compatibility
+            'dissolved_gas_in': self._last_dissolved_gas_in_kg_h,
+            'dissolved_gas_out': self._last_dissolved_gas_out_kg_h,
+            
+            'water_removed_kg_h': self._drain_stream.mass_flow_kg_h if self._drain_stream else 0.0,
+            'drain_temp_k': self._drain_stream.temperature_k if self._drain_stream else 0.0,
+            'drain_pressure_bar': self._drain_stream.pressure_pa / 1e5 if self._drain_stream else 0.0
         })
         return state
 

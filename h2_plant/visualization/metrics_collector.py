@@ -40,7 +40,20 @@ class MetricsCollector:
     """
     
     def __init__(self):
-        """Initialize the metrics collector with empty buffers."""
+        """Initialize the metrics collector with empty buffers.
+        
+        .. deprecated::
+            MetricsCollector is not integrated with the main simulation loop.
+            Use the history DataFrame from `run_integrated_simulation.py` instead.
+            Graph generation should use `GraphOrchestrator` with `visualization_config.yaml`.
+        """
+        import warnings
+        warnings.warn(
+            "MetricsCollector is deprecated and unused. "
+            "Use GraphOrchestrator with visualization_config.yaml instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.timeseries = {
             'timestamps': [],
             'pem': {

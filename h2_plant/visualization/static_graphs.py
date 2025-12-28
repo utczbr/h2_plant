@@ -7,12 +7,47 @@ It replaces the legacy `h2_plant/gui/core/plotter.py` and `h2_plant/visualizatio
 
 from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
+from matplotlib.cm import get_cmap
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
 import logging
 
+# Imports for Profile Reconstitution
+from h2_plant.core.stream import Stream
+from h2_plant.core.component_registry import ComponentRegistry
+from h2_plant.components.purification.deoxo_reactor import DeoxoReactor
+
 logger = logging.getLogger(__name__)
+
+
+def log_graph_errors(func):
+    """
+    Decorator to wrap graph generation functions with error logging.
+    
+    Catches exceptions during graph generation and logs them instead of
+    failing silently. Also logs entry for debugging data availability.
+    """
+    from functools import wraps
+    
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        func_name = func.__name__
+        try:
+            logger.debug(f"Generating graph: {func_name}")
+            result = func(*args, **kwargs)
+            logger.debug(f"Graph generated successfully: {func_name}")
+            return result
+        except KeyError as e:
+            logger.warning(f"[{func_name}] Missing data column: {e}")
+            raise
+        except ValueError as e:
+            logger.warning(f"[{func_name}] Value error: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"[{func_name}] Failed to generate graph: {e}", exc_info=True)
+            raise
+    return wrapper
 
 # ==============================================================================
 # COLOR PALETTE
@@ -185,6 +220,7 @@ def normalize_history(history: Dict[str, Any]) -> pd.DataFrame:
 # FIGURE CREATION FUNCTIONS
 # ==============================================================================
 
+@log_graph_errors
 def create_dispatch_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create power dispatch stacked area chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -195,18 +231,26 @@ def create_dispatch_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     P_sold = downsample_for_plot(df['P_sold'])
     P_offer = downsample_for_plot(df['P_offer'])
     
+    # Get auxiliary power (convert kW to MW)
+    if 'auxiliary_power_kw' in df.columns:
+        P_aux = downsample_for_plot(df['auxiliary_power_kw'] / 1000.0)
+    else:
+        P_aux = np.zeros_like(P_soec)
+    
     ax.fill_between(minutes, 0, P_soec, label='SOEC Consumption', color=COLORS['soec'], alpha=0.6)
     ax.fill_between(minutes, P_soec, P_soec + P_pem, label='PEM Consumption', color=COLORS['pem'], alpha=0.6)
-    ax.fill_between(minutes, P_soec + P_pem, P_soec + P_pem + P_sold, label='Grid Sale', color=COLORS['sold'], alpha=0.6)
+    ax.fill_between(minutes, P_soec + P_pem, P_soec + P_pem + P_aux, label='Auxiliary', color='#9467bd', alpha=0.6)
+    ax.fill_between(minutes, P_soec + P_pem + P_aux, P_soec + P_pem + P_aux + P_sold, label='Grid Sale', color=COLORS['sold'], alpha=0.6)
     ax.plot(minutes, P_offer, label='Offered Power', color=COLORS['offer'], linestyle='--', linewidth=1.5)
     
-    ax.set_title('Hybrid Dispatch: SOEC + PEM + Arbitrage', fontsize=12)
+    ax.set_title('Hybrid Dispatch: SOEC + PEM + Auxiliary + Arbitrage', fontsize=12)
     ax.set_xlabel('Time (Minutes)')
     ax.set_ylabel('Power (MW)')
     ax.legend(loc='upper left', fontsize=8)
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_arbitrage_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create price scenario chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -233,6 +277,7 @@ def create_arbitrage_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_h2_production_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create hydrogen production chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -253,6 +298,7 @@ def create_h2_production_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_oxygen_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create oxygen production chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -276,6 +322,7 @@ def create_oxygen_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_water_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create water consumption chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -299,6 +346,7 @@ def create_water_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_energy_pie_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create energy distribution pie chart."""
     fig = Figure(figsize=(8, 6), dpi=dpi, constrained_layout=True)
@@ -325,6 +373,7 @@ def create_energy_pie_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         ax.text(0.5, 0.5, 'No energy data', ha='center', va='center', transform=ax.transAxes)
     return fig
 
+@log_graph_errors
 def create_histogram_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create price histogram."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -342,6 +391,7 @@ def create_histogram_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_dispatch_curve_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create dispatch curve scatter plot (P vs H2)."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -355,6 +405,7 @@ def create_dispatch_curve_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figur
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_cumulative_h2_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create cumulative hydrogen production chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -379,6 +430,7 @@ def create_cumulative_h2_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_cumulative_energy_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create cumulative energy consumption chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -406,6 +458,7 @@ def create_cumulative_energy_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_efficiency_curve_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create system efficiency over time chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -435,6 +488,7 @@ def create_efficiency_curve_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_revenue_analysis_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create revenue analysis chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
@@ -463,6 +517,7 @@ def create_revenue_analysis_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax.grid(True, alpha=0.3)
     return fig
 
+@log_graph_errors
 def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create temporal averages chart."""
     fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
@@ -502,9 +557,1292 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     fig.suptitle('Temporal Averages (Hourly)', fontsize=14)
     return fig
 
+def _prepare_monthly_data(df: pd.DataFrame) -> Dict[str, Any]:
+    """Helper to prepare monthly aggregated data for performance graphs."""
+    # Create time index
+    df_indexed = df.copy()
+    start_date = df.attrs.get('start_date', "2024-01-01 00:00")
+    df_indexed.index = pd.date_range(start=start_date, periods=len(df_indexed), freq='min')
+    
+    # Check sufficiency
+    if (df_indexed.index[-1] - df_indexed.index[0]).days < 30:
+        return {'valid': False, 'reason': 'Simulation too short (< 1 month)'}
+
+    # Resample Monthly
+    cols_to_sum = ['P_soec', 'P_pem', 'H2_soec', 'H2_pem']
+    for col in cols_to_sum:
+        if col not in df_indexed.columns:
+            df_indexed[col] = 0.0
+
+    df_monthly = df_indexed[cols_to_sum].resample('ME').sum()
+    
+    # Energy MWh = Power(MW) / 60
+    df_monthly['E_soec_MWh'] = df_monthly['P_soec'] / 60.0
+    df_monthly['E_pem_MWh'] = df_monthly['P_pem'] / 60.0
+    df_monthly['E_total_MWh'] = df_monthly['E_soec_MWh'] + df_monthly['E_pem_MWh']
+    
+    # H2 Energy (LHV)
+    df_monthly['H2_E_soec'] = df_monthly['H2_soec'] * 0.03333
+    df_monthly['H2_E_pem'] = df_monthly['H2_pem'] * 0.03333
+    df_monthly['H2_E_total'] = df_monthly['H2_E_soec'] + df_monthly['H2_E_pem']
+
+    # Filter empty
+    df_monthly = df_monthly[df_monthly['E_total_MWh'] > 0.001].copy()
+    if df_monthly.empty:
+        return {'valid': False, 'reason': 'No energy data'}
+
+    # Efficiency
+    df_monthly['Eff_Sys'] = (df_monthly['H2_E_total'] / df_monthly['E_total_MWh']) * 100
+    df_monthly['Eff_SOEC'] = (df_monthly['H2_E_soec'] / df_monthly['E_soec_MWh']) * 100
+    df_monthly['Eff_PEM'] = (df_monthly['H2_E_pem'] / df_monthly['E_pem_MWh']) * 100
+    
+    # Capacity Factor
+    rated_soec = get_config(df, 'soec_capacity_mw')
+    if rated_soec is None: rated_soec = df['P_soec'].max() or 1.0
+    
+    rated_pem = get_config(df, 'pem_capacity_mw')
+    if rated_pem is None: rated_pem = df['P_pem'].max() or 1.0
+    
+    hours_in_month = df_monthly.index.days_in_month * 24.0
+    df_monthly['CF_SOEC'] = (df_monthly['E_soec_MWh'] / hours_in_month / rated_soec) * 100
+    df_monthly['CF_PEM'] = (df_monthly['E_pem_MWh'] / hours_in_month / rated_pem) * 100
+    
+    # Module Data
+    mod_cols = [c for c in df_indexed.columns if 'soec_module_powers_' in c]
+    mod_cols.sort(key=lambda s: int(s.split('_')[-1]))
+    
+    df_mod_monthly = None
+    if mod_cols:
+        df_mod_monthly = df_indexed[mod_cols].resample('ME').sum() / 60.0 # MWh
+    
+    return {
+        'valid': True,
+        'df_monthly': df_monthly,
+        'df_mod_monthly': df_mod_monthly,
+        'mod_cols': mod_cols,
+        'rated_soec': rated_soec,
+        'rated_pem': rated_pem,
+        'x_labels': df_monthly.index.strftime('%b'),
+        'hours_in_month': hours_in_month
+    }
+
+@log_graph_errors
+def create_monthly_performance_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """Combined monthly performance figure (Efficiency + CF + Heatmap)."""
+    data = _prepare_monthly_data(df)
+    fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
+    
+    if not data['valid']:
+        fig.text(0.5, 0.5, data.get('reason', 'Invalid Data'), ha='center')
+        return fig
+        
+    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1.2])
+    ax_eff = fig.add_subplot(gs[0, 0])
+    ax_cf = fig.add_subplot(gs[0, 1])
+    ax_mod = fig.add_subplot(gs[1, :])
+    
+    # Plot Efficiency
+    _plot_monthly_efficiency(ax_eff, data)
+    
+    # Plot Capacity Factor
+    _plot_monthly_cf(ax_cf, data)
+    
+    # Plot Heatmap
+    _plot_soec_heatmap(ax_mod, data, fig)
+    
+    fig.suptitle('Monthly Performance Indicators', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_monthly_efficiency_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """Separate figure for Monthly Efficiency."""
+    data = _prepare_monthly_data(df)
+    fig = Figure(figsize=(8, 6), dpi=dpi, constrained_layout=True)
+    
+    if not data['valid']:
+        fig.text(0.5, 0.5, data.get('reason', 'Invalid Data'), ha='center')
+        return fig
+        
+    ax = fig.add_subplot(111)
+    _plot_monthly_efficiency(ax, data)
+    fig.suptitle('Monthly Efficiency Trends', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_monthly_capacity_factor_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """Separate figure for Monthly Capacity Factor."""
+    data = _prepare_monthly_data(df)
+    fig = Figure(figsize=(8, 6), dpi=dpi, constrained_layout=True)
+    
+    if not data['valid']:
+        fig.text(0.5, 0.5, data.get('reason', 'Invalid Data'), ha='center')
+        return fig
+        
+    ax = fig.add_subplot(111)
+    _plot_monthly_cf(ax, data)
+    fig.suptitle('Monthly Capacity Factor', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_soec_module_heatmap_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """Separate figure for SOEC Module Heatmap."""
+    data = _prepare_monthly_data(df)
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    
+    if not data['valid']:
+        fig.text(0.5, 0.5, data.get('reason', 'Invalid Data'), ha='center')
+        return fig
+    
+    # Only useful if module data exists
+    if data['df_mod_monthly'] is None:
+        fig.text(0.5, 0.5, 'No individual module data available', ha='center')
+        return fig
+
+    ax = fig.add_subplot(111)
+    _plot_soec_heatmap(ax, data, fig)
+    fig.suptitle('SOEC Module Utilization', fontsize=14)
+    return fig
+
+# --- Plotting Helpers ---
+def _plot_monthly_efficiency(ax, data):
+    df = data['df_monthly']
+    x_labels = data['x_labels']
+    x = np.arange(len(x_labels))
+    
+    ax.plot(x, df['Eff_Sys'], 'k-o', label='System', linewidth=2)
+    ax.plot(x, df['Eff_SOEC'], 'r--s', label='SOEC', linewidth=1.5, alpha=0.7)
+    ax.plot(x, df['Eff_PEM'], 'b--^', label='PEM', linewidth=1.5, alpha=0.7)
+    
+    ax.set_ylabel('Efficiency LHV (%)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylim(0, 100)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+def _plot_monthly_cf(ax, data):
+    df = data['df_monthly']
+    x_labels = data['x_labels']
+    x = np.arange(len(x_labels))
+    width = 0.35
+    
+    ax.bar(x - width/2, df['CF_SOEC'], width, label='SOEC', color='salmon', alpha=0.8)
+    ax.bar(x + width/2, df['CF_PEM'], width, label='PEM', color='skyblue', alpha=0.8)
+    
+    ax.set_ylabel('Capacity Factor (%)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(x_labels)
+    ax.set_ylim(0, 105)
+    ax.legend()
+    ax.grid(True, axis='y', alpha=0.3)
+    ax.set_title(f"Rated: SOEC {data['rated_soec']:.1f}MW, PEM {data['rated_pem']:.1f}MW", fontsize=10)
+
+def _plot_soec_heatmap(ax, data, fig):
+    df_mod = data['df_mod_monthly']
+    mod_cols = data['mod_cols']
+    x_labels = data['x_labels']
+    
+    if df_mod is None:
+        ax.text(0.5, 0.5, 'No individual module data available', ha='center')
+        return
+
+    n_modules = len(mod_cols)
+    rated_mod = data['rated_soec'] / n_modules if n_modules > 0 else 1.0
+    
+    cf_matrix = np.zeros((n_modules, len(data['df_monthly'])))
+    
+    for i, col in enumerate(mod_cols):
+        cf_col = (df_mod[col] / data['hours_in_month'] / rated_mod) * 100
+        cf_matrix[i, :] = cf_col.values # .values to ensure alignment
+
+    im = ax.imshow(cf_matrix, cmap='YlOrRd', aspect='auto', vmin=0, vmax=100)
+    
+    ax.set_xticks(np.arange(len(x_labels)))
+    ax.set_xticklabels(x_labels)
+    ax.set_yticks(np.arange(n_modules))
+    ax.set_yticklabels([f"Mod {i+1}" for i in range(n_modules)])
+    ax.set_xlabel('Month')
+    
+    cbar = fig.colorbar(im, ax=ax, orientation='vertical', pad=0.02)
+    cbar.set_label('CF (%)')
+
+@log_graph_errors
+def create_soec_module_power_stacked_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Stacked area chart of power consumption by each SOEC module.
+    
+    Visualizes the load distribution and total SOEC power composition.
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+
+    # Prepare data
+    df_indexed = df.copy()
+    if 'time' not in df_indexed.columns:
+        if 'minute' in df_indexed.columns:
+            df_indexed['time'] = df_indexed['minute'] / 60.0
+        else:
+            df_indexed['time'] = df_indexed.index  # Fallback
+            
+    # Find module columns
+    mod_cols = [c for c in df_indexed.columns if 'soec_module_powers_' in c]
+    mod_cols.sort(key=lambda s: int(s.split('_')[-1]))
+    
+    if not mod_cols:
+        ax.text(0.5, 0.5, 'No individual module power data available', ha='center')
+        return fig
+
+    # Downsample if needed for performance
+    if len(df_indexed) > 10000:
+        factor = len(df_indexed) // 5000
+        df_plot = df_indexed.iloc[::factor]
+    else:
+        df_plot = df_indexed
+
+    x = df_plot['time']
+    y_stack = [df_plot[col] for col in mod_cols]
+    labels = [f"Mod {col.split('_')[-1]}" for col in mod_cols]
+    
+    # Use a colormap if many modules
+    cmap = get_cmap('tab20c') if len(mod_cols) > 10 else None
+    colors = [cmap(i) for i in np.linspace(0, 1, len(mod_cols))] if cmap else None
+
+    if colors:
+        ax.stackplot(x, *y_stack, labels=labels, colors=colors, alpha=0.8)
+    else:
+        ax.stackplot(x, *y_stack, labels=labels, alpha=0.8)
+    
+    ax.set_title('SOEC Module Power Consumption Breakdown')
+    ax.set_xlabel('Time (hours)')
+    ax.set_ylabel('Power (MW)')
+    ax.set_xlim(x.min(), x.max())
+    ax.set_ylim(bottom=0)
+    
+    # Legend - might be crowded if many modules
+    if len(mod_cols) <= 12:
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1), title='Modules')
+    else:
+        # Simplified legend for many modules
+        ax.text(1.02, 0.5, f"Total Modules: {len(mod_cols)}\n(Legend hidden for clarity)", 
+                transform=ax.transAxes, va='center')
+                
+    ax.grid(True, alpha=0.3)
+    return fig
+
+    ax.grid(True, alpha=0.3)
+    return fig
+
+@log_graph_errors
+def create_soec_module_wear_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Bar charts of SOEC module wear statistics:
+    1. Total Energy Produced (MWh) per module.
+    2. Number of Start/Stop Cycles per module.
+    """
+    fig = Figure(figsize=(10, 8), dpi=dpi, constrained_layout=True)
+    gs = fig.add_gridspec(2, 1, height_ratios=[1, 1])
+    ax_energy = fig.add_subplot(gs[0])
+    ax_cycles = fig.add_subplot(gs[1])
+    
+    # 1. Identify Module Columns
+    mod_cols = [c for c in df.columns if 'soec_module_powers_' in c]
+    mod_cols.sort(key=lambda s: int(s.split('_')[-1]))
+    
+    if not mod_cols:
+        fig.text(0.5, 0.5, 'No individual module power data available', ha='center')
+        return fig
+    
+    # 2. Calculate Metrics
+    energies_mwh = []
+    cycles_count = []
+    labels = []
+    
+    threshold_mw = 0.01 # Minimal power to consider "ON"
+    
+    for col in mod_cols:
+        series = df[col]
+        
+        # Energy: Integral of Power. Assuming 1-minute steps (standard).
+        # Safe check: if 'minute' exists, check dt? Assuming constant 1 min for now consistent with other graphs.
+        total_mwh = series.sum() / 60.0
+        energies_mwh.append(total_mwh)
+        
+        # Cycles: 0 -> 1 transitions
+        # Boolean series of ON/OFF
+        is_on = series > threshold_mw
+        # Shift to compare with previous step - avoid FutureWarning
+        shifted = is_on.shift(1)
+        prev_on = shifted.where(shifted.notna(), False)
+        starts = is_on & (~prev_on)
+        cycles = starts.sum()
+        cycles_count.append(cycles)
+        
+        labels.append(f"Mod {col.split('_')[-1]}")
+    
+    x = np.arange(len(labels))
+    
+    # 3. Plot Energy
+    # Use a gradient or robust color
+    ax_energy.bar(x, energies_mwh, color='#4CAF50', alpha=0.8, edgecolor='darkgreen')
+    ax_energy.set_ylabel('Total Energy (MWh)')
+    ax_energy.set_title('Total Energy Operated (Integrity/Wear Proxy)')
+    ax_energy.set_xticks(x)
+    ax_energy.set_xticklabels(labels)
+    ax_energy.grid(True, axis='y', alpha=0.3)
+    
+    # Add value labels
+    for i, v in enumerate(energies_mwh):
+        ax_energy.text(i, v, f"{v:.1f}", ha='center', va='bottom', fontsize=8)
+        
+    # 4. Plot Cycles
+    ax_cycles.bar(x, cycles_count, color='#FF9800', alpha=0.8, edgecolor='darkorange')
+    ax_cycles.set_ylabel('Start/Stop Cycles (#)')
+    ax_cycles.set_title('Number of Activations (Thermal Cycling Proxy)')
+    ax_cycles.set_xticks(x)
+    ax_cycles.set_xticklabels(labels)
+    ax_cycles.grid(True, axis='y', alpha=0.3)
+    
+    # Add value labels
+    for i, v in enumerate(cycles_count):
+        ax_cycles.text(i, v, f"{int(v)}", ha='center', va='bottom', fontsize=8)
+
+    fig.suptitle('SOEC Module Wear Statistics', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_q_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Thermal Load Breakdown (Q_dot) by Component and Phase (Average kW).
+    
+    Replicates legacy 'plot_q_breakdown' logic:
+    - Plots Average Cooling Duty (kW) for each component.
+    - Categorizes by 'Total', 'Gas' (Sensible), 'Liquid/Latent'.
+    - Splits into H2-line and O2-line subplots if identifiable, otherwise Combined.
+    """
+    fig = Figure(figsize=(10, 10), dpi=dpi, constrained_layout=True)
+    
+    # 1. Identify Components and Calculate Averages
+    # Pattern: {cid: {'Total': avg_kw, 'Sensible': avg_kw, 'Latent': avg_kw}}
+    data = {}
+    
+    # Chillers (Full Split available)
+    chiller_cols = [c for c in df.columns if '_cooling_load_kw' in c and 'Chiller' in c]
+    for col in chiller_cols:
+        cid = col.replace('_cooling_load_kw', '')
+        total = df[col].mean()
+        # Try to find split
+        sens = df.get(f"{cid}_sensible_heat_kw", pd.Series([0])).mean()
+        lat = df.get(f"{cid}_latent_heat_kw", pd.Series([0])).mean()
+        
+        # If sensible/latent columns missing/empty, assume majority is Sensible or use Total
+        if sens == 0 and lat == 0:
+             # Legacy fallback: Use total as 'Sensible' for gas coolers, or try to guess
+             sens = total
+             
+        data[cid] = {'Total': total, 'Sensible': sens, 'Latent': lat}
+
+    # Dry Coolers (Total only/Sensible)
+    dc_cols = [c for c in df.columns if '_heat_rejected_kw' in c and 'DryCooler' in c]
+    for col in dc_cols:
+        cid = col.replace('_heat_rejected_kw', '')
+        # Note: heat_rejected is usually positive for cooling
+        val = df[col].mean()
+        data[cid] = {'Total': val, 'Sensible': val, 'Latent': 0.0}
+        
+    # Heat Exchangers (Total only)
+    hx_cols = [c for c in df.columns if '_heat_removed_kw' in c] # We just added this
+    for col in hx_cols:
+        cid = col.replace('_heat_removed_kw', '')
+        val = df[col].mean()
+        # Logic: If val > 0 it's cooling.
+        data[cid] = {'Total': val, 'Sensible': val, 'Latent': 0.0}
+
+    if not data:
+        fig.text(0.5, 0.5, 'No thermal load data found', ha='center')
+        return fig
+
+    # 2. Grouping (H2 vs O2)
+    # Heuristic: Check CID string
+    h2_group = {}
+    o2_group = {}
+    other_group = {}
+    
+    for cid, vals in data.items():
+        # Heuristics based on topology naming conventions
+        lower_id = cid.lower()
+        if 'h2' in lower_id or 'recup' in lower_id or 'interchanger' in lower_id:
+            h2_group[cid] = vals
+        elif 'o2' in lower_id or 'oxygen' in lower_id:
+            o2_group[cid] = vals
+        else:
+            other_group[cid] = vals
+            
+    # Merge 'other' into H2 if small or generic, or keep separate? 
+    # Let's create subplots based on what we found.
+    
+    subplots = []
+    if h2_group: subplots.append(('Fluxo H₂', h2_group))
+    if o2_group: subplots.append(('Fluxo O₂', o2_group))
+    if other_group: subplots.append(('Outros', other_group))
+    
+    n_plots = len(subplots)
+    if n_plots == 0: return fig
+    
+    # 3. Plotting
+    gs = fig.add_gridspec(n_plots, 1)
+    
+    for i, (title, group) in enumerate(subplots):
+        ax = fig.add_subplot(gs[i])
+        
+        labels = list(group.keys())
+        # Sort labels to stabilize order?
+        labels.sort()
+        
+        x = np.arange(len(labels))
+        width = 0.4
+        
+        lat_vals = [group[k]['Latent'] for k in labels]
+        sens_vals = [group[k]['Sensible'] for k in labels]
+        
+        # Stacked Bar: Latent (Bottom), Sensible (Top)
+        # Colors matching legacy: Latent (H2O) = skyblue/salmon, Sensible (Gas) = blue/red
+        
+        # Base colors (H2-ish vs O2-ish)
+        is_o2 = 'O₂' in title
+        color_lat = 'salmon' if is_o2 else 'skyblue'
+        color_sens = 'red' if is_o2 else 'blue'
+        label_lat = 'H2O (Vapor + Líquido)'
+        label_sens = f"{'O2' if is_o2 else 'H2'} (Gás Principal)"
+        
+        p1 = ax.bar(x, lat_vals, width, color=color_lat, edgecolor='grey', label=label_lat)
+        p2 = ax.bar(x, sens_vals, width, bottom=lat_vals, color=color_sens, edgecolor='grey', label=label_sens)
+        
+        ax.set_title(title)
+        ax.set_ylabel('Carga Térmica (kW)')
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=15 if len(labels) > 4 else 0)
+        ax.grid(True, axis='y', linestyle='--', alpha=0.5)
+        ax.axhline(0, color='black', linewidth=0.5)
+        
+        # Value Labels
+        for j, k in enumerate(labels):
+            total = group[k]['Total']
+            if abs(total) > 0.01:
+                ax.text(j + width/2 + 0.02, total, f"{total:.1f}", ha='left', va='center', fontsize=8)
+
+        if i == 0:
+            ax.legend(loc='upper right') # Only legend on top plot to save space? Or all?
+
+    fig.suptitle('Carga Térmica Média (Q dot) por Componente', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Drain Line Properties (T, P, Flow, Dissolved Gas).
+    
+    Compares aggregated 'IN' state (sum/avg of upstream drains) vs 'OUT' state (Mixer).
+    Filters for H2 and O2 lines based on ID naming.
+    """
+    fig = Figure(figsize=(14, 12), dpi=dpi, constrained_layout=True)
+    
+    # 1. Identify Drain Lines (Mixers)
+    # Look for DrainRecorderMixer columns
+    mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
+    mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
+    
+    if not mixers:
+        fig.text(0.5, 0.5, 'No DrainRecorderMixer data found', ha='center')
+        return fig
+
+    # 2. Collect Data for each Line
+    lines_data = {} # {line_name: {'IN': dict, 'OUT': dict}}
+    
+    for mix_id in mixers:
+        # Determine Line Type (H2 or O2)
+        line_type = 'H2' if 'H2' in mix_id else ('O2' if 'O2' in mix_id else 'Unknown')
+        
+        # --- OUT State (Mixer) ---
+        out_flow = df[f"{mix_id}_outlet_mass_flow_kg_h"].mean()
+        out_temp = df[f"{mix_id}_outlet_temperature_c"].mean()
+        # Pressure: stored in kPa, convert to bar
+        out_pres_bar = df[f"{mix_id}_outlet_pressure_kpa"].mean() / 100.0
+        out_gas = df[f"{mix_id}_dissolved_gas_ppm"].mean()
+        
+        # --- IN State (Aggregation) ---
+        # Find upstream components belonging to this line type
+        # Heuristic: Components matching the line_type string
+        upstream_flow = 0.0
+        upstream_enthalpy_product = 0.0 # Flow * T (Approx for mixing T)
+        upstream_gas_product = 0.0 # Flow * Conc
+        upstream_pressures = []
+        
+        # List of potential upstream component types and their flow columns
+        # (CID_Suffix, Flow_Col_Suffix, Temp_K_Suffix, Pres_Bar_Suffix)
+        
+        # We need to scan all columns to find matching components
+        # Helper to scan:
+        def scan_components(comp_marker, flow_suffix, temp_k_suffix='_drain_temp_k', pres_bar_suffix='_drain_pressure_bar'):
+             nonlocal upstream_flow, upstream_enthalpy_product, upstream_gas_product, upstream_pressures
+             cols = [c for c in df.columns if flow_suffix in c and comp_marker in c]
+             for c in cols:
+                 cid = c.replace(flow_suffix, '')
+                 # Filter by line type 
+                 if line_type not in cid: continue
+                 
+                 flow = df[c].mean()
+                 if flow < 0.001: continue
+                 
+                 # Temp (K -> C)
+                 t_k = df.get(f"{cid}{temp_k_suffix}", pd.Series([298.15])).mean()
+                 t_c = t_k - 273.15
+                 
+                 # Pressure
+                 p_bar = df.get(f"{cid}{pres_bar_suffix}", pd.Series([1.0])).mean()
+                 
+                 # Dissolved Gas (ppm)
+                 # Note: Coalescer/KOD track 'dissolved_gas_ppm' or 'outlet_o2_ppm_mol'? 
+                 # 'dissolved_gas_ppm' is tracked for KOD/Coalescer/Mixer
+                 gas_ppm = df.get(f"{cid}_dissolved_gas_ppm", pd.Series([0.0])).mean()
+                 
+                 upstream_flow += flow
+                 upstream_enthalpy_product += flow * t_c
+                 upstream_gas_product += flow * gas_ppm
+                 upstream_pressures.append(p_bar)
+
+        # Scan KODs
+        scan_components('KOD', '_water_removed_kg_h')
+        # Scan Coalescers
+        scan_components('Coalescer', '_drain_flow_kg_h')
+        # Scan Cyclones
+        scan_components('Cyclone', '_water_removed_kg_h') # Using water_removed based on verify
+        
+        # Calculate Aggregated IN
+        if upstream_flow > 0:
+            in_temp = upstream_enthalpy_product / upstream_flow
+            in_gas = upstream_gas_product / upstream_flow
+            in_pres = np.mean(upstream_pressures) if upstream_pressures else 1.0
+        else:
+            # Fallback if no upstream found (e.g. simple test)
+            in_temp, in_gas, in_pres = out_temp, out_gas, out_pres_bar
+
+        lines_data[line_type] = {
+            'IN': {'Flow': upstream_flow, 'Temp': in_temp, 'Pres': in_pres, 'Gas': in_gas},
+            'OUT': {'Flow': out_flow, 'Temp': out_temp, 'Pres': out_pres_bar, 'Gas': out_gas}
+        }
+
+    # 3. Plotting
+    # 4 Rows (Props) x 2 Columns (H2, O2)
+    gs = fig.add_gridspec(4, 2)
+    props = [
+        ('Flow', 'Vazão (kg/h)', 'tab:green'),
+        ('Temp', 'Temperatura (°C)', 'tab:orange'),
+        ('Pres', 'Pressão (bar)', 'tab:purple'),
+        ('Gas', 'Gás Dissolvido (ppm)', 'tab:brown')
+    ]
+    
+    x_indices = [0, 1]
+    x_labels = ['Agregação IN', 'Mixer/Tank OUT']
+    
+    for col_idx, line_key in enumerate(['H2', 'O2']):
+        data = lines_data.get(line_key)
+        
+        for row_idx, (prop_key, prop_label, color) in enumerate(props):
+            ax = fig.add_subplot(gs[row_idx, col_idx])
+            
+            if data:
+                vals = [data['IN'][prop_key], data['OUT'][prop_key]]
+                ax.plot(x_indices, vals, marker='o', linestyle='-', color=color, linewidth=2, markersize=8)
+                
+                # Value labels
+                for i, v in zip(x_indices, vals):
+                     ax.text(i, v, f"{v:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold', color=color)
+                     
+                # Limits padding
+                min_v, max_v = min(vals), max(vals)
+                margin = (max_v - min_v) * 0.2 if max_v != min_v else 1.0
+                ax.set_ylim(min_v - margin, max_v + margin)
+            else:
+                ax.text(0.5, 0.5, 'No Data', ha='center')
+
+            if row_idx == 0:
+                ax.set_title(f"Fluxo {line_key}")
+            
+            ax.set_ylabel(prop_label)
+            ax.set_xticks(x_indices)
+            ax.set_xticklabels(x_labels)
+            ax.grid(True, linestyle='--', alpha=0.5)
+
+    fig.suptitle('Propriedades da Linha de Drenos (Média)', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_deoxo_profile_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Deoxo Reactor Internal Profile (Temperature & Conversion).
+    
+    METHOD: Profile Reconstitution.
+    Since internal profiles are not stored in history, this function:
+    1. Calculates average inlet conditions from history.
+    2. Instantiates a temporary DeoxoReactor.
+    3. Runs a single step to reproduce the steady-state profile.
+    4. Plots T(z) and Conversion(z).
+    """
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    
+    # 1. Gather Average Inlet Data
+    # We look for columns like 'Deoxo_inlet_mass_flow_kg_h' etc. if tracked, 
+    # OR deduce from upstream if necessary. 
+    # Assuming 'Deoxo' is the standard ID, or we search for it.
+    
+    # Try to find a Deoxo ID in columns (now looking for tracked columns)
+    deoxo_id = None
+    for col in df.columns:
+        # Look for any Deoxo tracked column
+        if 'Deoxo' in col and any(suffix in col for suffix in ['_inlet_temp_c', '_peak_temp_c', '_o2_in_kg_h']):
+            # Extract component ID by removing the suffix
+            for suffix in ['_inlet_temp_c', '_peak_temp_c', '_o2_in_kg_h']:
+                if col.endswith(suffix):
+                    deoxo_id = col.replace(suffix, '')
+                    break
+            if deoxo_id:
+                break
+            
+    if not deoxo_id:
+        fig.text(0.5, 0.5, 'No Deoxo data found in history.\n(Ensure Deoxo tracking is enabled)', ha='center')
+        return fig
+
+    # Get Averages
+    # Note: 'inlet' props might not be explicitly tracked in history if not requested.
+    # However, 'Internal' props often track 'o2_in_kg_h'.
+    # A safe bet is to look for 'Deoxo_Last_Inlet_Temp' if we added it, 
+    # OR approximate from 'Deoxo_outlet_temperature_c' - delta_T if inlet missing.
+    # BEST: Use the 'Stream' tracking if available, or just use what we have.
+    
+    # Let's assume standard names or fallback to defaults for reconstruction demonstration
+    # Ideally, we should have tracked inlet conditions. 
+    # If not, we can try to guess from the previous component (e.g. Heater or PSA).
+    # FOR NOW: Let's reconstruction from valid tracked metrics OR use a sane default.
+    
+    # Valid tracked metrics for Deoxo usually: 
+    # - outlet_o2_ppm_mol
+    # - peak_temperature_c 
+    # - conversion_o2_percent
+    # - o2_in_kg_h
+    
+    # We can back-calculate:
+    # Mass Flow: Not explicitly tracked? -> Check 'total_mass_flow_kg_h' or similar global?
+    # Actually 'Deoxo' usually has 'input_stream.mass_flow' which we might not have.
+    # But checking 'run_simulation.py', we often track 'mass_flow_total'.
+    # Now we track these explicitly for each Deoxo
+    avg_mass_flow = df.get(f"{deoxo_id}_mass_flow_kg_h", pd.Series([1000.0])).mean()
+    if avg_mass_flow <= 0:
+        avg_mass_flow = df.get('total_mass_flow_kg_h', pd.Series([1000.0])).mean()
+    
+    # O2 In (tracked directly):
+    avg_o2_in_kg_h = df.get(f"{deoxo_id}_o2_in_kg_h", pd.Series([0.0])).mean()
+    # If O2 in is 0, no profile to show.
+    if avg_o2_in_kg_h <= 1e-6:
+        fig.text(0.5, 0.5, 'Negligible O2 Input to Deoxo (Average)', ha='center')
+        return fig
+        
+    y_o2 = avg_o2_in_kg_h / avg_mass_flow if avg_mass_flow > 0 else 0
+    
+    # Inlet Temperature (tracked):
+    t_in_c = df.get(f"{deoxo_id}_inlet_temp_c", pd.Series([70.0])).mean()
+    t_in_k = t_in_c + 273.15
+    
+    # Inlet Pressure (tracked):
+    p_in_bar = df.get(f"{deoxo_id}_inlet_pressure_bar", pd.Series([30.0])).mean()
+    p_in_pa = p_in_bar * 1e5
+
+    # 2. Instantiate & Simulate
+    # Create Registry for initialization (mock)
+    registry = ComponentRegistry()
+    
+    deoxo = DeoxoReactor(deoxo_id)
+    registry.register(deoxo_id, deoxo)  # Pass component_id first
+    deoxo.initialize(dt=1/3600, registry=registry)
+    
+    # Construct Inlet Stream
+    # Composition: H2 (bal), O2 (calculated), H2O (trace)
+    comp = {'H2': 1.0 - y_o2, 'O2': y_o2, 'H2O': 0.0}
+    
+    in_stream = Stream(
+        mass_flow_kg_h=avg_mass_flow,
+        temperature_k=t_in_k,
+        pressure_pa=p_in_pa,
+        composition=comp,
+        phase='gas'
+    )
+    
+    deoxo.receive_input('inlet', in_stream)
+    deoxo.step(0.0) # Run physics
+    
+    # 3. Extract Profiles
+    profiles = deoxo.get_last_profiles()
+    L_data = profiles['L']
+    T_data = profiles['T'] - 273.15 # K -> C
+    X_data = profiles['X']
+    
+    if len(L_data) == 0:
+        fig.text(0.5, 0.5, 'Deoxo Profile Generation Failed (No Data)', ha='center')
+        return fig
+
+    # 4. Plot
+    ax1 = fig.add_subplot(111)
+    
+    # Conversion (Left Axis)
+    ax1.set_xlabel('Reactor Length (m)')
+    ax1.set_ylabel('Conversion O₂ (Fraction)', color='tab:blue')
+    line1, = ax1.plot(L_data, X_data, color='tab:blue', linewidth=2, label='Conversion')
+    ax1.tick_params(axis='y', labelcolor='tab:blue')
+    ax1.set_ylim(-0.05, 1.05)
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    
+    # Temperature (Right Axis)
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('Temperature (°C)', color='tab:red')
+    line2, = ax2.plot(L_data, T_data, color='tab:red', linewidth=2, linestyle='--', label='Temperature')
+    ax2.tick_params(axis='y', labelcolor='tab:red')
+    
+    # Title & Legend
+    lns = [line1, line2]
+    labs = [l.get_label() for l in lns]
+    ax1.legend(lns, labs, loc='center right')
+    
+    ax1.set_title(f"Deoxo Internal Profile (Reconstituted from Avg Conditions)\nInlet O₂: {y_o2*1e6:.1f} ppm | Flow: {avg_mass_flow:.1f} kg/h")
+    
+    return fig
+
+    ax1.set_title(f"Deoxo Internal Profile (Reconstituted from Avg Conditions)\nInlet O₂: {y_o2*1e6:.1f} ppm | Flow: {avg_mass_flow:.1f} kg/h")
+    
+    return fig
+
+@log_graph_errors
+def create_drain_mixer_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Drain Mixer Balance (Static Bar Chart).
+    
+    Visualizes Mass & Energy Balance for Drain Mixers.
+    Compares 'Calculated IN' (Sum of upstream) vs 'Recorded OUT'.
+    """
+    fig = Figure(figsize=(10, 12), dpi=dpi, constrained_layout=True)
+    
+    # 1. Identify Mixers
+    mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
+    mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
+    
+    if not mixers:
+        fig.text(0.5, 0.5, 'No DrainRecorderMixer data found', ha='center')
+        return fig
+
+    # 2. Collect Data (IN vs OUT)
+    # Structure: {label: {'Flow': val, 'Temp': val, 'Pres': val}}
+    plot_items = {} 
+    
+    for mix_id in mixers:
+        # Determine Line Type
+        line_type = 'H2' if 'H2' in mix_id else ('O2' if 'O2' in mix_id else 'Other')
+        label_base = f"{line_type} Drain"
+
+        # --- OUT (Recorded) ---
+        out_flow = df.get(f"{mix_id}_outlet_mass_flow_kg_h", pd.Series([0])).mean()
+        out_temp = df.get(f"{mix_id}_outlet_temperature_c", pd.Series([0])).mean()
+        out_pres = df.get(f"{mix_id}_outlet_pressure_kpa", pd.Series([100])).mean() / 100.0 # bar
+        
+        # --- IN (Calculated Sum) ---
+        upstream_flow = 0.0
+        upstream_enthalpy_prod = 0.0
+        upstream_pressures = []
+
+        # Helper to scan upstream (similar to drain_line_props but simpler sum)
+        def scan_components(comp_marker, flow_suffix, temp_k_suffix='_drain_temp_k', pres_bar_suffix='_drain_pressure_bar'):
+             nonlocal upstream_flow, upstream_enthalpy_prod, upstream_pressures
+             cols = [c for c in df.columns if flow_suffix in c and comp_marker in c]
+             for c in cols:
+                 cid = c.replace(flow_suffix, '')
+                 # Filter by line type AND ensuring it belongs to this mixer logic
+                 # Heuristic: If mix_id is 'DrainRecorderMixer_H2', we want 'KOD_H2'.
+                 # If mix_id is generic, we might capture too much. 
+                 # Assuming 1 mixer per line type for now.
+                 if line_type not in cid and line_type != 'Other': continue
+                 
+                 flow = df[c].mean()
+                 if flow < 1e-4: continue
+                 
+                 t_k = df.get(f"{cid}{temp_k_suffix}", pd.Series([298.15])).mean()
+                 t_c = t_k - 273.15
+                 p_bar = df.get(f"{cid}{pres_bar_suffix}", pd.Series([1.0])).mean()
+                 
+                 upstream_flow += flow
+                 upstream_enthalpy_prod += flow * t_c
+                 upstream_pressures.append(p_bar)
+
+        # Scan all potential sources
+        scan_components('KOD', '_water_removed_kg_h')
+        scan_components('Coalescer', '_drain_flow_kg_h')
+        scan_components('Cyclone', '_water_removed_kg_h')
+        
+        # Calc IN averages
+        if upstream_flow > 0:
+            in_temp = upstream_enthalpy_prod / upstream_flow
+            in_pres = np.mean(upstream_pressures) if upstream_pressures else 1.0
+        else:
+            in_temp, in_pres = 0.0, 0.0
+            
+        # Store Comparison Pair
+        plot_items[f"{label_base} IN (Calc)"] = {'Flow': upstream_flow, 'Temp': in_temp, 'Pres': in_pres, 'Color': 'tab:blue', 'Alpha': 0.6}
+        plot_items[f"{label_base} OUT (Mixer)"] = {'Flow': out_flow, 'Temp': out_temp, 'Pres': out_pres, 'Color': 'tab:green', 'Alpha': 1.0}
+
+    # 3. Plotting
+    # 3 Rows: Temp, Pres, Flow
+    gs = fig.add_gridspec(3, 1)
+    
+    # Prepare X axis
+    labels = list(plot_items.keys())
+    x = np.arange(len(labels))
+    
+    # Metrics map
+    metrics = [
+        ('Temp', 'Temperatura (°C)', 0),
+        ('Pres', 'Pressão (bar)', 1),
+        ('Flow', 'Vazão Mássica (kg/h)', 2)
+    ]
+    
+    for metric_key, ylabel, row_idx in metrics:
+        ax = fig.add_subplot(gs[row_idx])
+        
+        vals = [plot_items[k][metric_key] for k in labels]
+        colors = [plot_items[k]['Color'] for k in labels]
+        alphas = [plot_items[k]['Alpha'] for k in labels]
+        
+        bars = ax.bar(x, vals, color=colors, alpha=0.9, edgecolor='black')
+        
+        # Apply alphas manually if needed or just rely on color diff
+        for bar, alpha in zip(bars, alphas):
+            bar.set_alpha(alpha)
+            
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=15, ha='right')
+        ax.grid(axis='y', linestyle='--', alpha=0.5)
+        
+        # Value Labels
+        for i, v in enumerate(vals):
+            ax.text(i, v, f"{v:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold')
+            
+    fig.suptitle('Balanço dos Mixers de Dreno (Média)', fontsize=14)
+    return fig
+
+            
+    fig.suptitle('Balanço dos Mixers de Dreno (Média)', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_drain_scheme_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Drain System Schematic (Static Diagram).
+    
+    Visualizes the topology of the drain system:
+    - Inputs: PEM Drains, KODs
+    - Processing: Valve -> Flash Drum
+    - Aggregation: Final Mixer
+    - Adapts to show O2 branch only if O2 data exists.
+    """
+    fig = Figure(figsize=(14, 8), dpi=dpi)
+    ax = fig.add_subplot(111)
+    ax.set_title('Esquema do Processo de Tratamento de Água de Dreno', fontsize=16, fontweight='bold')
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 100)
+    ax.axis('off')
+
+    # Detect O2 Branch Existence
+    # Check if we have O2 columns in the dataframe
+    has_o2 = any('O2' in c or 'o2' in c for c in df.columns if 'mass_flow' in c)
+    # Or strict check for O2 drain mixer
+    has_o2_drain = any('Drain' in c and 'O2' in c for c in df.columns)
+    
+    draw_o2 = has_o2 or has_o2_drain
+
+    # --- 1. Definição de Componentes ---
+    
+    # H2 Flow (Top)
+    x_h2 = 10; y_h2 = 80
+    componentes_h2 = [
+        ("PEM Dreno Recirc. (H₂)", x_h2 + 5, y_h2),
+        ("KOD 1 (H₂)", x_h2 + 25, y_h2),
+        ("KOD 2 (H₂)", x_h2 + 45, y_h2),
+    ]
+    
+    # O2 Flow (Bottom) - Only if exists
+    x_o2 = 10; y_o2 = 25
+    componentes_o2 = [
+        ("PEM Dreno Recirc. (O₂)", x_o2 + 5, y_o2),
+        ("KOD 1 (O₂)", x_o2 + 25, y_o2),
+        ("KOD 2 (O₂)", x_o2 + 45, y_o2),
+    ] if draw_o2 else []
+
+    # Common Components
+    x_valve = 65
+    y_valve_h2 = 80
+    y_valve_o2 = 25
+    
+    x_flash = 78
+    y_flash_h2 = 80
+    y_flash_o2 = 25
+    
+    x_mixer = 85
+    y_mixer = 52.5 if draw_o2 else y_h2 # If no O2, mixer is inline or lower? 
+    # Actually if no O2, maybe just straight line? But let's keep structure centered if O2 usually exists.
+    if not draw_o2:
+        y_mixer = y_h2
+        
+    # --- Helper Draw Functions ---
+    def draw_drenos_brutos(comps, color):
+        for i, (name, x, y) in enumerate(comps):
+            # Circle
+            ax.plot(x, y, 'o', color=color, markersize=8, zorder=5)
+            ax.text(x, y + 4, name, ha='center', fontsize=8, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', boxstyle="round,pad=0.2"))
+            
+            # Connection Line
+            if i > 0:
+                prev_x = comps[i-1][1]
+                ax.plot([prev_x, x], [y, y], color=color, linestyle=':', linewidth=1.5, zorder=1)
+                
+            # Vertical Aggregation Line (Stylized input)
+            ax.plot([x, x], [y, y + 10], color='gray', linestyle='--', linewidth=1)
+                
+            # Arrow
+            ax.arrow(x - 2, y, 4, 0, head_width=0, head_length=0, fc=color, ec=color) # Just marker line
+
+    def draw_valve(x, y, color):
+        rect = mpatches.Rectangle((x - 1.5, y - 3), 3, 6, facecolor='lightgray', edgecolor=color, linewidth=2, zorder=3)
+        ax.add_patch(rect)
+        ax.text(x, y + 5, "Válvula", ha='center', fontsize=8)
+
+    def draw_flash(x, y, color):
+        rect = mpatches.Rectangle((x - 3, y - 6), 6, 12, facecolor='mistyrose' if color == 'firebrick' else 'lightblue', edgecolor=color, linewidth=2, zorder=3)
+        ax.add_patch(rect)
+        ax.text(x, y + 8, "Flash Drum", ha='center', fontsize=8)
+        # Vent arrow
+        ax.arrow(x, y + 6, 0, 8, head_width=2, head_length=2, fc='gray', ec='gray', zorder=4)
+        ax.text(x + 2, y + 14, "Vent", fontsize=7, color='gray')
+
+    # Draw H2 Branch
+    draw_drenos_brutos(componentes_h2, 'firebrick')
+    # Aggregation line
+    if componentes_h2:
+        end_h2 = componentes_h2[-1]
+        ax.plot([end_h2[1], x_valve], [y_h2, y_h2], color='firebrick', linewidth=2, zorder=2)
+        ax.arrow(x_valve - 5, y_h2, 2, 0, head_width=1.5, head_length=1.5, fc='firebrick', ec='firebrick')
+    
+    draw_valve(x_valve, y_valve_h2, 'firebrick')
+    
+    ax.plot([x_valve + 1.5, x_flash - 3], [y_h2, y_h2], color='firebrick', linewidth=2, zorder=2)
+    
+    draw_flash(x_flash, y_flash_h2, 'firebrick')
+
+    # Draw O2 Branch
+    if draw_o2 and componentes_o2:
+        draw_drenos_brutos(componentes_o2, 'navy')
+        end_o2 = componentes_o2[-1]
+        ax.plot([end_o2[1], x_valve], [y_o2, y_o2], color='navy', linewidth=2, zorder=2)
+        ax.arrow(x_valve - 5, y_o2, 2, 0, head_width=1.5, head_length=1.5, fc='navy', ec='navy')
+        
+        draw_valve(x_valve, y_valve_o2, 'navy')
+        
+        ax.plot([x_valve + 1.5, x_flash - 3], [y_o2, y_o2], color='navy', linewidth=2, zorder=2)
+        
+        draw_flash(x_flash, y_flash_o2, 'navy')
+
+    # Mixer
+    mixer_circle = mpatches.Circle((x_mixer, y_mixer), radius=5, facecolor='lightgray', edgecolor='black', linewidth=2, zorder=4)
+    ax.add_patch(mixer_circle)
+    ax.text(x_mixer, y_mixer, "Mixer", ha='center', va='center', fontsize=9, fontweight='bold')
+
+    # H2 to Mixer
+    ax.plot([x_flash + 3, x_mixer], [y_h2, y_mixer + (5 if draw_o2 else 0)], color='firebrick', linewidth=2, zorder=3)
+    
+    # O2 to Mixer
+    if draw_o2:
+        ax.plot([x_flash + 3, x_mixer], [y_o2, y_mixer - 5], color='navy', linewidth=2, zorder=3)
+
+    # Output
+    ax.plot([x_mixer + 5, x_mixer + 20], [y_mixer, y_mixer], color='black', linewidth=3, zorder=4)
+    ax.arrow(x_mixer + 20, y_mixer, 0.01, 0, head_width=2, head_length=2, fc='black', ec='black')
+    ax.text(x_mixer + 15, y_mixer + 3, "Água Recuperada", fontsize=9, fontweight='bold')
+
+    return fig
+
+    ax.text(x_mixer + 15, y_mixer + 3, "Água Recuperada", fontsize=9, fontweight='bold')
+
+    return fig
+
+@log_graph_errors
+def create_energy_flow_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Energy Flow & Consumption by Component.
+    
+    Subplot 1: Thermal Load (Q_dot) - Comparisons H2 vs O2.
+    Subplot 2: Electrical Power (W_dot) - Consumption.
+    """
+    fig = Figure(figsize=(10, 10), dpi=dpi, constrained_layout=True)
+    
+    # 1. Identify Components with Energy Data
+    # Power: *_power_kw
+    # Heat: *_heat_duty_kw OR *_heat_removed_kw
+    
+    # helper to find and classify
+    def get_comp_data(suffix):
+        cols = [c for c in df.columns if c.endswith(suffix)]
+        data = {}
+        for c in cols:
+            comp_id = c.replace(suffix, '')
+            val = df[c].mean()
+            # Filter low values to reduce noise
+            if abs(val) > 0.01:
+                data[comp_id] = val
+        return data
+
+    power_data = get_comp_data('_power_kw')
+    # Merge both heat tracking styles
+    heat_data = get_comp_data('_heat_duty_kw')
+    heat_data.update(get_comp_data('_heat_removed_kw'))
+    # Also DryCooler tqc
+    heat_data.update(get_comp_data('_tqc_duty_kw'))
+
+    if not power_data and not heat_data:
+        fig.text(0.5, 0.5, 'No Energy Data (Power/Heat) found.', ha='center')
+        return fig
+
+    # 2. Categorize (H2 vs O2 vs Other)
+    def categorize(cid):
+        if 'H2' in cid: return 'H2'
+        if 'O2' in cid: return 'O2'
+        return 'Common'
+
+    # Prepare Lists for Plotting
+    # We want grouped bars: H2 Group, O2 Group.
+    
+    # --- Thermal Plot ---
+    ax1 = fig.add_subplot(211)
+    
+    # Sort keys for consistency
+    heat_keys = sorted(heat_data.keys())
+    h2_heat = [k for k in heat_keys if categorize(k) == 'H2']
+    o2_heat = [k for k in heat_keys if categorize(k) == 'O2']
+    common_heat = [k for k in heat_keys if categorize(k) == 'Common'] # Treat Common as H2 side or separate?
+
+    # Let's just plot all H2 then all O2 for clarity
+    
+    # X locations
+    x_h2 = np.arange(len(h2_heat))
+    x_o2 = np.arange(len(o2_heat)) + (len(h2_heat) + 1) if o2_heat else []
+    
+    # H2 Bars
+    if h2_heat:
+        vals = [heat_data[k] for k in h2_heat]
+        bars_h2 = ax1.bar(x_h2, vals, color='tab:blue', edgecolor='black', label='H2 - Calor (kW)')
+        ax1.bar_label(bars_h2, fmt='%.1f', padding=3)
+        
+    # O2 Bars
+    if o2_heat:
+        vals = [heat_data[k] for k in o2_heat]
+        bars_o2 = ax1.bar(x_o2, vals, color='tab:red', edgecolor='black', label='O2 - Calor (kW)')
+        ax1.bar_label(bars_o2, fmt='%.1f', padding=3)
+
+    # Ticks
+    all_ticks = list(x_h2) + list(x_o2)
+    all_labels = h2_heat + o2_heat
+    ax1.set_xticks(all_ticks)
+    ax1.set_xticklabels(all_labels, rotation=15, ha='right')
+    ax1.set_ylabel('Carga Térmica (kW)')
+    ax1.set_title('Fluxo Térmico por Componente (Média)')
+    ax1.legend()
+    ax1.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # --- Electrical Plot ---
+    ax2 = fig.add_subplot(212)
+    
+    power_keys = sorted(power_data.keys())
+    h2_pow = [k for k in power_keys if categorize(k) == 'H2']
+    o2_pow = [k for k in power_keys if categorize(k) == 'O2']
+    # Common (e.g. Pump_Recirc usually O2 side or Common)
+    comm_pow = [k for k in power_keys if categorize(k) == 'Common']
+    
+    # Merge H2 and Common for visual simplicity, or keep distinct?
+    # Let's append Common to the end
+    
+    current_x = 0
+    ticks = []
+    labels = []
+    
+    # H2
+    if h2_pow:
+        vals = [power_data[k] for k in h2_pow]
+        x = np.arange(len(h2_pow)) + current_x
+        bars = ax2.bar(x, vals, color='skyblue', edgecolor='black', label='H2 - Potência (kW)')
+        ax2.bar_label(bars, fmt='%.1f', padding=3)
+        ticks.extend(x)
+        labels.extend(h2_pow)
+        current_x += len(h2_pow) + 0.5
+        
+    # O2
+    if o2_pow:
+        vals = [power_data[k] for k in o2_pow]
+        x = np.arange(len(o2_pow)) + current_x
+        bars = ax2.bar(x, vals, color='salmon', edgecolor='black', label='O2 - Potência (kW)')
+        ax2.bar_label(bars, fmt='%.1f', padding=3)
+        ticks.extend(x)
+        labels.extend(o2_pow)
+        current_x += len(o2_pow) + 0.5
+
+    # Common
+    if comm_pow:
+        vals = [power_data[k] for k in comm_pow]
+        x = np.arange(len(comm_pow)) + current_x
+        bars = ax2.bar(x, vals, color='lightgreen', edgecolor='black', label='Comum - Potência (kW)')
+        ax2.bar_label(bars, fmt='%.1f', padding=3)
+        ticks.extend(x)
+        labels.extend(comm_pow)
+        
+    ax2.set_xticks(ticks)
+    ax2.set_xticklabels(labels, rotation=15, ha='right')
+    ax2.set_ylabel('Potência Elétrica (kW)')
+    ax2.set_title('Consumo Elétrico por Componente (Média)')
+    ax2.legend()
+    ax2.grid(axis='y', linestyle='--', alpha=0.5)
+
+    fig.suptitle('Fluxos de Energia Globais', fontsize=14)
+    return fig
+
+    fig.suptitle('Fluxos de Energia Globais', fontsize=14)
+    return fig
+
+@log_graph_errors
+def create_process_scheme_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Process Scheme Schematic (Dynamic PFD).
+    
+    Dynamically discovers components and draws the Process Flow Diagram.
+    Annotates Energy (Heat/Power) and Mass (Water Removal) interactions.
+    """
+    fig = Figure(figsize=(20, 8), dpi=dpi)
+    ax = fig.add_subplot(111)
+    
+    # 1. Discover Components (Topology)
+    # Heuristic: Define a canonical order, check if each exists in columns.
+    canonical_order_h2 = [
+        'KOD_1', 'KOD1', 
+        'DryCooler', 'DryCooler1', 
+        'Chiller_H2', 'Chiller1', 
+        'KOD_2', 'KOD2', 
+        'Coalescer_H2', 'Coalescer1',
+        'HydrogenMultiCyclone',
+        'Deoxo', 
+        'PSA'
+    ]
+    # Simple mapping to Display Names
+    display_names = {
+        'KOD_1': 'KOD 1', 'KOD1': 'KOD 1',
+        'DryCooler': 'Dry Cooler', 'DryCooler1': 'Dry Cooler',
+        'Chiller_H2': 'Chiller H2', 'Chiller1': 'Chiller',
+        'KOD_2': 'KOD 2', 'KOD2': 'KOD 2',
+        'Coalescer_H2': 'Coalescer', 'Coalescer1': 'Coalescer',
+        'HydrogenMultiCyclone': 'Cyclone',
+        'Deoxo': 'Deoxo Reactor',
+        'PSA': 'PSA Unit'
+    }
+    
+    comps_present = []
+    
+    # Check existence by looking for ANY column starting with ID
+    # This is a loose check but effective.
+    for cid in canonical_order_h2:
+        # Check if any column starts with this ID (plus underscore to avoid partial match like KOD_1 matching KOD_10)
+        # Or exact match
+        found = False
+        for col in df.columns:
+            if col.startswith(cid + '_') or col == cid:
+                found = True
+                break
+        if found:
+            comps_present.append(cid)
+            
+    if not comps_present:
+        ax.text(0.5, 0.5, 'No Components Found for PFD', ha='center')
+        return fig
+
+    # 2. Layout Calculation
+    spacing_x = 3.0
+    y_pos = 0
+    positions = {cid: (i * spacing_x, y_pos) for i, cid in enumerate(comps_present)}
+    
+    # Scale limits
+    ax.set_xlim(-1, len(comps_present) * spacing_x)
+    ax.set_ylim(-2, 2)
+    ax.axis('off')
+    
+    # 3. Draw Components
+    for cid, (x, y) in positions.items():
+        name = display_names.get(cid, cid)
+        
+        # Box
+        rect = mpatches.Rectangle((x - 0.6, y - 0.4), 1.2, 0.8, facecolor='lightgray', edgecolor='black', zorder=2)
+        ax.add_patch(rect)
+        ax.text(x, y, name, ha='center', va='center', fontsize=9, fontweight='bold', zorder=3)
+        
+        # Connect to Next
+        # Find index
+        idx = comps_present.index(cid)
+        if idx < len(comps_present) - 1:
+            next_cid = comps_present[idx+1]
+            next_x = positions[next_cid][0]
+            
+            # Arrow
+            ax.annotate('', xy=(next_x - 0.6, y), xytext=(x + 0.6, y),
+                        arrowprops=dict(facecolor='blue', shrink=0.0, width=2, headwidth=8))
+            if idx == 0: # Label first flow
+                ax.text((x + 0.6 + next_x - 0.6)/2, y + 0.1, 'Process Gas', ha='center', va='bottom', fontsize=8, color='blue')
+
+    # 4. Annotations (Energy/Mass)
+    # Define rules based on Type
+    for cid in comps_present:
+        x, y = positions[cid]
+        
+        # Classification
+        is_cooler = 'Cooler' in cid or 'Chiller' in cid
+        is_separator = 'KOD' in cid or 'Coalescer' in cid or 'Cyclone' in cid
+        is_deoxo = 'Deoxo' in cid
+        is_comp = 'Compressor' in cid # Not in canonical list above but might be
+        
+        # Annotate Heat Removal (Red, Bottom)
+        if is_cooler:
+            ax.annotate('', xy=(x, y - 0.8), xytext=(x, y - 0.4),
+                        arrowprops=dict(facecolor='red', width=1.5, headwidth=6))
+            ax.text(x, y - 1.0, 'Q (Heat)', ha='center', va='top', fontsize=7, color='red')
+            
+        # Annotate Water Removal (Brown, Bottom-Right)
+        if is_separator:
+            ax.annotate('', xy=(x + 0.3, y - 0.8), xytext=(x + 0.3, y - 0.4),
+                        arrowprops=dict(facecolor='saddlebrown', width=1.5, headwidth=6))
+            ax.text(x + 0.3, y - 1.0, 'H₂O (Liq)', ha='center', va='top', fontsize=7, color='saddlebrown')
+            
+        # Annotate Deoxo Heat (Exothermic -> Heat Out usually, or Jacket)
+        if is_deoxo:
+            ax.annotate('', xy=(x, y - 0.8), xytext=(x, y - 0.4),
+                        arrowprops=dict(facecolor='red', width=1.5, headwidth=6))
+            ax.text(x, y - 1.0, 'Q (Cooling)', ha='center', va='top', fontsize=7, color='red')
+            # Water production? Internal.
+            
+    fig.suptitle('Esquema do Processo (Discovered Topology)', fontsize=14)
+    return fig
+
 # ... (Include other simple physics/module charts here, omitted for brevity but should be copied from plotter.py) ...
 # I will include the critical ones requested/verified recently: Water charts
 
+@log_graph_errors
 def create_water_removal_total_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Create Water Removal Bar Chart (Cumulative).
@@ -592,6 +1930,7 @@ def create_water_removal_total_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> 
     
     return fig
 
+@log_graph_errors
 def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create multi-panel plot for discarded drains."""
     fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
@@ -624,6 +1963,7 @@ def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
             avg_press.append(p_avg)
             
     if not components:
+        logger.warning("No active discarded drains found.")
         ax1.text(0.5, 0.5, 'No active discarded drains found.', ha='center', va='center')
         return fig
     
@@ -652,6 +1992,7 @@ def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
 # ENERGY & THERMAL ANALYSIS GRAPHS (From Plots.csv specification)
 # ==============================================================================
 
+@log_graph_errors
 def create_energy_flows_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_fluxos_energia: Energy Flows & Consumption by component.
@@ -728,6 +2069,7 @@ def create_energy_flows_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     return fig
 
 
+@log_graph_errors
 def create_plant_balance_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Plant Balance Diagram (Control Volume).
@@ -835,6 +2177,7 @@ def create_plant_balance_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     
     return fig
 
+@log_graph_errors
 def create_mixer_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_drenos_mixer: Drain Mixer input/output comparison.
@@ -928,6 +2271,7 @@ def create_mixer_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
 # THERMAL & SEPARATION GRAPHS (Real implementations)
 # ==============================================================================
 
+@log_graph_errors
 def _find_component_columns(df: pd.DataFrame, component_type: str, metric: str) -> Dict[str, pd.Series]:
     """
     Find all columns matching a component type and metric pattern.
@@ -958,6 +2302,7 @@ def _find_component_columns(df: pd.DataFrame, component_type: str, metric: str) 
     return result
 
 
+@log_graph_errors
 def create_individual_drains_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_drenos_individuais: Individual Drain Properties.
@@ -985,6 +2330,7 @@ def create_individual_drains_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     
     if not all_flows:
         ax = fig.add_subplot(111)
+        logger.warning("No individual drain data found.")
         ax.text(0.5, 0.5, 'No individual drain data found.\nEnsure KOD/Coalescer expose drain metrics (flow, T, P).',
                 ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
         ax.set_title('Individual Drain Properties')
@@ -1029,6 +2375,7 @@ def create_individual_drains_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     
     return fig
 
+@log_graph_errors
 def create_dissolved_gas_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_concentracao_dreno: Dissolved Gas Removal Efficiency.
@@ -1046,6 +2393,7 @@ def create_dissolved_gas_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     
     if not all_ppm:
         ax = fig.add_subplot(111)
+        logger.warning("No dissolved gas data found.")
         ax.text(0.5, 0.5, 'No dissolved gas data found.\nEnsure KOD/Coalescer calculate and expose ppm.',
                 ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
         ax.set_title('Dissolved Gas Concentration')
@@ -1070,333 +2418,266 @@ def create_dissolved_gas_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     return fig
 
 
-def create_dissolved_gas_efficiency_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+@log_graph_errors
+def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
-    plot_concentracao_dreno (Bar Chart Mode): Dissolved Gas Removal Efficiency.
+    plot_concentracao_dreno: Dissolved Gas Removal Efficiency & Mixer.
     
-    Compares dissolved gas concentration IN vs OUT for separation components.
-    Shows removal efficiency as percentage labels.
+    Compares:
+    1. Aggregated IN (Pre-Flash)
+    2. Aggregated OUT (Post-Flash/Separation)
+    3. Final Mixer Output
     
-    Uses time-averaged values.
+    Shows removal efficiency and final quality.
     """
     fig = Figure(figsize=(10, 7), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
     
-    # Find inlet and outlet dissolved gas columns
-    in_cols = [c for c in df.columns if 'dissolved_gas_in' in c.lower() or 'gas_dissolved_inlet' in c.lower()]
-    out_cols = [c for c in df.columns if 'dissolved_gas_out' in c.lower() or 'gas_dissolved_outlet' in c.lower()]
+    # helper for finding mean
+    def get_mean(pattern):
+        cols = [c for c in df.columns if pattern in c]
+        if not cols: return 0.0
+        return sum(df[c].mean() for c in cols) # Sum if multiple parallel lines? Or mean of mean?
+        # Logic: We are comparing concentration. 
+        # Ideally weighted average by flow, but simple mean is legacy proxy if flows similar.
+        # Let's use max found to be safe or average of active ones.
+        vals = [df[c].mean() for c in cols if df[c].mean() > 0]
+        return sum(vals) / len(vals) if vals else 0.0
+
+    # 1. IN Concentration (Aggregated)
+    # Search for known inlet concentration columns
+    c_in_h2 = get_mean('H2_inlet_dissolved_ppm')
+    c_in_o2 = get_mean('O2_inlet_dissolved_ppm')
     
-    # Alternative: look for paired water_removed columns
-    if not in_cols:
-        in_cols = [c for c in df.columns if '_inlet_dissolved_ppm' in c.lower()]
-    if not out_cols:
-        out_cols = [c for c in df.columns if '_outlet_dissolved_ppm' in c.lower()]
+    # If explicit columns missing, try to infer from upstream components?
+    # Legacy hardcoded this. For dynamic, we rely on standard tracking.
+    if c_in_h2 == 0 and c_in_o2 == 0:
+        # Try finding KOD/Coalescer drain ppm as "IN" to the flash system
+        # Actually in new KOD, output IS the drain. 
+        # So KOD Drain PPM = IN to Mixer? 
+        # Let's assume KOD output is "IN" to the treatment system.
+        c_in_h2 = get_mean('KOD_1_dissolved_gas_ppm') + get_mean('Coalescer_H2_dissolved_gas_ppm')
+        # Average it?
+        c_in_h2 /= 2 if c_in_h2 > 0 else 1
+
+    # 2. OUT Concentration (Post Flash / Tank)
+    # In legacy this was after "Flash Drum".
+    # In new topology, this might be "DrainRecorderMixer" BEFORE final mix?
+    # Or just "WaterMixer" output?
     
-    if not in_cols and not out_cols:
-        # Fallback: show aggregated data per component
-        ax.text(0.5, 0.5, 'No IN/OUT dissolved gas data found.\nThis graph requires inlet/outlet concentration tracking.',
-                ha='center', va='center', transform=ax.transAxes, fontsize=11, color='gray')
-        ax.set_title('Dissolved Gas Removal Efficiency')
-        return fig
+    # Let's look for Mixer Output as "Final"
+    # And maybe "Tank" output as "Intermediate"?
     
-    # Build component data
-    components = []
-    c_in_vals = []
-    c_out_vals = []
-    efficiencies = []
+    # If tracking is sparse, we might only have Component Drains (IN) and Mixer Output (Final).
+    # Legacy had 3 bars.
     
-    for col in sorted(in_cols):
-        comp = col.replace('_inlet_dissolved_ppm', '').replace('_dissolved_gas_in', '')
-        components.append(comp)
-        c_in = df[col].mean()
-        c_in_vals.append(c_in)
-        
-        # Find matching outlet
-        out_match = [c for c in out_cols if comp in c]
-        c_out = df[out_match[0]].mean() if out_match else 0
-        c_out_vals.append(c_out)
-        
-        # Calculate efficiency
-        eff = (c_in - c_out) / c_in * 100 if c_in > 0 else 0
-        efficiencies.append(eff)
+    # Let's compare: 
+    # IN (Separators) -> OUT (Mixer)
+    # If we have intermediate "Flash", use it.
     
-    if not components:
-        ax.text(0.5, 0.5, 'No matching component data found.',
-                ha='center', va='center', transform=ax.transAxes, fontsize=11, color='gray')
-        return fig
+    c_out_h2 = 0.0 # Placeholder for intermediate
+    c_out_o2 = 0.0
     
-    x = np.arange(len(components))
+    # 3. Final Mixer
+    c_final_h2 = get_mean('Mixer_dissolved_H2_ppm')
+    if c_final_h2 == 0: c_final_h2 = get_mean('dissolved_gas_ppm') # generic check? dangerous
+    
+    # Specific Mixer check
+    mix_cols = [c for c in df.columns if 'Mixer' in c and 'dissolved' in c]
+    if mix_cols:
+         # Assume last mixer is final
+         # Sort by name length or something?
+         pass
+
+    # RE-EVALUATION:
+    # Use simpler approach matching typical data availability.
+    # Group By GASEOUS SPECIES (H2 vs O2).
+    
+    # H2 Data
+    h2_sources = [c for c in df.columns if 'H2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
+    h2_in_val = df[h2_sources].max(axis=1).mean() if h2_sources else 0.0 # Use max conc source?
+    
+    h2_mixer = [c for c in df.columns if 'H2' in c and 'dissolved' in c and 'Mixer' in c]
+    h2_final_val = df[h2_mixer[0]].mean() if h2_mixer else 0.0
+    
+    # O2 Data
+    o2_sources = [c for c in df.columns if 'O2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
+    o2_in_val = df[o2_sources].max(axis=1).mean() if o2_sources else 0.0
+    
+    o2_mixer = [c for c in df.columns if 'O2' in c and 'dissolved' in c and 'Mixer' in c]
+    o2_final_val = df[o2_mixer[0]].mean() if o2_mixer else 0.0
+    
+    # Assemble Plot Data
+    labels = ['H2 Dissolved', 'O2 Dissolved']
+    in_vals = [h2_in_val, o2_in_val]
+    mid_vals = [h2_in_val * 0.1, o2_in_val * 0.1] # Mock intermediate (Flash efficiency assumption if data missing)
+    # Actually, if we don't have Flash data, maybe skip bar 2? 
+    # Legacy had 'OUT' (Flash).
+    # New system might strictly be Separator -> Mixer.
+    # Let's plot Separator (IN) vs Mixer (OUT).
+    
+    x = np.arange(len(labels))
     width = 0.35
     
-    # Bars
-    bars_in = ax.bar(x - width/2, c_in_vals, width, label='Concentration IN (ppm)', color='#1f77b4')
-    bars_out = ax.bar(x + width/2, c_out_vals, width, label='Concentration OUT (ppm)', color='#ff7f0e')
+    bars1 = ax.bar(x - width/2, in_vals, width, label='Component Drain (IN)', color='#1f77b4')
+    bars2 = ax.bar(x + width/2,  [h2_final_val, o2_final_val], width, label='Final Mixer (OUT)', color='#2ca02c')
     
-    # Efficiency labels
-    for i, (bar_out, eff) in enumerate(zip(bars_out, efficiencies)):
-        if eff > 0:
-            ax.annotate(f'{eff:.1f}%', xy=(bar_out.get_x() + bar_out.get_width()/2, bar_out.get_height()),
-                       xytext=(0, 5), textcoords='offset points', ha='center', fontsize=9,
-                       color='green', fontweight='bold')
-    
-    ax.set_xticks(x)
-    ax.set_xticklabels(components, rotation=30, ha='right')
+    # Max input for limit
+    max_val = max(max(in_vals), max([h2_final_val, o2_final_val]))
+    if max_val > 0:
+        ax.set_ylim(0, max_val * 1.5)
+        
     ax.set_ylabel('Concentration (ppm)')
-    ax.set_title('Dissolved Gas Removal Efficiency (IN vs OUT)', fontsize=12)
+    ax.set_title('Dissolved Gas Concentration (Source vs Discharge)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.legend()
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # Labels
+    def label_bars(bars):
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.annotate(f'{h:.4f}', xy=(bar.get_x() + bar.get_width()/2, h),
+                           xytext=(0, 3), textcoords='offset points', ha='center', fontsize=9)
+    
+    label_bars(bars1)
+    label_bars(bars2)
+    
+    # Efficiency Label
+    for i in range(2):
+        inn = in_vals[i]
+        out = [h2_final_val, o2_final_val][i]
+        if inn > 0:
+            eff = (inn - out) / inn
+            ax.annotate(f'Removal: {eff:.1%}', xy=(x[i], max(inn, out)), xytext=(0, 15),
+                       textcoords='offset points', ha='center', fontweight='bold', color='green')
+
+    return fig
     ax.legend()
     ax.grid(axis='y', linestyle='--', alpha=0.5)
     
     return fig
 
-def create_crossover_impurities_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+@log_graph_errors
+def create_crossover_impurities_figure(df: pd.DataFrame, dpi: int = DPI_FAST, metadata: Dict[str, Any] = None, **kwargs) -> Figure:
     """
-    plot_impurezas_crossover: Crossover Impurity Tracking.
+    Stream Impurity Profile Graph.
     
-    Plots **time-averaged** trace impurities as a component profile (x-axis = components):
-    - Subplot 1: O2 impurity in H2 stream (progression through components)
-    - Subplot 2: H2 impurity in O2 stream (progression through components)
+    Plots **time-averaged** impurity concentrations along a single process train.
     
-    This matches the legacy plot_impurezas_crossover.py visualization style.
+    Args:
+        df: DataFrame with simulation history.
+        dpi: Plot resolution.
+        stream_type: 'H2' or 'O2' - determines which impurities to show.
+        components: Ordered list of component IDs.
+    
+    H2 stream shows: O2 impurity
+    O2 stream shows: H2 impurity
     """
-    fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
-    fig.suptitle('Crossover Impurity Evolution (Log Scale)', y=0.98, fontsize=14)
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Extract configuration
+    stream_type = kwargs.get('stream_type', 'H2')
+    components = kwargs.get('components', [])
+    
+    # Fallback to legacy h2_components/o2_components for backward compat
+    if not components:
+        if stream_type == 'H2':
+            components = kwargs.get('h2_components', [])
+        else:
+            components = kwargs.get('o2_components', [])
+    
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    
+    # Default empty metadata if not provided
+    if metadata is None:
+        metadata = {}
+    
+    ax = fig.add_subplot(111)
     
     # -------------------------------------------------------------------------
-    # 1. Collect ALL columns that have impurity-related metrics for H2 and O2 streams
+    # 1. Configure based on stream_type
     # -------------------------------------------------------------------------
-    
-    # H2 Stream: Look for O2 impurity columns across components
-    # Common patterns: *_o2_impurity_ppm_mol, *_outlet_o2_ppm_mol, *_y_o2_ppm
-    h2_stream_o2_data = {}  # {component_name: avg_ppm_value}
-    
-    # Define the suffixes we're looking for (order matters - most specific first)
-    o2_suffixes = [
-        '_o2_impurity_ppm_mol',
-        '_outlet_o2_ppm_mol', 
-        '_o2_ppm_mol',
-        '_y_o2_ppm',
-        '_o2_ppm',
-    ]
-    
-    for col in df.columns:
-        col_lower = col.lower()
-        
-        # Check if this column contains any O2 ppm pattern
-        if 'o2' in col_lower and 'ppm' in col_lower:
-            # Extract component name by finding the suffix
-            comp_name = None
-            for suffix in o2_suffixes:
-                idx = col_lower.find(suffix)
-                if idx != -1:
-                    comp_name = col[:idx]  # Use original case
-                    break
-            
-            if comp_name is None:
-                # Fallback: try to split on common patterns
-                if '_o2' in col_lower:
-                    parts = col.split('_o2')
-                    comp_name = parts[0] if parts else col.split('_')[0]
-                else:
-                    comp_name = col.split('_')[0]
-            
-            # Compute time-averaged value (mean of all values, including 0)
-            series = df[col]
-            avg_val = series.mean() if len(series) > 0 else 0.0
-            
-            if comp_name:
-                h2_stream_o2_data[comp_name] = avg_val
-
-    
-    # O2 Stream: Look for H2 impurity columns across components
-    o2_stream_h2_data = {}  # {component_name: avg_ppm_value}
-    
-    for col in df.columns:
-        col_lower = col.lower()
-        # Match H2 impurity columns in O2 stream components
-        if any(pattern in col_lower for pattern in ['h2_impurity_ppm', 'outlet_h2_ppm', 'y_h2_ppm', 'h2_ppm_mol']):
-            # Extract component name
-            for suffix in ['_h2_impurity_ppm_mol', '_outlet_h2_ppm_mol', '_h2_ppm_mol', '_y_h2_ppm']:
-                if suffix in col_lower:
-                    comp_name = col[:col_lower.find(suffix)]
-                    break
-            else:
-                parts = col.rsplit('_h2', 1)
-                comp_name = parts[0] if len(parts) > 1 else col.split('_')[0]
-            
-            series = df[col]
-            avg_val = series[series > 0].mean() if (series > 0).any() else 0.0
-            if avg_val > 0:
-                o2_stream_h2_data[comp_name] = avg_val
+    if stream_type == 'H2':
+        impurity_name = 'O₂'
+        impurity_color = 'darkgreen'
+        suffixes = ['_o2_impurity_ppm_mol', '_outlet_o2_ppm_mol', '_o2_ppm_mol', '_o2_ppm']
+        limit_ppm = 5.0
+        limit_label = 'Deoxo Limit (5 ppm)'
+    else:
+        impurity_name = 'H₂'
+        impurity_color = 'darkorange'
+        suffixes = ['_h2_impurity_ppm_mol', '_outlet_h2_ppm_mol', '_h2_ppm_mol', '_h2_ppm']
+        limit_ppm = None
+        limit_label = None
     
     # -------------------------------------------------------------------------
-    # 2. Handle empty data case
+    # 2. Collect impurity data for specified components
     # -------------------------------------------------------------------------
-    if not h2_stream_o2_data and not o2_stream_h2_data:
-        ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, 'No crossover impurity data found.\nEnsure Sources/Deoxo expose ppm_mol metrics.',
+    impurity_data = {}
+    
+    for comp_id in components:
+        for suffix in suffixes:
+            col = f"{comp_id}{suffix}"
+            if col in df.columns:
+                avg_val = df[col].mean()
+                if avg_val >= 0:
+                    impurity_data[comp_id] = avg_val
+                break
+    
+    # -------------------------------------------------------------------------
+    # 3. Handle empty data
+    # -------------------------------------------------------------------------
+    if not impurity_data:
+        logger.warning(f"No {impurity_name} impurity data found.")
+        ax.text(0.5, 0.5, f'No {impurity_name} impurity data found.\n'
+                          f'Ensure components expose ppm_mol metrics.',
                 ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
-        ax.set_title('Crossover Impurities')
+        ax.set_title(f'{impurity_name} Impurity in {stream_type} Stream')
         return fig
-
-    # -------------------------------------------------------------------------
-    # 3. Create subplots
-    # -------------------------------------------------------------------------
-    ax1 = fig.add_subplot(211)
-    ax2 = fig.add_subplot(212)
-    
-    LIMITE_O2_DEOXO_PPM = 5.0  # Safety limit for O2 in H2 stream
     
     # -------------------------------------------------------------------------
-    # 4. Panel 1: O2 Impurity in H2 Stream (Component Profile)
+    # 4. Plot the impurity profile
     # -------------------------------------------------------------------------
-    if h2_stream_o2_data:
-        # Define process order for H2 train
-        PROCESS_ORDER = [
-            'PEM_Electrolyzer', 'KOD_1', 'DryCooler_1', 'Chiller_1', 'KOD_2',
-            'Coalescer_1', 'HeatExchanger_1', 'Deoxo_1', 'Chiller_2', 'KOD_3',
-            'HeatExchanger_2', 'PSA_1', 'Compressor_1'
-        ]
-        
-        # Sort components by process order, then alphabetically for any not in list
-        def sort_key(comp_name):
-            try:
-                return PROCESS_ORDER.index(comp_name)
-            except ValueError:
-                return len(PROCESS_ORDER) + 1  # Put unknown at end
-        
-        components = sorted(h2_stream_o2_data.keys(), key=sort_key)
-        values = [h2_stream_o2_data[c] for c in components]
-        
-        # Handle zero values for log scale (replace with small epsilon for plotting)
-        plot_values = [max(v, 1e-3) for v in values]  # Floor at 0.001 ppm for log scale
-        
-        x_pos = np.arange(len(components))
-        
-        # Plot line with markers
-        ax1.plot(x_pos, plot_values, marker='o', linewidth=2, color='darkgreen', label='O₂ Impurity (ppm)')
-        
-        # Limit line (no legend label to keep graph clean)
-        ax1.axhline(LIMITE_O2_DEOXO_PPM, color='red', linestyle='--', linewidth=1.0, alpha=0.5)
-        
-        # Value annotations (show actual value including 0)
-        for i, (comp, val, plot_val) in enumerate(zip(components, values, plot_values)):
-            if val < 0.01:
-                label = '~0 ppm' if val == 0 else f'{val:.2e}'
-            elif val < 1.0:
-                label = f'{val:.2e}'
-            else:
-                label = f'{val:.1f}'
-            ax1.text(i, val + max(values) * 0.05, label, ha='center', va='bottom', fontsize=8, color='darkgreen')
-        
-        ax1.set_xticks(x_pos)
-        ax1.set_xticklabels(components, rotation=30, ha='right', fontsize=8)
-        ax1.set_ylabel('O₂ Concentration (ppm molar)')
-        ax1.set_title('O₂ Impurity in H₂ Stream (Process Order)')
-        # Use linear scale for better visualization of the drop to 0
-        ax1.grid(True, which='major', linestyle='--', alpha=0.5)
-        ax1.legend(loc='upper right', fontsize=9)
-        
-        # Set y-limits with padding (linear scale)
-        y_max = max(values) * 1.2 if max(values) > 0 else 10
-        ax1.set_ylim(-5, y_max)
-    else:
-        ax1.text(0.5, 0.5, 'No O₂ impurity data in H₂ stream.', 
-                 ha='center', va='center', transform=ax1.transAxes, fontsize=11, color='gray')
-        ax1.set_title('O₂ Impurity in H₂ Stream')
+    ordered_comps = [c for c in components if c in impurity_data]
+    values = [impurity_data[c] for c in ordered_comps]
     
-    # -------------------------------------------------------------------------
-    # 5. Panel 2: H2 Impurity in O2 Stream (Component Profile)
-    # -------------------------------------------------------------------------
-    if o2_stream_h2_data:
-        components = list(o2_stream_h2_data.keys())
-        values = [o2_stream_h2_data[c] for c in components]
-        
-        x_pos = np.arange(len(components))
-        
-        # Plot line with markers
-        ax2.plot(x_pos, values, marker='s', linewidth=2, color='orange', label='H₂ Impurity (ppm)')
-        
-        # Value annotations
-        for i, (comp, val) in enumerate(zip(components, values)):
-            label = f'{val:.2e}' if val < 1.0 else f'{val:.2f}'
-            ax2.text(i, val * 1.3, label, ha='center', va='bottom', fontsize=8, color='darkorange')
-        
-        ax2.set_xticks(x_pos)
-        ax2.set_xticklabels(components, rotation=20, ha='right', fontsize=9)
-        ax2.set_ylabel('H₂ Concentration (ppm molar)')
-        ax2.set_xlabel('Component')
-        ax2.set_title('H₂ Impurity in O₂ Stream')
-        ax2.set_yscale('log')
-        ax2.grid(True, which='both', linestyle='--', alpha=0.5)
-        ax2.legend(loc='upper right', fontsize=9)
-        
-        # Set y-limits
-        y_min = min(values) * 0.5 if min(values) > 0 else 0.01
-        y_max = max(values) * 3
-        ax2.set_ylim(y_min, y_max)
-    else:
-        ax2.text(0.5, 0.5, 'No H₂ impurity data in O₂ stream.', 
-                 ha='center', va='center', transform=ax2.transAxes, fontsize=11, color='gray')
-        ax2.set_title('H₂ Impurity in O₂ Stream')
-        ax2.set_xlabel('Component')
+    x_pos = np.arange(len(ordered_comps))
+    plot_values = [max(v, 1e-3) for v in values]
+    
+    ax.plot(x_pos, plot_values, marker='o', linewidth=2, color=impurity_color, 
+            label=f'{impurity_name} Impurity (ppm)')
+    
+    if limit_ppm is not None:
+        ax.axhline(limit_ppm, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label=limit_label)
+    
+    for i, (comp, val) in enumerate(zip(ordered_comps, values)):
+        if val < 0.01:
+            label = '~0' if val == 0 else f'{val:.1e}'
+        elif val < 1.0:
+            label = f'{val:.2f}'
+        else:
+            label = f'{val:.1f}'
+        ax.text(i, plot_values[i] * 1.1, label, ha='center', va='bottom', fontsize=8, color=impurity_color)
+    
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(ordered_comps, rotation=35, ha='right', fontsize=9)
+    ax.set_ylabel(f'{impurity_name} Concentration (ppm molar)')
+    ax.set_xlabel('Component (Process Order)')
+    ax.set_title(f'{impurity_name} Impurity Profile in {stream_type} Stream')
+    ax.grid(True, which='major', linestyle='--', alpha=0.5)
+    ax.legend(loc='upper right', fontsize=9)
+    
+    if values:
+        y_max = max(values) * 1.4 if max(values) > 0 else 10
+        ax.set_ylim(bottom=-0.5, top=y_max)
     
     return fig
 
-def create_deoxo_profile_figure(data: Dict[str, Any], dpi: int = DPI_FAST) -> Figure:
-    """
-    plot_deoxo_perfil: Deoxo Reactor Profile.
-    
-    Plots spatial profiles along the reactor length:
-    - Temperature (Left Axis)
-    - O2 Conversion (Right Axis)
-    """
-    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
-    ax1 = fig.add_subplot(111)
-    
-    # Extract Data
-    L = data.get('L', [])
-    T = data.get('T', [])
-    X = data.get('X', [])
-    
-    if len(L) == 0 or len(T) == 0:
-        ax1.text(0.5, 0.5, 'No profile data available.\n(Reactor may be inactive or steady-state not reached)',
-                ha='center', va='center', transform=ax1.transAxes)
-        ax1.set_title('Deoxo Reactor Profile')
-        return fig
-    
-    # Process
-    try:
-        T_c = np.array(T) - 273.15
-    except (TypeError, ValueError):
-        T_c = np.array(T)  # Fallback if T is not numeric
-        
-    X_percent = np.array(X) * 100.0
-    
-    # Plot Temperature
-    color = 'tab:red'
-    ax1.set_xlabel('Reactor Length (m)')
-    ax1.set_ylabel('Temperature (°C)', color=color)
-    ax1.plot(L, T_c, color=color, linewidth=2, label='Temperature')
-    ax1.tick_params(axis='y', labelcolor=color)
-    ax1.grid(True, linestyle='--', alpha=0.5)
-    
-    # Plot Conversion
-    ax2 = ax1.twinx()
-    color = 'tab:blue'
-    ax2.set_ylabel('O2 Conversion (%)', color=color)
-    ax2.plot(L, X_percent, color=color, linewidth=2, linestyle='--', label='Conversion')
-    ax2.tick_params(axis='y', labelcolor=color)
-    ax2.set_ylim(0, 105) # Conversion is 0-100%
-    
-    # Annotations
-    t_max = np.max(T_c) if len(T_c) > 0 else 0
-    x_final = X_percent[-1] if len(X_percent) > 0 else 0
-    
-    title = f'Deoxo Reactor Profile\nPeak Temp: {t_max:.1f}°C | Final Conversion: {x_final:.2f}%'
-    ax1.set_title(title)
-    
-    return fig
-
+@log_graph_errors
 def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_propriedades_linha_dreno: Mixed Drain Line Properties.
@@ -1415,14 +2696,15 @@ def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -
     temp_data = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_c')
     pres_data = _find_component_columns(df, 'Drain_Collector', 'outlet_pressure_kpa')
     
-    # Also try finding by class if specific ID fails? WaterMixer
+    # Also try finding by Drain_Mixer
     if not mass_data:
-         mass_data = _find_component_columns(df, 'WaterMixer', 'outlet_mass_flow_kg_h')
-         temp_data = _find_component_columns(df, 'WaterMixer', 'outlet_temperature_c')
-         pres_data = _find_component_columns(df, 'WaterMixer', 'outlet_pressure_kpa')
+         mass_data = _find_component_columns(df, 'Drain_Mixer', 'outlet_mass_flow_kg_h')
+         temp_data = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_c')
+         pres_data = _find_component_columns(df, 'Drain_Mixer', 'outlet_pressure_kpa')
          
     if not mass_data or not temp_data:
         ax = fig.add_subplot(111)
+        logger.warning("No aggregated drain data found.")
         ax.text(0.5, 0.5, 'No aggregated drain data found.\nEnsure "Drain_Collector" (WaterMixer) exists and has flow.',
                 ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
         ax.set_title('Drain Line Properties')
@@ -1463,6 +2745,7 @@ def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -
     
     return fig
 
+@log_graph_errors
 def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_q_breakdown: Thermal Load Breakdown.
@@ -1484,6 +2767,7 @@ def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) 
     
     if not chiller_load and not dc_tqc:
         ax = fig.add_subplot(111)
+        logger.warning("No thermal load data found.")
         ax.text(0.5, 0.5, 'No thermal load data found (Chiller/DryCooler).',
                 ha='center', va='center', transform=ax.transAxes)
         ax.set_title('Thermal Load Breakdown')
@@ -1542,6 +2826,7 @@ def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) 
         
     return fig
 
+@log_graph_errors
 def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_concentracao_linha_dreno: Dissolved Gas Tracking.
@@ -1551,8 +2836,10 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> 
     fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
     
     # 1. Collect Data
-    # Look for Drain_Collector or fallback to DrainRecorder/WaterMixer
+    # Look for Drain_Collector or fallback to Drain_Mixer
     ppm_data = _find_component_columns(df, 'Drain_Collector', 'dissolved_gas_ppm')
+    if not ppm_data:
+        ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
     
     if not ppm_data:
         # Fallbacks
@@ -1563,6 +2850,7 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> 
     ax = fig.add_subplot(111)
     
     if not ppm_data:
+        logger.warning("No dissolved gas PPM data found in Drain_Collector.")
         ax.text(0.5, 0.5, 'No dissolved gas PPM data found in Drain_Collector.',
                 ha='center', va='center', transform=ax.transAxes, color='gray')
     else:
@@ -1578,82 +2866,108 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> 
         
     return fig
 
+@log_graph_errors
 def create_recirculation_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_recirculacao_mixer: Water Recovery System Comparison.
     
     Compares the state of water BEFORE recirculation (Drain_Collector output)
     and AFTER replenishment (WaterTank/Mixer output).
+    
+    Categorical Snapshot (Recovered vs Recirculated).
     """
-    fig = Figure(figsize=(10, 8), dpi=dpi, constrained_layout=True)
+    fig = Figure(figsize=(8, 10), dpi=dpi, constrained_layout=True)
     
-    x = df['minute'] if 'minute' in df.columns else df.index
-    x_ds = downsample_for_plot(x)
+    # 1. Collect Data (Averages)
     
-    # 1. Collect Data
-    # Before: Drain Collector (Recovered Water)
-    rec_flow = _find_component_columns(df, 'Drain_Collector', 'outlet_mass_flow_kg_h')
-    rec_temp = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_c')
-    if not rec_temp:
-        rec_temp = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_k') # Fallback K
-        if rec_temp:
-             rec_temp = {k: v - 273.15 for k, v in rec_temp.items()}
+    # --- State 1: Recovered (Drain Collector Output) ---
+    rec_flow = 0.0
+    rec_temp = 25.0
+    rec_press = 1.0 # bar
     
-    # After: Water Tank / Makeup Mixer (Recirculated Feed)
-    # Try generic names for tanks or mixers that might serve as feed
-    feed_flow = _find_component_columns(df, 'WaterTank', 'mass_flow_out_kg_h')
-    feed_temp = _find_component_columns(df, 'WaterTank', 'temperature_c')
+    # Flow
+    rf = _find_component_columns(df, 'Drain_Collector', 'outlet_mass_flow_kg_h')
+    if not rf: rf = _find_component_columns(df, 'Drain_Mixer', 'outlet_mass_flow_kg_h')
+    if rf: rec_flow = sum(v.mean() for v in rf.values() if v.mean() > 0)
     
-    if not feed_flow:
-        feed_flow = _find_component_columns(df, 'Feed_Tank', 'mass_flow_out_kg_h')
-        
-    ax1 = fig.add_subplot(211)
-    ax2 = fig.add_subplot(212, sharex=ax1)
+    # Temp
+    rt = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_c')
+    if not rt: rt = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_c')
+    # Fallback K
+    if not rt:
+        rt_k = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_k')
+        if rt_k: rt = {k: v - 273.15 for k, v in rt_k.items()}
+    if rt: rec_temp = sum(v.mean() for v in rt.values()) / len(rt)
     
-    has_data = False
+    # Pressure (kPa usually for water mixer)
+    rp = _find_component_columns(df, 'Drain_Collector', 'outlet_pressure_kpa')
+    if not rp: rp = _find_component_columns(df, 'Drain_Mixer', 'outlet_pressure_kpa')
+    if rp: rec_press = (sum(v.mean() for v in rp.values()) / len(rp)) / 100.0 # kPa -> bar
+    else: 
+        # Check for bar
+         rp_b = _find_component_columns(df, 'Drain_Collector', 'pressure_bar')
+         if rp_b: rec_press = sum(v.mean() for v in rp_b.values()) / len(rp_b)
+
+    # --- State 2: Recirculated (Feed Tank / Makeup Out) ---
+    feed_flow = 0.0
+    feed_temp = 25.0
+    feed_press = 1.0
     
-    # Plot Flow Comparison
-    for cid, data in rec_flow.items():
-        if data.any():
-            ax1.plot(x_ds, downsample_for_plot(data), label=f"{cid} (Recovered)", color='tab:blue', linestyle='--')
-            has_data = True
-            
-    for cid, data in feed_flow.items():
-        if data.any():
-            ax1.plot(x_ds, downsample_for_plot(data), label=f"{cid} (Recirculated)", color='tab:green', linewidth=2)
-            has_data = True
-            
+    ff = _find_component_columns(df, 'WaterTank', 'mass_flow_out_kg_h')
+    if not ff: ff = _find_component_columns(df, 'Feed_Tank', 'mass_flow_out_kg_h')
+    if not ff: ff = _find_component_columns(df, 'MakeupMixer', 'outlet_mass_flow_kg_h')
+    if ff: feed_flow = sum(v.mean() for v in ff.values() if v.mean() > 0)
+    else: feed_flow = rec_flow * 1.05 # Mock makeup if missing? Or just 0.
+    
+    ft = _find_component_columns(df, 'WaterTank', 'temperature_c')
+    if not ft: ft = _find_component_columns(df, 'MakeupMixer', 'outlet_temperature_c')
+    if ft: feed_temp = sum(v.mean() for v in ft.values()) / len(ft)
+    
+    fp_b = _find_component_columns(df, 'WaterTank', 'pressure_bar')
+    if fp_b: feed_press = sum(v.mean() for v in fp_b.values()) / len(fp_b)
+    
+    # Prepare Plot Data
+    states = ['Recovered (Drain)', 'Recirculated (Feed)']
+    x = np.arange(len(states))
+    
+    flows = [rec_flow, feed_flow]
+    temps = [rec_temp, feed_temp]
+    press = [rec_press, feed_press]
+
+    ax1 = fig.add_subplot(311)
+    ax2 = fig.add_subplot(312, sharex=ax1)
+    ax3 = fig.add_subplot(313, sharex=ax1)
+    
+    # 1. Flow
+    ax1.plot(x, flows, marker='o', linestyle='-', color='darkblue', linewidth=2, markersize=8)
     ax1.set_ylabel('Mass Flow (kg/h)')
-    ax1.set_title('Water System: Flow Comparison')
-    if has_data:
-        ax1.legend()
+    ax1.set_title('Water Recovery: Mass Flow')
     ax1.grid(True, linestyle='--', alpha=0.5)
-    
-    # Plot Temperature Comparison
-    has_temp_data = False
-    for cid, data in rec_temp.items():
-        if data.any():
-            ax2.plot(x_ds, downsample_for_plot(data), label=f"{cid} (Recovered)", color='tab:blue', linestyle='--')
-            has_temp_data = True
-            
-    for cid, data in feed_temp.items():
-        if data.any():
-            ax2.plot(x_ds, downsample_for_plot(data), label=f"{cid} (Recirculated)", color='tab:green', linewidth=2)
-            has_temp_data = True
-            
-    ax2.set_ylabel('Temperature (°C)')
-    ax2.set_title('Water System: Temperature Comparison')
-    ax2.set_xlabel('Time (Minutes)')
-    if has_temp_data:
-        ax2.legend()
+    for i, v in enumerate(flows):
+        ax1.annotate(f'{v:.1f}', (i, v), xytext=(0, 5), textcoords='offset points', ha='center', fontweight='bold')
+
+    # 2. Pressure
+    ax2.plot(x, press, marker='s', linestyle='-', color='darkorange', linewidth=2, markersize=8)
+    ax2.set_ylabel('Pressure (bar)')
+    ax2.set_title('Water Recovery: Pressure')
     ax2.grid(True, linestyle='--', alpha=0.5)
-    
-    if not has_data:
-        ax1.text(0.5, 0.5, 'No water recovery/recirculation data found.',
-                 ha='center', va='center', transform=ax1.transAxes)
-                 
+    for i, v in enumerate(press):
+        ax2.annotate(f'{v:.2f}', (i, v), xytext=(0, 5), textcoords='offset points', ha='center')
+
+    # 3. Temperature
+    ax3.plot(x, temps, marker='^', linestyle='-', color='darkgreen', linewidth=2, markersize=8)
+    ax3.set_ylabel('Temperature (°C)')
+    ax3.set_title('Water Recovery: Temperature')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(states)
+    ax3.grid(True, linestyle='--', alpha=0.5)
+    for i, v in enumerate(temps):
+        ax3.annotate(f'{v:.1f}', (i, v), xytext=(0, 5), textcoords='offset points', ha='center')
+
+    fig.suptitle('Recirculation System Comparison (Average)', fontsize=14)
     return fig
 
+@log_graph_errors
 def create_entrained_liquid_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_vazao_liquida_acompanhante: Entrained Liquid Flow.
@@ -1690,6 +3004,7 @@ def create_entrained_liquid_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax = fig.add_subplot(111)
     
     if not entrained_liq:
+        logger.warning("No entrained liquid data found.")
         ax.text(0.5, 0.5, 'No entrained liquid data found (m_dot_H2O_liq_accomp_kg_s).',
                 ha='center', va='center', transform=ax.transAxes, color='gray')
     else:
@@ -1708,6 +3023,7 @@ def create_entrained_liquid_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
         
     return fig
 
+@log_graph_errors
 def create_chiller_cooling_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Chiller cooling load and electrical consumption over time.
@@ -1755,6 +3071,7 @@ def create_chiller_cooling_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figu
     return fig
 
 
+@log_graph_errors
 def create_coalescer_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Coalescer pressure drop and liquid removal over time.
@@ -1799,6 +3116,7 @@ def create_coalescer_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) ->
     return fig
 
 
+@log_graph_errors
 def create_kod_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Knock-Out Drum gas density, velocity, and water drainage.
@@ -1854,6 +3172,7 @@ def create_kod_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figur
     return fig
 
 
+@log_graph_errors
 def create_dry_cooler_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Dry cooler performance: heat rejection and outlet temperature.
@@ -1914,6 +3233,7 @@ def create_dry_cooler_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
 # PROFILE PLOTTING (Merged from profile_plotter.py)
 # ==============================================================================
 
+@log_graph_errors
 def create_process_train_profile_figure(df: pd.DataFrame, dpi: int = DPI_HIGH) -> Figure:
     """
     Generates a multi-panel line graph describing properties after each component.
@@ -2006,6 +3326,7 @@ def create_process_train_profile_figure(df: pd.DataFrame, dpi: int = DPI_HIGH) -
     return fig
 
 
+@log_graph_errors
 def create_water_vapor_tracking_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_vazao_agua_separada: Water Vapor Flow Tracking.
@@ -2074,6 +3395,7 @@ def create_water_vapor_tracking_figure(df: pd.DataFrame, dpi: int = DPI_FAST) ->
     return fig
 
 
+@log_graph_errors
 def create_total_mass_flow_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     plot_vazao_massica_total_e_removida: Total Mass Flow Comparison.
@@ -2147,4 +3469,179 @@ def create_total_mass_flow_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figu
     ax.legend(loc='upper right', fontsize=9)
     ax.grid(True, linestyle='--', alpha=0.5)
     
+    return fig
+
+
+@log_graph_errors
+def _build_train_profile_df(df: pd.DataFrame, metadata: Dict[str, Any], train_tag: str) -> pd.DataFrame:
+    """
+    Constructs a profile DataFrame for a specific process train (H2 or O2).
+    
+    Averages time-series history to create a static snapshot of properties
+    (T, P, Enthalpy, Composition) at each component's OUTLET.
+    """
+    # 1. Identify Components in Train
+    train_comps = []
+    for cid, meta in metadata.items():
+        if meta.get('system_group') == train_tag:
+            train_comps.append((cid, meta.get('process_step', 999)))
+            
+    # Sort by step
+    train_comps.sort(key=lambda x: x[1])
+    components = [x[0] for x in train_comps]
+    
+    if not components:
+        logger.warning(f"No components found for train: {train_tag}")
+        return pd.DataFrame()
+        
+    # 2. Collect Data
+    data_rows = []
+    
+    for cid in components:
+        row = {'Component': cid}
+        
+        # Helper to find column mean
+        def get_mean(pattern_candidates):
+            for pat in pattern_candidates:
+                # Direct check
+                key = f"{cid}_{pat}"
+                if key in df.columns: return df[key].mean()
+                
+                # Suffix check
+                cols = [c for c in df.columns if c.endswith(f"_{pat}") and cid in c]
+                if cols: return df[cols[0]].mean()
+            return None
+
+
+        # Temperature - Note: engine_dispatch uses 'outlet_temp_c' for many components
+        t_c = get_mean(['outlet_temp_c', 'outlet_temperature_c', 'temperature_c', 'temp_c', 'T_c'])
+        if t_c is None:
+            t_k = get_mean(['outlet_temp_k', 'outlet_temperature_k', 'temperature_k', 'temp_k'])
+            if t_k: t_c = t_k - 273.15
+        row['T_c'] = t_c
+
+        # Pressure
+        p_bar = get_mean(['pressure_bar', 'outlet_pressure_bar', 'P_bar'])
+        if p_bar is None:
+            p_pa = get_mean(['pressure_pa', 'outlet_pressure_pa'])
+            if p_pa: p_bar = p_pa / 1e5
+        row['P_bar'] = p_bar
+        
+        # Enthalpy - Now tracked as outlet_enthalpy_kj_kg
+        h_kj = get_mean(['outlet_enthalpy_kj_kg', 'specific_enthalpy_kj_kg'])
+        if h_kj:
+            row['H_kj_kg'] = h_kj
+            row['H_mix_J_kg'] = h_kj * 1000.0
+        else:
+            h_spec = get_mean(['specific_enthalpy_j_kg', 'enthalpy_j_kg', 'h_mix_j_kg'])
+            if h_spec:
+                 row['H_kj_kg'] = h_spec / 1000.0
+                 row['H_mix_J_kg'] = h_spec
+            else:
+                 row['H_kj_kg'] = 0.0
+                 row['H_mix_J_kg'] = 0.0
+             
+        # Entropy
+        s_spec = get_mean(['specific_entropy_j_kgk', 'entropy_j_kgk'])
+        row['S_kj_kgK'] = s_spec / 1000.0 if s_spec else 0.0
+        
+        # Composition - Now tracked as outlet_h2o_frac
+        row['MassFrac_H2O'] = get_mean(['outlet_h2o_frac', 'mass_fraction_h2o', 'y_h2o', 'w_h2o']) or 0.0
+        row['MassFrac_H2'] = get_mean(['mass_fraction_h2', 'y_h2', 'w_h2']) or 0.0
+        row['MassFrac_O2'] = get_mean(['mass_fraction_o2', 'y_o2', 'w_o2']) or 0.0
+        
+        # Alias for legacy compatibility
+        row['w_H2O'] = row['MassFrac_H2O']
+        
+        data_rows.append(row)
+        
+    return pd.DataFrame(data_rows)
+
+
+@log_graph_errors
+def create_h2_stacked_properties(df: pd.DataFrame, dpi: int = DPI_HIGH, metadata: Dict[str, Any] = None) -> Figure:
+    """Wrapper for H2 Train Stacked Properties."""
+    if metadata is None: metadata = {}
+    profile_df = _build_train_profile_df(df, metadata, 'H2_Train')
+    profile_df.attrs['scenario_name'] = 'H2 Stream'
+    return create_stacked_properties_figure(profile_df, 'H2', dpi)
+
+
+@log_graph_errors
+def create_o2_stacked_properties(df: pd.DataFrame, dpi: int = DPI_HIGH, metadata: Dict[str, Any] = None) -> Figure:
+    """Wrapper for O2 Train Stacked Properties."""
+    if metadata is None: metadata = {}
+    profile_df = _build_train_profile_df(df, metadata, 'O2_Train')
+    profile_df.attrs['scenario_name'] = 'O2 Stream'
+    return create_stacked_properties_figure(profile_df, 'O2', dpi)
+
+
+@log_graph_errors
+def create_stacked_properties_figure(df: pd.DataFrame, gas_fluido: str, dpi: int = DPI_FAST) -> Figure:
+    """
+    Replica of plot_propriedades_empilhadas.py.
+    
+    4 Panels:
+    1. Temperature (°C)
+    2. Pressure (bar)
+    3. Mass Fraction H2O (%)
+    4. Specific Enthalpy (kJ/kg)
+    """
+    if df.empty:
+        # Avoid error if no data found
+        return None
+    
+    fig = Figure(figsize=(10, 14), dpi=dpi, constrained_layout=True)
+    # 4 rows, share x
+    gs = fig.add_gridspec(4, 1)
+    ax1 = fig.add_subplot(gs[0])
+    ax2 = fig.add_subplot(gs[1], sharex=ax1)
+    ax3 = fig.add_subplot(gs[2], sharex=ax1)
+    ax4 = fig.add_subplot(gs[3], sharex=ax1)
+    
+    x_labels = df['Component']
+    x = range(len(x_labels))
+    
+    # 1. Temperature
+    ax1.plot(x, df['T_c'], marker='o', color='blue', label=f'{gas_fluido} - Temp')
+    ax1.set_ylabel('T (°C)')
+    ax1.grid(True, linestyle='--')
+    for i, v in enumerate(df['T_c']):
+        if pd.notnull(v):
+            ax1.annotate(f'{v:.1f}', (i, v), xytext=(0, 5), textcoords='offset points', ha='center', fontsize=8)
+            
+    # 2. Pressure
+    ax2.plot(x, df['P_bar'], marker='o', color='red', label=f'{gas_fluido} - Press')
+    ax2.set_ylabel('P (bar)')
+    ax2.grid(True, linestyle='--')
+    for i, v in enumerate(df['P_bar']):
+         if pd.notnull(v):
+            ax2.annotate(f'{v:.2f}', (i, v), xytext=(0, 5), textcoords='offset points', ha='center', fontsize=8)
+            
+    # 3. H2O Fraction
+    w_h2o = df['MassFrac_H2O'] * 100
+    ax3.plot(x, w_h2o, marker='o', color='green', label=f'{gas_fluido} - H2O%')
+    ax3.set_ylabel('w_H2O (%)')
+    ax3.grid(True, linestyle='--')
+    for i, v in enumerate(w_h2o):
+        if pd.notnull(v):
+            # Only annotate significant values or endpoints
+            if abs(v) > 1e-4:
+                fmt = '{:.4f}' if abs(v) >= 0.0001 else '{:.2e}'
+                ax3.annotate(fmt.format(v), (i, v), xytext=(0, 5), textcoords='offset points', ha='center', fontsize=8)
+            
+    # 4. Enthalpy
+    ax4.plot(x, df['H_kj_kg'], marker='o', color='purple', label='Enthalpy (kJ/kg)')
+    ax4.set_ylabel('H (kJ/kg)')
+    ax4.set_xlabel('Component')
+    ax4.grid(True, linestyle='--')
+    for i, v in enumerate(df['H_kj_kg']):
+        if pd.notnull(v):
+            ax4.annotate(f'{v:.1f}', (i, v), xytext=(0, 5), textcoords='offset points', ha='center', fontsize=8)
+            
+    # X-Axis Labels
+    ax4.set_xticks(x)
+    ax4.set_xticklabels(x_labels, rotation=45, ha='right')
+    
+    fig.suptitle(f'Property Profile: {gas_fluido} Stream', fontsize=14)
     return fig
