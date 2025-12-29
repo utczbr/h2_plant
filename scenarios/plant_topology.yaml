@@ -89,9 +89,10 @@ nodes:
   - id: "Chiller_1"
     type: "Chiller"
     params:
+      component_id: "Chiller_1"  # ID Explicitly set
+      cooling_capacity_kw: 500.0
       target_temp_k: 277.15 # 4°C
-      cooling_capacity_kw: 200.0
-      process_step: 50
+      process_step: 33  # Reordered step
     connections:
       - source_port: "fluid_out"
         target_name: "KOD_2"
@@ -337,7 +338,7 @@ nodes:
       max_flow_kg_h: 400.0
       max_temp_c: 135.0
       temperature_limited: true
-      outlet_pressure_bar: 40.0
+      outlet_pressure_bar: 41.0
       process_step: 150
     connections:
       - source_port: "outlet"
@@ -376,6 +377,7 @@ nodes:
     type: "Chiller"
     params:
       target_temp_k: 277.15 # 4°C heavy cooling for condensation
+      cooling_capacity_kw: 300.0
       process_step: 210
     connections:
       - source_port: "fluid_out"
@@ -415,7 +417,11 @@ nodes:
     params:
       purity_target: 0.99995
       process_step: 300
-    connections: []  # Final product outlet
+    connections:
+      - source_port: "purified_gas_out"
+        target_name: "H2_Production_Mixer"
+        target_port: "inlet_1"
+        resource_type: "gas"
 
   # =================================================================================
   # O2 PURIFICATION TRAIN (Anode Side)
@@ -545,3 +551,306 @@ nodes:
         target_name: "SOEC_Cluster"
         target_port: "steam_in"
         resource_type: "stream"
+
+  # =================================================================================
+  # PEM HYDROGEN PRODUCTION TRAIN (Secondary Source)
+  # =================================================================================
+
+  - id: "PEM_Electrolyzer"
+    type: "PEM"
+    params:
+      max_power_mw: 5.0
+      use_polynomials: True
+      water_excess_factor: 0.02 
+      out_pressure_pa: 4000000.0 # 40 bar 
+    connections:
+      - source_port: "h2_out"
+        target_name: "PEM_KOD_1"
+        target_port: "gas_inlet"
+        resource_type: "stream"
+
+  - id: "PEM_KOD_1"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05
+      gas_species: "H2"
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "PEM_DryCooler_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "PEM_DryCooler_1"
+    type: "DryCooler"
+    params: {}
+    connections:
+      - source_port: "fluid_out"
+        target_name: "PEM_Chiller_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "PEM_Chiller_1"
+    type: "Chiller"
+    params:
+      target_temp_k: 277.15
+      cooling_capacity_kw: 100.0
+      cop: 4.0
+      pressure_drop_bar: 0.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "PEM_KOD_2"
+        target_port: "gas_inlet"
+        resource_type: "gas"
+
+  - id: "PEM_KOD_2"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05
+      gas_species: "H2"
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "PEM_Coalescer_1"
+        target_port: "inlet"
+        resource_type: "gas_mixture"
+
+  - id: "PEM_Coalescer_1"
+    type: "Coalescer"
+    params:
+      gas_type: "H2"
+    connections:
+      - source_port: "outlet"
+        target_name: "PEM_ElectricBoiler_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "PEM_ElectricBoiler_1"
+    type: "ElectricBoiler"
+    params: 
+      max_power_kw: 25.0
+      target_temp_c: 40.0
+      efficiency: 0.98
+    connections:
+      - source_port: "fluid_out"  
+        target_name: "PEM_Deoxo_1"
+        target_port: "inlet"
+        resource_type: "gas"
+
+  - id: "PEM_Deoxo_1"
+    type: "DeoxoReactor"
+    params: {}
+    connections:
+      - source_port: "outlet"
+        target_name: "PEM_Chiller_2"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "PEM_Chiller_2"
+    type: "Chiller"
+    params:
+      target_temp_k: 277.15
+      cooling_capacity_kw: 100.0
+      cop: 4.0
+      pressure_drop_bar: 0.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "PEM_KOD_3"
+        target_port: "gas_inlet"
+        resource_type: "gas"
+    
+  - id: "PEM_KOD_3"
+    type: "KnockOutDrum"
+    params:
+      diameter_m: 0.5
+      delta_p_bar: 0.05
+      gas_species: "H2"
+    connections:
+      - source_port: "gas_outlet"
+        target_name: "PEM_ElectricBoiler_2"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "PEM_ElectricBoiler_2"
+    type: "ElectricBoiler"
+    params: 
+      max_power_kw: 25.0
+      target_temp_c: 30.0
+      efficiency: 0.98
+    connections:
+      - source_port: "fluid_out"
+        target_name: "PEM_PSA_1"
+        target_port: "gas_in"
+        resource_type: "stream"
+
+  - id: "PEM_PSA_1"
+    type: "PSA Unit"
+    params:
+      purity_target: 0.9999
+      recovery_rate: 0.90
+      power_consumption_kw: 10.0
+    connections: 
+      - source_port: "purified_gas_out"
+        target_name: "H2_Production_Mixer"
+        target_port: "inlet_2"
+        resource_type: "gas"
+
+  # =================================================================================
+  # H2 PRODUCTION MIXING (Combines SOEC and PEM Trains)
+  # =================================================================================
+
+  - id: "H2_Production_Mixer"
+    type: "Mixer"
+    params:
+      volume_m3: 5.0
+      continuous_flow: true
+      process_step: 400
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_Compressor_S1"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+  # =================================================================================
+  # HIGH PRESSURE COMPRESSION TRAIN (40 bar → 500 bar)
+  # Redistributed Pressure Ratios ~1.65x per stage
+  # Limit: 135ºC
+  # =================================================================================
+
+  # --- Stage 1 (40.0 → 66.3 bar) ---
+  - id: "HP_Compressor_S1"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 520.0 # Pro-rated for combined flow (400 SOEC + 120 PEM approx)
+      max_temp_c: 135.0
+      temperature_limited: true
+      inlet_pressure_bar: 40.0
+      outlet_pressure_bar: 66.3
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_DryCooler_S1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "HP_DryCooler_S1"
+    type: "DryCooler"
+    params: 
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "HP_Compressor_S2"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+  # --- Stage 2 (66.3 → 109.9 bar) ---
+  - id: "HP_Compressor_S2"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 520.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      inlet_pressure_bar: 66.3
+      outlet_pressure_bar: 109.9
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_DryCooler_S2"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "HP_DryCooler_S2"
+    type: "DryCooler"
+    params: 
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "HP_Compressor_S3"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+  # --- Stage 3 (109.9 → 182.1 bar) ---
+  - id: "HP_Compressor_S3"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 520.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      inlet_pressure_bar: 109.9
+      outlet_pressure_bar: 182.1
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_DryCooler_S3"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "HP_DryCooler_S3"
+    type: "DryCooler"
+    params: 
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "HP_Compressor_S4"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+  # --- Stage 4 (182.1 → 301.8 bar) ---
+  - id: "HP_Compressor_S4"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 520.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      inlet_pressure_bar: 182.1
+      outlet_pressure_bar: 301.8
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_DryCooler_S4"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "HP_DryCooler_S4"
+    type: "DryCooler"
+    params: 
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "HP_Compressor_S5"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+  # --- Stage 5 (301.8 → 500.0 bar) ---
+  - id: "HP_Compressor_S5"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 520.0
+      max_temp_c: 135.0
+      temperature_limited: true
+      inlet_pressure_bar: 301.8
+      outlet_pressure_bar: 500.0
+    connections:
+      - source_port: "outlet"
+        target_name: "HP_DryCooler_S5"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "HP_DryCooler_S5"
+    type: "DryCooler"
+    params: 
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "H2_Storage_Tank"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+  # =================================================================================
+  # HYDROGEN STORAGE (500 bar)
+  # =================================================================================
+
+  - id: "H2_Storage_Tank"
+    type: "Tank"
+    params:
+      n_tanks: 10
+      capacity_kg: 1000.0  # 10000 kg total (10 ton)
+      max_pressure_bar: 500.0
+      temperature_k: 298.15
+    connections: []

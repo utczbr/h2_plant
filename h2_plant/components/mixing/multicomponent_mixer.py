@@ -246,9 +246,10 @@ class MultiComponentMixer(Component):
 
                 # Species mole accumulation
                 for species, y_i in mole_fracs.items():
-                    if species in self.moles_stored:
+                    target_s = 'H2O' if species == 'H2O_liq' else species
+                    if target_s in self.moles_stored:
                         moles_s = moles_in_stream * y_i
-                        self.moles_stored[species] += moles_s
+                        self.moles_stored[target_s] += moles_s
                         total_moles_in += moles_s
                 
                 # Weighted Pressure Accumulation
@@ -487,9 +488,9 @@ class MultiComponentMixer(Component):
         for species, mole_frac in comp.items():
             if mole_frac > 1e-12:
                 # Map liquid water to gas properties (simplified) or ignore
+                # Lookup species properties
                 lookup_species = species
-                if species == 'H2O_liq':
-                    lookup_species = 'H2O'
+                # (Removed legacy H2O_liq mapping as it is now in SPECIES_DATA)
                 
                 if lookup_species in GasConstants.SPECIES_DATA:
                     data = GasConstants.SPECIES_DATA[lookup_species]

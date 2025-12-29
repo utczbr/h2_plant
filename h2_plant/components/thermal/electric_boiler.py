@@ -97,6 +97,11 @@ class ElectricBoiler(Component):
         self.history_temp = np.zeros(1)
         self.step_idx = 0
 
+    @property
+    def power_kw(self) -> float:
+        """Expose power consumption in kW for dispatch tracking."""
+        return self.current_power_w / 1000.0
+
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
         Executes the initialization phase of the Component Lifecycle Contract.

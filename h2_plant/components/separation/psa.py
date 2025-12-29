@@ -104,6 +104,11 @@ class PSA(Component):
         # H2 Recovery Tracking
         self._last_h2_in_kg_h: float = 0.0
 
+    @property
+    def power_kw(self) -> float:
+        """Expose power consumption in kW for dispatch tracking."""
+        return self.power_consumption_kw
+
     def initialize(self, dt: float, registry: Any) -> None:
         """
         Prepare component for simulation.

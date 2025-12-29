@@ -382,6 +382,8 @@ class KnockOutDrum(Component):
         n_species: Dict[str, float] = {}
 
         for species, mass_frac in composition.items():
+            if species == 'H2O_liq':
+                continue
             if species in GasConstants.SPECIES_DATA:
                 mw_g_mol = GasConstants.SPECIES_DATA[species]['molecular_weight']
                 mw_kg_mol = mw_g_mol / 1000.0

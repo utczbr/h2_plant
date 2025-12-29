@@ -122,6 +122,11 @@ class DryCooler(Component):
         self.tqc_effectiveness = 0.0
         self.dc_effectiveness = 0.0
 
+    @property
+    def power_kw(self) -> float:
+        """Expose power consumption in kW for dispatch tracking."""
+        return self.fan_power_kw
+
     def initialize(self, dt: float, registry: Any) -> None:
         """
         Prepare the component for simulation execution.

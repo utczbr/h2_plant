@@ -243,6 +243,7 @@ class HydrogenMultiCyclone(Component):
                 # CRITICAL: Exclude liquid species from gas phase mole fraction!
                 n_rel = {}
                 for species, x_mass in value.composition.items():
+                    if species == 'H2O_liq': continue  # Explicitly skip liquid
                     if species.endswith('_liq'): continue
                     mw_i = MW.get(species, 28.0e-3)  # Default ~N2
                     n_rel[species] = x_mass / mw_i

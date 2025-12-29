@@ -64,6 +64,16 @@ class GasConstants:
             'critical_pressure': 22.064e6,
             'acentric_factor': 0.345
         },
+        'H2O_liq': {
+            'molecular_weight': 18.015,
+            'h_formation': -285.83e3,  # Liquid formation enthalpy
+            'h_vaporization': 0.0,
+            'cp_coeffs': [75.3, 0.0, 0.0, 0.0, 0.0], # Cp ~ 75.3 J/molK (constant)
+            'antoine_coeffs': [0, 0, 0], 
+            'critical_temp': 647.1,
+            'critical_pressure': 22.064e6,
+            'acentric_factor': 0.345
+        },
         'H2': {
             'molecular_weight': 2.016,
             'h_formation': 0.0,
