@@ -1606,9 +1606,15 @@ def create_energy_flow_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         return data
 
     power_data = get_comp_data('_power_kw')
-    # Merge both heat tracking styles
+    # Also capture Chiller electrical power and DryCooler fan power
+    power_data.update(get_comp_data('_electrical_power_kw'))
+    power_data.update(get_comp_data('_fan_power_kw'))
+    
+    # Merge all heat tracking styles
     heat_data = get_comp_data('_heat_duty_kw')
     heat_data.update(get_comp_data('_heat_removed_kw'))
+    heat_data.update(get_comp_data('_heat_rejected_kw'))  # DryCooler
+    heat_data.update(get_comp_data('_cooling_load_kw'))   # Chiller
     # Also DryCooler tqc
     heat_data.update(get_comp_data('_tqc_duty_kw'))
 
@@ -2026,6 +2032,10 @@ def create_energy_flows_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
             work_data[comp] = df[col].sum()
         elif 'electrical_power_kw' in col_lower or 'fan_power_kw' in col_lower:
             comp = col.split('_')[0]
+            work_data[comp] = work_data.get(comp, 0) + df[col].sum() * dt_hours
+        elif col_lower.endswith('_power_kw'):
+            # Capture compressor power_kw and convert to kWh
+            comp = col.rsplit('_power_kw', 1)[0]
             work_data[comp] = work_data.get(comp, 0) + df[col].sum() * dt_hours
     
     if not heat_data and not work_data:

@@ -22,13 +22,13 @@ Physical Model:
 
 Architecture:
     Implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Standard initialization.
-    - `step()`: Solves PFR physics via JIT-compiled integrator.
+    - `initialize()`: Pre-calculates zone arrays for JIT optimization.
+    - `step()`: Solves PFR physics via single-pass JIT integrator.
     - `get_state()`: Returns conversion, peak temperature, and pressure drop.
 
 Performance Optimization:
-    The PFR solver is JIT-compiled via Numba (solve_deoxo_pfr_step) for
-    real-time simulation performance.
+    The multi-zone PFR solver is JIT-compiled via Numba (solve_deoxo_multizone_jit)
+    for real-time simulation performance, eliminating Python loop overhead.
 """
 
 from typing import Dict, Any, Optional
@@ -53,13 +53,13 @@ class DeoxoReactor(Component):
     catalyst in a uniform fixed bed configuration.
 
     This component fulfills the Component Lifecycle Contract (Layer 1):
-        - `initialize()`: Standard component initialization.
+        - `initialize()`: Pre-calculates zone arrays for JIT.
         - `step()`: Solves PFR physics, updates output stream composition.
         - `get_state()`: Returns conversion, peak temperature, and ΔP.
 
     The reactor model:
     1. Receives H₂ stream with trace O₂ contamination.
-    2. Solves RK4-integrated PFR for temperature and conversion profiles.
+    2. Solves RK4-integrated multi-zone PFR in single JIT call.
     3. Updates stream composition based on stoichiometry (2H₂ + O₂ → 2H₂O).
     4. Calculates pressure drop using Ergun-type scaling.
 
@@ -106,26 +106,49 @@ class DeoxoReactor(Component):
             'T': np.array([]),
             'X': np.array([])
         }
+        
+        # JIT arrays (initialized in initialize())
+        self._jit_L_zones: Optional[np.ndarray] = None
+        self._jit_k0_zones: Optional[np.ndarray] = None
+        self._jit_U_a_zones: Optional[np.ndarray] = None
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the component for simulation execution.
 
-        Fulfills the Component Lifecycle Contract initialization phase.
+        Pre-calculates zone parameter arrays for JIT optimization,
+        avoiding repeated array creation during step().
 
         Args:
             dt (float): Simulation timestep in hours.
             registry (ComponentRegistry): Central registry for component access.
         """
         super().initialize(dt, registry)
+        
+        # PERFORMANCE: Pre-calculate Zone Arrays for JIT
+        # Convert List constants to NumPy arrays of floats once at startup.
+        self._jit_L_zones = np.array([
+            frac * DeoxoConstants.L_REACTOR_M 
+            for frac in DeoxoConstants.L_ZONE_FRAC
+        ], dtype=np.float64)
+        
+        self._jit_U_a_zones = np.array(
+            DeoxoConstants.U_A_ZONE_W_M3_K, 
+            dtype=np.float64
+        )
+        
+        self._jit_k0_zones = np.array([
+            DeoxoConstants.K0_VOL_S1 * mult 
+            for mult in DeoxoConstants.K0_ZONE_MULT
+        ], dtype=np.float64)
 
     def step(self, t: float) -> None:
         """
-        Execute one simulation timestep.
+        Execute one simulation timestep using optimized single-pass JIT solver.
 
         Performs complete DeOxo reactor calculation sequence:
         1. Calculate mixture molecular weight and molar flow from mass flow.
-        2. Invoke JIT-compiled PFR solver for conversion and temperature.
+        2. Invoke JIT-compiled multi-zone PFR solver for conversion and temperature.
         3. Apply reaction stoichiometry to update stream composition.
         4. Calculate pressure drop using Ergun-type velocity scaling.
 
@@ -140,20 +163,11 @@ class DeoxoReactor(Component):
 
         stream = self.input_stream
 
-        # === DEBUG START ===
-        #print(f"=== DEBUG Deoxo {self.component_id} START ===")
-        #print(f" L_REACTOR_M loaded: {DeoxoConstants.L_REACTOR_M}")
-        #print(f" mass_flow_kg_h={stream.mass_flow_kg_h:.2f}, T_in_C={stream.temperature_k-273.15:.1f}, P_bar={stream.pressure_pa/1e5:.2f}")
-
         # Extract composition
         comp = stream.composition
-        #print(f" comp in: H2={comp.get('H2',0)*100:.2f}%, O2={comp.get('O2',0)*100:.4f}% ({comp.get('O2',0)*1e6:.0f} ppm mass)")
-        
-        y_o2_in = comp.get('O2', 0.0)
-        y_h2_in = comp.get('H2', 0.0)
-        y_h2o_in = comp.get('H2O', 0.0)
+        y_o2_in_mass = comp.get('O2', 0.0)
 
-        # Molecular weights
+        # Molecular weights (kg/mol)
         MW = {
             'H2': 2.016e-3,
             'O2': 32.00e-3,
@@ -162,7 +176,6 @@ class DeoxoReactor(Component):
         }
 
         # 1. Convert Mass Fractions to Mole Fractions
-        # n_i_rel = x_i / M_i
         n_rel = {}
         total_n_rel = 0.0
         
@@ -178,135 +191,78 @@ class DeoxoReactor(Component):
         y_fracs = {s: n/total_n_rel for s, n in n_rel.items()}
         y_o2_in = y_fracs.get('O2', 0.0)
         
-        # DEBUG: Log inlet O2 concentration
-        #logger.warning(f"[DEOXO DEBUG] {self.component_id}: Inlet O2 = {y_o2_in*1e6:.1f} ppm (y_O2 = {y_o2_in:.6f})")
-        
         # 2. Calculate Mix MW
         mw_mix = sum(y * MW.get(s, MW['other']) for s, y in y_fracs.items())
         
         # Convert mass flow to molar flow
         molar_flow_total = (stream.mass_flow_kg_h / 3600.0) / mw_mix
         
-        # DEBUG: After mole conversion
-        #print(f" y_o2_mol_in={y_o2_in*1e6:.1f} ppm, molar_tot={molar_flow_total:.4f} mol/s")
-        
         # Adiabatic ΔT Check (pre-zone sanity/safety)
         delta_t_ad = abs(DeoxoConstants.DELTA_H_RXN_J_MOL_O2) * y_o2_in / DeoxoConstants.CP_MIX_AVG_J_MOL_K
         self.last_delta_t_ad_k = delta_t_ad
-        #print(f" ΔT_ad={delta_t_ad:.1f} K")
         
         if delta_t_ad > DeoxoConstants.DELTA_T_AD_MAX_K:
             logger.warning(f"[DEOXO] {self.component_id}: ΔT_ad = {delta_t_ad:.1f}K exceeds catalyst limit ({DeoxoConstants.DELTA_T_AD_MAX_K}K)!")
         
-        # Edge case: Skip zones if negligible O2 or very low flow (instability risk)
-        MIN_FLOW_KG_H = 1.0 # 1% of nominal is a safe cutoff
+        # Edge case: Skip zones if negligible O2 or very low flow
+        MIN_FLOW_KG_H = 1.0
         
         if stream.mass_flow_kg_h < MIN_FLOW_KG_H:
-             # Low flow regime: High residence time -> Equilibrium
-             # Conversion -> 100% (if T > T_activation, else 0%)
-             # Temperature -> T_jacket (Heat transfer dominates heat gen)
-             
-             # Assume active catalyst:
-             X_total = 1.0 if stream.temperature_k > DeoxoConstants.CRITICAL_INLET_T_K else 0.0
-             t_out = DeoxoConstants.T_JACKET_K if X_total > 0 else stream.temperature_k
-             
-             # Sanity for T_out (can't cool below jacket if exothermic)
-             # Actually at low flow, T->T_jacket equilibrium matches.
-             
-             self.last_conversion_o2 = X_total
-             self.last_peak_temp_k = t_out
-             self.last_zone_temps = [t_out] * len(DeoxoConstants.L_ZONE_FRAC)
-             # Dummy profiles
-             self.last_profiles = {'L': np.array([0, DeoxoConstants.L_REACTOR_M]), 
-                                   'T': np.array([stream.temperature_k, t_out]), 
-                                   'X': np.array([0.0, X_total])}
-             
-             # Bypass numerical solver
-        elif y_o2_in < 1e-6:
+            # Low flow regime: High residence time -> Equilibrium
+            X_total = 1.0 if stream.temperature_k > DeoxoConstants.CRITICAL_INLET_T_K else 0.0
+            t_out = DeoxoConstants.T_JACKET_K if X_total > 0 else stream.temperature_k
+            
+            self.last_conversion_o2 = X_total
+            self.last_peak_temp_k = t_out
+            self.last_zone_temps = [t_out] * len(DeoxoConstants.L_ZONE_FRAC)
+            self.last_profiles = {
+                'L': np.array([0, DeoxoConstants.L_REACTOR_M]), 
+                'T': np.array([stream.temperature_k, t_out]), 
+                'X': np.array([0.0, X_total])
+            }
+            
+        elif y_o2_in < 1e-9:
+            # No O2 to react
             self.last_conversion_o2 = 0.0
             self.last_peak_temp_k = stream.temperature_k
             self.last_zone_temps = [stream.temperature_k] * len(DeoxoConstants.L_ZONE_FRAC)
-            self.last_profiles = {'L': np.array([0.0]), 'T': np.array([stream.temperature_k]), 'X': np.array([0.0])}
+            self.last_profiles = {
+                'L': np.array([0.0]), 
+                'T': np.array([stream.temperature_k]), 
+                'X': np.array([0.0])
+            }
             t_out = stream.temperature_k
         else:
-            # Zoned PFR Solver
-            L_zones = np.array([frac * DeoxoConstants.L_REACTOR_M for frac in DeoxoConstants.L_ZONE_FRAC])
-            #print(f" L_ZONE_FRAC={DeoxoConstants.L_ZONE_FRAC}, L_zones={L_zones}")
-            #print(f" U_A_ZONE={DeoxoConstants.U_A_ZONE_W_M3_K}, K0_MULT={DeoxoConstants.K0_ZONE_MULT}")
-            
-            y_o2_curr = y_o2_in
-            T_curr = stream.temperature_k
-            X_total = 0.0
-            T_peak_total = T_curr
-            L_all = [np.array([0.0])]
-            T_all = [np.array([T_curr])]
-            X_all = [np.array([0.0])]
-            zone_temps = []
-            
-            for i, L_zone in enumerate(L_zones):
-                # Skip zero-length zones
-                if L_zone <= 0:
-                    zone_temps.append(T_curr)
-                    continue
-                    
-                u_a_zone = DeoxoConstants.U_A_ZONE_W_M3_K[i]
-                k0_zone = DeoxoConstants.K0_VOL_S1 * DeoxoConstants.K0_ZONE_MULT[i]
-                
-                X_zone, T_out_z, T_peak_z, L_prof_z, T_prof_z, X_prof_z = numba_ops.solve_deoxo_pfr_step(
-                    L_total=L_zone, steps=50, T_in=T_curr, P_in_pa=stream.pressure_pa,
-                    molar_flow_total=molar_flow_total, y_o2_in=y_o2_curr, k0=k0_zone,
-                    Ea=DeoxoConstants.EA_J_MOL, R=GasConstants.R_UNIVERSAL_J_PER_MOL_K,
-                    delta_H=DeoxoConstants.DELTA_H_RXN_J_MOL_O2, U_a=u_a_zone,
-                    T_jacket=DeoxoConstants.T_JACKET_K, Area=DeoxoConstants.AREA_REACTOR_M2,
-                    Cp_mix=DeoxoConstants.CP_MIX_AVG_J_MOL_K,
-                    y_o2_target=DeoxoConstants.MAX_ALLOWED_O2_OUT_MOLE_FRAC
-                )
-                
-                # DEBUG: Per-zone results
-                #print(f"  Zone {i+1}: L={L_zone:.3f}m, U_a={u_a_zone}, k0={k0_zone:.2e}")
-                #print(f"    T_in={T_curr-273.15:.1f}°C, y_O2_in={y_o2_curr*1e6:.1f}ppm")
-                #print(f"    X_zone={X_zone:.4f}, T_out={T_out_z-273.15:.1f}°C, T_peak={T_peak_z-273.15:.1f}°C")
-                
-                # Store previous cumulative X before updating
-                X_prev = X_total
-                # Cumulative conversion: X_tot = 1 - ∏(1-X_i)
-                X_total = 1.0 - (1.0 - X_total) * (1.0 - X_zone)
-                T_peak_total = max(T_peak_total, T_peak_z)
-                
-                # Concat profiles (shift L_prof_z by sum of previous L)
-                L_shift = sum(L_zones[:i])
-                if len(L_prof_z) > 1:
-                    L_all.append(L_prof_z[1:] + L_shift)  # Skip first point (duplicate)
-                    T_all.append(T_prof_z[1:])
-                    # Cumulative X profile: X_cum(ζ) = X_prev + X_zone,local(ζ) * (1 - X_prev)
-                    X_cumulative = X_prev + X_prof_z[1:] * (1.0 - X_prev)
-                    X_all.append(X_cumulative)
-                
-                # Chain to next zone
-                y_o2_curr = y_o2_curr * (1.0 - X_zone)
-                T_curr = T_out_z
-                zone_temps.append(T_out_z)
-                #print(f"    After zone: y_O2_out={y_o2_curr*1e6:.1f}ppm, X_total={X_total:.4f}")
+            # OPTIMIZED: Single JIT call replaces Python zone loop
+            X_total, t_out, T_peak, L_prof, T_prof, X_prof = numba_ops.solve_deoxo_multizone_jit(
+                self._jit_L_zones,
+                self._jit_k0_zones,
+                self._jit_U_a_zones,
+                stream.temperature_k,
+                stream.pressure_pa,
+                molar_flow_total,
+                y_o2_in,
+                DeoxoConstants.EA_J_MOL,
+                GasConstants.R_UNIVERSAL_J_PER_MOL_K,
+                DeoxoConstants.DELTA_H_RXN_J_MOL_O2,
+                DeoxoConstants.T_JACKET_K,
+                DeoxoConstants.AREA_REACTOR_M2,
+                DeoxoConstants.CP_MIX_AVG_J_MOL_K,
+                DeoxoConstants.MAX_ALLOWED_O2_OUT_MOLE_FRAC
+            )
             
             self.last_conversion_o2 = X_total
-            self.last_peak_temp_k = T_peak_total
-            self.last_zone_temps = zone_temps
+            self.last_peak_temp_k = T_peak
+            self.last_zone_temps = [t_out]  # Simplified (outlet only)
             self.last_profiles = {
-                'L': np.hstack(L_all),
-                'T': np.hstack(T_all),
-                'X': np.hstack(X_all)
+                'L': L_prof,
+                'T': T_prof,
+                'X': X_prof
             }
-            t_out = T_curr
-            
-            # DEBUG: Final summary
-            y_o2_out_mol = y_o2_in * (1.0 - X_total)
-            #print(f" FINAL: X_total={X_total:.4f}, y_O2_out={y_o2_out_mol*1e6:.1f}ppm, T_out={t_out-273.15:.1f}°C, T_peak={T_peak_total-273.15:.1f}°C")
             
             # Safety check: Catalyst temperature limit
             if self.last_peak_temp_k > DeoxoConstants.T_CAT_MAX_K:
                 logger.error(f"[DEOXO] {self.component_id}: T_peak = {self.last_peak_temp_k - 273.15:.1f}°C exceeds catalyst limit ({DeoxoConstants.T_CAT_MAX_K - 273.15:.1f}°C)!")
-        
-        #print(f"=== DEBUG Deoxo {self.component_id} END ===")
 
         # Stoichiometric mass balance: 2H₂ + O₂ → 2H₂O
         n_o2_in = molar_flow_total * y_o2_in
@@ -323,7 +279,7 @@ class DeoxoReactor(Component):
         new_moles['H2'] = max(0.0, new_moles.get('H2', 0.0) - n_h2_consumed)
         new_moles['H2O'] = new_moles.get('H2O', 0.0) + n_h2o_gen
 
-        # Normalize to mole fractions (internal) -> Then convert to Mass for Output Stream
+        # Normalize to mole fractions -> Then convert to Mass for Output Stream
         total_moles_out = sum(new_moles.values())
         if total_moles_out > 0:
             y_out = {s: n / total_moles_out for s, n in new_moles.items()}
@@ -331,7 +287,6 @@ class DeoxoReactor(Component):
             y_out = y_fracs
 
         # Convert back to Mass Fractions for Stream
-        # x_i = (y_i * M_i) / M_mix_out
         mw_mix_out = sum(y * MW.get(s, MW['other']) for s, y in y_out.items())
         
         new_comp = {}
@@ -340,14 +295,14 @@ class DeoxoReactor(Component):
                 mw_i = MW.get(s, MW['other'])
                 new_comp[s] = (y * mw_i) / mw_mix_out
         else:
-            new_comp = comp # Fallback
+            new_comp = comp  # Fallback
 
         # Mass is conserved (2×2 + 32 = 36 g reactants, 2×18 = 36 g product)
         mass_flow_out = stream.mass_flow_kg_h
 
         # Pressure drop using Ergun-type velocity scaling
-        u_design = DeoxoConstants.DESIGN_SURF_VEL_M_S # Calibrated
-        dp_design = DeoxoConstants.DESIGN_DP_BAR      # Calibrated (0.05 bar)
+        u_design = DeoxoConstants.DESIGN_SURF_VEL_M_S
+        dp_design = DeoxoConstants.DESIGN_DP_BAR
 
         # Current velocity from volumetric flow
         rho_gas = (stream.pressure_pa * mw_mix) / (
@@ -378,7 +333,6 @@ class DeoxoReactor(Component):
     def receive_input(self, port_name: str, value: Any, resource_type: str = 'stream') -> float:
         """
         Accept inlet stream from upstream component.
-        Also tracks O2 mass flow entering for stoichiometry balance.
 
         Args:
             port_name (str): Target port ('inlet').
@@ -429,14 +383,8 @@ class DeoxoReactor(Component):
         Fulfills the Component Lifecycle Contract state access.
 
         Returns:
-            Dict[str, Any]: State dictionary containing:
-                - conversion_o2_percent (float): O₂ conversion (%).
-                - peak_temperature_c (float): Maximum reactor temperature (°C).
-                - pressure_drop_mbar (float): Total pressure drop (mbar).
-                - o2_in_kg_h (float): O₂ mass flow entering (kg/h).
-                - o2_consumed_kg_h (float): O₂ mass consumed in reaction (kg/h).
-                - h2_consumed_kg_h (float): H₂ mass consumed in reaction (kg/h).
-                - h2o_generated_kg_h (float): H₂O mass generated (kg/h).
+            Dict[str, Any]: State dictionary containing conversion, temperatures,
+                pressure drop, and stoichiometry tracking.
         """
         # Calculate O2 slip and stoichiometry
         o2_slip = 0.0
@@ -453,9 +401,16 @@ class DeoxoReactor(Component):
         return {
             **super().get_state(),
             'conversion_o2_percent': self.last_conversion_o2 * 100.0,
+            'conversion_percent': self.last_conversion_o2 * 100.0,  # Alias for engine_dispatch
             'peak_temperature_c': self.last_peak_temp_k - 273.15,
             't_peak_total_c': self.last_peak_temp_k - 273.15,
             'pressure_drop_mbar': self.last_pressure_drop_bar * 1000.0,
+            
+            # Inlet properties (Required for Profile Reconstruction)
+            'inlet_temp_c': (self.input_stream.temperature_k - 273.15) if self.input_stream else 0.0,
+            'inlet_pressure_bar': (self.input_stream.pressure_pa / 1e5) if self.input_stream else 0.0,
+            'mass_flow_kg_h': self.input_stream.mass_flow_kg_h if self.input_stream else 0.0,
+            
             'outlet_o2_ppm_mol': (self.output_stream.get_total_mole_frac('O2') * 1e6) if self.output_stream else 0.0,
             'delta_t_ad_k': getattr(self, 'last_delta_t_ad_k', 0.0),
             'delta_t_real_k': self.last_peak_temp_k - (self.input_stream.temperature_k if self.input_stream else 0.0),

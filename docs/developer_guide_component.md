@@ -1,80 +1,252 @@
 # Developer Guide: Component Implementation
 
-This guide defines the standards for implementing new components in the H2 Plant simulation. All components must adhere to these interfaces to ensure compatibility with the simulation engine, optimization layer, and visualization tools.
+**Version**: 2.0  
+**Updated**: December 2025
+
+This guide defines the comprehensive standards for implementing new components in the H2 Plant simulation. All components must adhere to these interfaces to ensure compatibility with the `SimulationEngine`, `EngineDispatchStrategy`, and `Stream` topology.
+
+---
 
 ## 1. The Component Lifecycle Contract (Layer 1)
 
 All components must inherit from `h2_plant.core.component.Component` and implement the three-phase lifecycle. This contract ensures deterministic execution and strictly defined state transitions.
 
 ### Phase 1: Initialization provided by `initialize()`
-**Purpose:** Allocate memory, resolve dependencies, and prepare for the first timestep.
-**Constraint:** No physics execution or time advancement.
-**Args:**
-*   `dt` (float): Simulation timestep in hours (e.g., 1/60 for 1 minute).
-*   `registry` (ComponentRegistry): Access to other system components.
+
+**Purpose:** Allocate memory, resolve dependencies via the `Registry`, and prepare internal state for the first timestep.
+**Constraint:** No physics execution or time advancement. Do not call `CoolProp` here; use JIT-compiled LUTs if possible, or defer to `step()`.
+
+**Arguments:**
+*   `dt` (float): Simulation timestep in hours (e.g., 0.0166 for 1 minute).
+*   `registry` (ComponentRegistry): Interface to access other system components (e.g., `lut_manager`).
 
 ```python
 def initialize(self, dt: float, registry: ComponentRegistry) -> None:
     super().initialize(dt, registry)
-    # 1. Store timestep
+    
+    # 1. Validation
+    if self.min_power_kw < 0:
+        raise ValueError(f"Component {self.component_id}: min_power_kw must be positive.")
+
+    # 2. Store timestep
     self.dt = dt
     
-    # 2. Resolve dependencies
-    self.other_component = registry.get("other_id")
+    # 3. Resolve dependencies (e.g., LUT Manager for fast thermodynamics)
+    self.lut_manager = registry.get("lut_manager")
     
-    # 3. Initialize sub-components (if composite)
-    self.child.initialize(dt, registry)
-    
-    # 4. Pre-allocate arrays (optimization)
-    self.history = np.zeros(1000)
+    # 4. Initialize State Dictionaries (for get_state())
+    self.current_state = {
+        "temperature_k": 298.15,
+        "pressure_pa": 101325.0,
+        "mass_flow_kg_h": 0.0
+    }
 ```
 
 ### Phase 2: Execution provided by `step()`
+
 **Purpose:** Advance component state by one timestep `dt`.
-**Constraint:** Causal execution. Inputs must be available before processing.
-**Args:**
+**Constraint:** Causal execution. Inputs (streams, power) must be available *before* processing.
+
+**Arguments:**
 *   `t` (float): Current simulation time in hours.
 
 ```python
 def step(self, t: float) -> None:
     super().step(t)
     
-    # 1. Read Inputs (from upstream or setpoints)
-    inflow = self.input_port.get_value()
+    # 1. Read Inputs (from upstream or dispatch setpoints)
+    in_stream = self.receive_input("inlet") 
+    power_mw = self.current_input.get("power_in", 0.0)
     
-    # 2. Execute Physics (Thermodynamics, Reactions)
-    # Explain WHY: "Calculate equilibrium to determine condensation"
-    outflow = self._calculate_physics(inflow)
+    # 2. Guard Clauses (Idle State)
+    if not in_stream or in_stream.mass_flow_kg_h <= 0:
+        self._set_idle_state()
+        return
+
+    # 3. Execute Physics (The "Why")
+    # Explain: "Compress adiabatic: H_out = H_in + Work/Efficiency"
+    out_stream, work_kw = self._calculate_compression(in_stream, power_mw)
     
-    # 3. Update State
-    self.state.update(outflow)
+    # 4. Update Internal State
+    self.current_state.update({
+        "temperature_k": out_stream.temperature_k,
+        "power_kw": work_kw,
+        "efficiency": self._calculate_efficiency(work_kw)
+    })
     
-    # 4. Push/Buffer Outputs
-    self.output_port.set_value(outflow)
+    # 5. Push/Buffer Outputs for Downstream
+    self.output_buffer["outlet"] = out_stream
 ```
 
 ### Phase 3: State Reporting provided by `get_state()`
-**Purpose:** Return a snapshot of the component's internal state for monitoring and checkpoints.
-**Constraint:** Must return a JSON-serializable dictionary.
-**Args:** None.
+
+**Purpose:** Return a snapshot of the component's internal state for monitoring, history tracking (Dispatch), and checkpoints.
+**Constraint:** Must return a JSON-serializable dictionary (no objects).
 
 ```python
 def get_state(self) -> Dict[str, Any]:
+    # Combine base state with component-specific metrics
     return {
         **super().get_state(),
-        "temperature_k": self.temp_k,
-        "pressure_pa": self.pressure_pa,
-        "efficiency": self.efficiency
-        # Composite components include child states
-        # "subsystem": self.child.get_state()
+        **self.current_state,
+        "specific_metric": self.internal_value
     }
 ```
 
 ---
 
-## 2. Documentation Standards
+## 2. The Flow Interface (Layer 3)
 
-Professional engineering documentation is mandatory. Code comments should explain **why** logic exists, not just what it does.
+Components interact via the `Stream` object and a Push/Pull flow mechanic.
+
+### Flow Mechanics
+
+1.  **Push (receive_input)**: Upstream components or the `FlowNetwork` push material into the component buffer.
+2.  **Pull (get_output)**: Downstream components query `get_output()` to check availability.
+3.  **Commit (extract_output)**: Downstream components call `extract_output()` to "take" the material, clearing the buffer.
+
+### Working with Streams
+
+The `Stream` object is the universal currency of the plant.
+
+```python
+from h2_plant.core.stream import Stream
+
+# Creating a Stream (e.g., H2 Source)
+h2_stream = Stream(
+    mass_flow_kg_h=50.0,
+    temperature_k=350.0,
+    pressure_pa=30e5,
+    composition={'H2': 0.99, 'H2O': 0.01}, # Mass Fractions
+    phase='gas'
+)
+
+# Mixing Streams (e.g., Mixer)
+# Handles Enthalpy balance: H_mix = (m1*h1 + m2*h2) / (m1+m2)
+mixed_stream = stream_a.mix_with(stream_b) 
+```
+
+### Implementing `get_output`
+
+Always return the stream currently in your output buffer. Do not calculate on the fly here; calculations belong in `step()`.
+
+```python
+def get_output(self, port_name: str) -> Optional[Stream]:
+    return self.output_buffer.get(port_name)
+```
+
+---
+
+## 3. Physical Modeling Best Practices
+
+### 3.1 Thermodynamic Properties (LUTs)
+**Critical**: Avoid calling `CoolProp.PropsSI` inside the `step()` loop. It is too slow (100ms/call). Use `LUTManager` (0.01ms/call).
+
+```python
+# Bad
+rho = CoolProp.PropsSI('D', 'T', T, 'P', P, 'Hydrogen')
+
+# Good
+rho = self.lut_manager.lookup('H2', 'D', P, T)
+```
+
+### 3.2 Mass Conservation
+**Rule**: $\sum \dot{m}_{in} = \sum \dot{m}_{out} + \frac{dm_{store}}{dt}$
+
+*   **Steady State**: `inlet.mass_flow` must exactly equal `output.mass_flow` + `drain.mass_flow`.
+*   **Dynamic**: Storage tanks must track inventory precisely.
+
+### 3.3 Energy Conservation
+**Rule**: $Q_{net} = \dot{m}(h_{in} - h_{out}) + W_{elec}$
+
+*   **Compressors**: Work input raises enthalpy ($h_{out} > h_{in}$).
+*   **Coolers**: Heat removal lowers enthalpy ($h_{out} < h_{in}$).
+*   Always calculate $T_{out}$ from $H_{out}$ (Enthalpy) logic, not the other way around. $H$ is the conserved quantity; $T$ is a derived property.
+
+### 3.4 Phase Equilibrium (Flash)
+**Rule**: Never assume a stream is pure liquid/gas if P/T changes.
+
+*   Use `solve_rachford_rice` (in `numba_ops`) for VLE calculations.
+*   Check if partial pressure of water $P_{H2O} > P_{sat}(T)$. If so, condense liquid.
+
+---
+
+## 4. Integration with Dispatch Engine
+
+The `EngineDispatchStrategy` records your component's history. To ensure your component is tracked:
+
+### 1. Register History Arrays
+In `engine_dispatch.py` -> `initialize()`:
+
+```python
+if self._my_components:
+    for comp in self._my_components:
+        cid = comp.component_id
+        # Pre-allocate numpy arrays for performance
+        self._history[f"{cid}_power_kw"] = np.zeros(total_steps, dtype=np.float64)
+        self._history[f"{cid}_efficiency"] = np.zeros(total_steps, dtype=np.float64)
+```
+
+### 2. Record Pre-Step (Decision)
+In `engine_dispatch.py` -> `decide_and_apply()`:
+
+*   Send control signals (setpoints) to your component.
+*   Do NOT record state here (physics hasn't run yet).
+
+```python
+for comp in self._my_components:
+    target_power = calculate_optimal(prices)
+    comp.receive_input('power_in', target_power, 'electricity')
+```
+
+### 3. Record Post-Step (Result)
+In `engine_dispatch.py` -> `record_post_step()`:
+
+*   Read the state *after* `step()` has completed.
+
+```python
+for comp in self._my_components:
+    state = comp.get_state()
+    # Direct fast write to numpy array
+    self._history[f"{comp.component_id}_power_kw"][step_idx] = state.get('power_kw', 0.0)
+```
+
+---
+
+## 5. Topology YAML Configuration
+
+Your component must be instantiable from `plant_topology.yaml`.
+
+### 1. Define Unique `type`
+Map the string type to your Python class in `ComponentRegistry`.
+
+### 2. Parameter Schema
+Support all parameters defined in your `__init__`.
+
+```yaml
+- id: "My_New_Heater"
+  type: "ElectricBoiler"
+  params:
+    max_power_kw: 500.0
+    efficiency: 0.98
+    process_step: 150  # Execution Order Priority
+  connections:
+    - source_port: "fluid_out"
+      target_name: "Next_Component"
+      target_port: "inlet"
+      resource_type: "stream"
+```
+
+### 3. Process Step (Execution Order)
+*   **Low (0-50)**: Sources, Mixers
+*   **Medium (50-200)**: Electrolyzers, Processing
+*   **High (200+)**: Storage, Sinks
+
+---
+
+## 6. Documentation Standards
+
+Professional engineering documentation is mandatory.
 
 ### Google-Style Docstrings
 Every class and method must have a docstring.
@@ -98,323 +270,27 @@ def calculate_efficiency(self, load_fraction: float) -> float:
     """
 ```
 
-### Explaining the "Why"
-*   **Bad:** `i += 1` (Increments i)
-*   **Good:** `i += 1` (Advance to next integration node)
+### Implementation Comments (The "Why")
 
-*   **Bad:** `if p > 100: p = 100` (Cap pressure)
-*   **Good:** `if p > 100: p = 100` (Relief valve activation pressure limit per ASME safety standard)
+*   **Bad**: `# Calculate enthalpy`
+*   **Good**: `# Calculate isentropic enthalpy rise to determine theoretical T_out before efficiency losses`
 
 ---
 
-## 3. Units and Standards
-
-To ensure physical accuracy, the project follows a strict units convention.
-
-### Internal Calculations (SI Units)
-All internal physics, thermodynamics, and flow calculations use **SI Units**:
-*   **Pressure:** Pascals (`Pa`)
-*   **Temperature:** Kelvin (`K`)
-*   **Mass:** Kilograms (`kg`)
-*   **Energy:** Joules (`J`) or Watt-hours (`Wh`) for accumulated energy
-*   **Power:** Watts (`W`)
-*   **Time:** Hours (`h`) (Note: Flow rates are usually `kg/h`)
-
-### Configuration & GUI (Engineering Units)
-For specific user-facing configuration (YAML) and GUI displays:
-*   **Pressure:** Bar (`bar`) -> Converted to Pa in `__init__`
-*   **Temperature:** Celsius (`°C`) -> Converted to K in `__init__`
-*   **Power:** Megawatts (`MW`) or Kilowatts (`kW`)
-
-**Developer Pattern:**
-```python
-def __init__(self, pressure_bar: float):
-    # Convert config input to internal SI units immediately
-    self.pressure_pa = pressure_bar * 1e5
-```
-
-### Composition Convention
-*   **Stream.composition:** Always **mass fractions** (x_i = m_i / Σm_j)
-*   **YAML impurity params:** Typically **mole fractions** (converted in constructor)
-*   **PPM values:** Use Stream.mole_fractions property for equilibrium calculations
-
----
-
-## 4. Flow Interface (Layer 3)
-
-Components that transfer resources use the Flow/Port interface.
-
-1.  **`get_ports()`**: Define metadata for inputs/outputs.
-2.  **`receive_input()`**: Accept resources from upstream (Push).
-3.  **`get_output()`**: Offer resources to downstream (Pull/Query).
-4.  **`extract_output()`**: Finalize transfer and deduct resources (Transaction commit).
-5.  **Output Buffering**: Accumulate production during `step()`, offer it in `get_output()`.
-
-See the `FlowNetwork` documentation for detailed topology examples.
-
----
-
-## 5. Performance Optimization
-
-For computation-intensive components (thermodynamics, mixing, large arrays):
-
-1.  **LUTManager**: Use `self.registry.get('lut_manager')` for property lookups instead of calling CoolProp directly.
-2.  **Numba**: Move hot loops to `h2_plant/optimization/numba_ops.py` and decorate with `@njit`.
-3.  **Vectorization**: Use NumPy arrays for collections (e.g., `TankArray`) instead of Python lists of objects.
-
----
-
-## 6. Simulation Engine Architecture
-
-The `SimulationEngine` (Layer 2) orchestrates all component execution, flow propagation, and monitoring.
-
-### Engine Lifecycle
-
-```python
-from h2_plant.simulation.engine import SimulationEngine
-
-# 1. Create engine with registry and topology
-engine = SimulationEngine(
-    registry=registry,
-    config=config,
-    topology=connections,
-    dispatch_strategy=dispatch_strategy  # Optional
-)
-
-# 2. Initialize all components
-engine.initialize()
-
-# 3. Set dispatch data (optional)
-engine.set_dispatch_data(prices=price_array, wind=wind_array)
-
-# 4. Run simulation
-results = engine.run(start_hour=0, end_hour=24)
-```
-
-### Timestep Execution Flow
-
-Each timestep follows this sequence:
-
-1. **Pre-step callback** (optional)
-2. **Process scheduled events**
-3. **Dispatch: decide_and_apply()** — Sets power inputs on electrolyzers
-4. **Execute components** — Each component.step() called once in causal order
-5. **Propagate flows** — FlowNetwork routes streams between components
-6. **Dispatch: record_post_step()** — Captures physics results
-7. **Post-step callback** (optional)
-
-### Causal Execution Order
-
-Components are executed in dependency order to ensure correct physics:
-1. External inputs (price tracker, environment)
-2. Production (electrolyzers)
-3. Thermal management
-4. Separation and processing
-5. Compression and storage
-
----
-
-## 7. Dispatch Strategy Integration
-
-The `EngineDispatchStrategy` pattern separates **control logic** from **physics execution**.
-
-### Pattern Overview
-
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ decide_and_apply│ -> │ component.step() │ -> │ record_post_step│
-│   (set power)   │    │ (run physics)    │    │ (capture result)│
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-```
-
-### Implementing a Dispatch Strategy
-
-```python
-from h2_plant.control.engine_dispatch import EngineDispatchStrategy
-
-class MyStrategy(EngineDispatchStrategy):
-    def initialize(self, registry, context, total_steps):
-        """Pre-allocate NumPy arrays for history."""
-        self.registry = registry
-        self.h2_production = np.zeros(total_steps)
-        self.step_idx = 0
-    
-    def decide_and_apply(self, t: float, prices: np.ndarray, wind: np.ndarray):
-        """Set power inputs BEFORE physics runs."""
-        electrolyzer = self.registry.get('pem_electrolyzer')
-        if electrolyzer:
-            # Calculate setpoint from prices/wind
-            power_mw = self._calculate_optimal_power(prices, wind, t)
-            electrolyzer.receive_input('power_in', power_mw * 1e6, 'electricity')
-    
-    def record_post_step(self):
-        """Capture results AFTER physics runs."""
-        electrolyzer = self.registry.get('pem_electrolyzer')
-        if electrolyzer:
-            state = electrolyzer.get_state()
-            self.h2_production[self.step_idx] = state.get('h2_production_kg_h', 0)
-        self.step_idx += 1
-    
-    def get_history(self) -> Dict[str, np.ndarray]:
-        """Return recorded metrics."""
-        return {'h2_production': self.h2_production[:self.step_idx]}
-```
-
----
-
-## 8. Stream Class Reference
-
-The `Stream` dataclass represents a material flow with thermodynamic properties.
-
-### Constructor
-
-```python
-from h2_plant.core.stream import Stream
-
-stream = Stream(
-    mass_flow_kg_h=100.0,           # Required
-    temperature_k=333.15,           # Default: 298.15 K
-    pressure_pa=40e5,               # Default: 101325 Pa
-    composition={'H2': 0.995, 'H2O': 0.005},  # Mass fractions (auto-normalized)
-    phase='gas',                    # 'gas', 'liquid', 'mixed'
-    extra={}                        # Additional metadata
-)
-```
-
-### Key Properties
-
-| Property | Type | Description |
-|----------|------|-------------|
-| `mole_fractions` | Dict[str, float] | Converts mass fractions to mole fractions |
-| `specific_enthalpy_j_kg` | float | Enthalpy relative to 298.15K (J/kg) |
-| `specific_entropy_j_kgK` | float | Entropy with mixing term (J/kg·K) |
-| `density_kg_m3` | float | Ideal gas law density |
-| `volume_flow_m3_h` | float | Volumetric flow rate |
-| `entrained_liq_kg_s` | float | Liquid carryover from extra dict |
-
-### Stream Mixing
-
-```python
-# Conserves mass and enthalpy
-mixed = stream_a.mix_with(stream_b)
-# Temperature solved via Newton-Raphson iteration
-# Pressure = min(stream_a.pressure_pa, stream_b.pressure_pa)
-```
-
-### Isentropic Compression
-
-```python
-compressed_stream, work_kwh = stream.compress_isentropic(
-    outlet_pressure_pa=70e5,
-    isentropic_efficiency=0.75
-)
-```
-
----
-
-## 9. LUTManager Reference
-
-The `LUTManager` provides 50-200x faster property lookups than CoolProp via pre-computed interpolation tables.
-
-### Initialization
-
-```python
-# LUTManager is auto-registered during engine initialization
-lut_manager = registry.get('lut_manager')
-```
-
-### Single-Point Lookup
-
-```python
-# lookup(fluid, property, pressure_pa, temperature_k)
-rho = lut_manager.lookup('H2', 'D', 350e5, 298.15)  # Density (kg/m³)
-h = lut_manager.lookup('H2', 'H', 350e5, 298.15)    # Enthalpy (J/kg)
-s = lut_manager.lookup('H2', 'S', 350e5, 298.15)    # Entropy (J/kg·K)
-z = lut_manager.lookup('H2', 'Z', 350e5, 298.15)    # Compressibility factor
-cp = lut_manager.lookup('H2', 'C', 350e5, 298.15)   # Heat capacity (J/kg·K)
-```
-
-### Batch Lookups (Vectorized)
-
-```python
-# 10-50x faster than loops
-pressures = np.array([10e5, 20e5, 30e5])
-temps = np.array([300, 350, 400])
-densities = lut_manager.lookup_batch('H2', 'D', pressures, temps)
-```
-
-### Isentropic Process Lookup
-
-```python
-# For compressor/expander calculations: H(P, S)
-h_out = lut_manager.lookup_isentropic_enthalpy('H2', p_out, s_in)
-```
-
----
-
-## 10. Numba Operations Reference
-
-Performance-critical functions are JIT-compiled in `h2_plant/optimization/numba_ops.py`.
-
-### Available Functions
-
-#### Tank Operations
-```python
-from h2_plant.optimization.numba_ops import (
-    find_available_tank,      # Find idle tank with capacity
-    find_fullest_tank,        # Find tank for discharge
-    batch_pressure_update,    # Update all tank pressures (in-place)
-    distribute_mass_to_tanks, # Sequential fill
-)
-```
-
-#### Flash Equilibrium
-```python
-from h2_plant.optimization.numba_ops import solve_rachford_rice_single_condensable
-
-# For single condensable (water) in inert gas (H2)
-# K = P_sat / P_total
-# z = mole fraction of water in feed
-# Returns beta = vapor fraction (0-1)
-beta = solve_rachford_rice_single_condensable(z_H2O, K_value)
-
-# Condensation occurs when z > K (supersaturated)
-# beta = (1 - z) / (1 - K) when z > K
-```
-
-#### Thermodynamic Calculations
-```python
-from h2_plant.optimization.numba_ops import (
-    calculate_mixture_enthalpy,  # H_mix = Σ yᵢ × [H_f,i + ∫Cp dT]
-    calculate_mixture_cp,        # Cp_mix = Σ yᵢ × Cp,i(T)
-    calculate_compression_work,  # Polytropic work calculation
-)
-```
-
-### Adding New Numba Functions
-
-```python
-from numba import njit
-import numpy as np
-
-@njit
-def my_hot_loop(data: np.ndarray, param: float) -> float:
-    """
-    Brief description of the operation.
-    
-    Args:
-        data: Input array.
-        param: Scalar parameter.
-    
-    Returns:
-        Result value.
-    """
-    total = 0.0
-    for i in range(len(data)):
-        total += data[i] * param
-    return total
-```
-
-> [!TIP]
-> Use `@njit(cache=True)` for production code to cache compiled bytecode.
-> Clear `.h2_plant/__pycache__/` and Numba cache after modifying functions.
+## 7. Troubleshooting Common Issues
+
+### "Property lookup out of LUT bounds"
+*   **Cause**: Your component is generating P or T outside the table limits (e.g., T > 1200K or P < 0.1 bar).
+*   **Fix**: Clamp inputs or check physical validity. Vacuum pressures often need explicit handling.
+
+### "Mass Balance Violation"
+*   **Cause**: `inlet != outlet + drain`. Often caused by forgetting to account for `Stream.extra` (entrained liquid).
+*   **Fix**: Ensure `m_dot_total` includes vapor + liquid phases + any separated mass.
+
+### "AttributeError: 'dict' object has no attribute..."
+*   **Cause**: `get_state()` returned a `Stream` object instead of a primitive or dict.
+*   **Fix**: Use `stream.to_dict()` or manually extract fields in `get_state()`.
+
+### "Graph line is flat / zero"
+*   **Cause**: History key in `engine_dispatch.py` matches `static_graphs.py` column name?
+*   **Fix**: Check `COLUMN_ALIASES` in the plotting modules. Ensure `record_post_step` is actually writing data (not inside a conditional that fails).

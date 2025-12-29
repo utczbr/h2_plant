@@ -147,14 +147,15 @@ The global transition to a hydrogen-based energy economy demands sophisticated m
 Each pathway exhibits distinct operational characteristics, capital costs, and carbon footprints, creating a multi-objective optimization landscape that plant operators must navigate in real-time.
 
 \vspace{0.5em}
-Annual techno-economic assessments require simulation of 8,760 operating hours---or 525,600 timesteps at \SI{1}{\minute} resolution---creating a formidable computational challenge. Each timestep demands:
+Techno-economic assessments require simulation not merely of a single operating year, but of the facility's entire 15 to 25-year lifecycle. At a \SI{1}{\minute} temporal resolution, a 25-year analysis necessitates the sequential execution of over 13.1 million timesteps, creating a formidable computational challenge. The computational burden within each interval extends significantly beyond basic thermodynamic property retrieval. As detailed in the execution architecture (Section~\ref{sec:execution-flow}), each timestep orchestrates a complex sequence:
 \begin{enumerate}
-    \item Thermodynamic property calculations for multi-component gas mixtures
-    \item Phase equilibrium computations for separation equipment
-    \item Control logic evaluation for power allocation and arbitrage
+    \item \textbf{Event \& Control Processing}: Evaluation of grid signals, maintenance schedules, and economic dispatch logic.
+    \item \textbf{Numerical Solving}: Integration of stiff Ordinary Differential Equations (ODEs) for reactor kinetics (e.g., PFR thermal profiles) and iterative Newton-Raphson convergence for electrochemical polarization curves.
+    \item \textbf{Thermodynamic Equilibrium}: Multi-component property calculations and phase equilibrium (flash) computations for separation equipment.
+    \item \textbf{Network Propagation}: Graph traversal to propagate mass and energy balances across 50+ interconnected nodes.
 \end{enumerate}
 
-Naively implemented, each CoolProp equation-of-state evaluation requires approximately \SI{0.1}{\milli\second} to \SI{1}{\milli\second}. Multiplied by 50+ components and 26 million annual property calls, simulation time would extend to days or weeks.
+Naively implemented, a single CoolProp equation-of-state evaluation requires approximately \SI{0.1}{\milli\second} to \SI{1}{\milli\second}. However, the iterative nature of the numerical solvers (Point 2) implies that a single component may trigger dozens of property calls per timestep to converge. When multiplied by the component count and the 13 million steps required for a lifecycle analysis, this latency accumulates linearly, potentially extending simulation runtime from hours to weeks without optimization.
 
 \subsection{What's New in Version 2.0}
 \label{sec:whats-new}
@@ -185,11 +186,15 @@ The system addresses the computational challenge through a multi-layered optimiz
 \section{System Architecture}
 \label{sec:architecture}
 
-The software is constructed upon a six-layer modular architecture designed to ensure separation of concerns and scalability.
+\subsection{Design Philosophy: Reconciling Physics and Economics}
+
+The central challenge in modeling industrial hydrogen systems is the fundamental conflict between \textbf{physical fidelity} and \textbf{computational speed}. Techno-economic analysis requires simulating years of operation---millions of timesteps---to capture market volatility and seasonal dynamics. Yet safety assessment and equipment sizing demand rigorous adherence to thermodynamic constraints at sub-minute resolution. A purely physics-based model, while accurate, would require weeks of runtime; a purely economic model, while fast, would yield unrealistic results (e.g., commanding ``sell hydrogen now'' when the storage tank is empty).
+
+To resolve this, the framework abandons the traditional monolithic simulation approach in favor of a \textbf{Six-Layer Modular Architecture}. This design is not merely organizational; it is a functional necessity derived from the need to decouple \textbf{Economic Intent} (what the dispatch algorithm commands) from \textbf{Physical Outcome} (what the thermodynamic state permits). When an economic optimizer requests 100\% electrolyzer load but the stack is thermally constrained, the architecture must gracefully enforce the physical limit while recording the \textit{actual} outcome for honest economic analysis.
 
 \subsection{Layered Design}
 
-The architectural hierarchy progresses from foundational abstractions to user-facing interfaces:
+The architectural hierarchy progresses from foundational abstractions to user-facing interfaces. Each layer encapsulates a distinct responsibility, preventing the complexity of lower layers from overwhelming higher-level logic:
 
 \begin{table}[H]
 \centering
@@ -209,12 +214,16 @@ The architectural hierarchy progresses from foundational abstractions to user-fa
 \end{tabular}
 \end{table}
 
+The layered isolation ensures that thermodynamic complexity (Layer 2--3) does not propagate upward into decision-making logic (Layer 4--5), enabling rapid iteration on control strategies without re-validating physics models.
+
 \vspace{1em}
 
 \subsection{Component Lifecycle Contract}
 \label{sec:lifecycle}
 
-Every simulation entity inherits from the abstract \texttt{Component} base class, ensuring uniform behavior. The lifecycle contract formalizes three distinct phases:
+Stability in a large-scale hybrid simulation cannot be assumed; it must be \textit{enforced}. In ad-hoc implementations, components often behave chaotically---an electrolyzer might calculate current before knowing its input water temperature, or a compressor might attempt to move gas through a pipe that has not yet been initialized. Such race conditions cause silent numerical errors or outright crashes.
+
+To prevent this, the architecture mandates a strict \textbf{Lifecycle Contract} on every simulation entity. Every component inherits from the abstract \texttt{Component} base class, enforcing a rigid three-phase execution rhythm analogous to a synchronized drill:
 
 \begin{lstlisting}[caption={Component Lifecycle Interface}]
 class Component(ABC):
@@ -233,33 +242,38 @@ class Component(ABC):
 \end{lstlisting}
 
 \vspace{0.5em}
-\textbf{Initialization Phase}: Called once before simulation. Components allocate internal data structures (NumPy arrays sized for simulation duration), resolve dependencies via \texttt{ComponentRegistry}, and validate configuration.
+\textbf{Phase 1 (Initialization)}: Memory allocation and dependency resolution occur \textit{solely before} the simulation clock starts. Components pre-allocate NumPy arrays sized for the entire simulation duration, eliminating dynamic allocation overhead during execution.
 
-\textbf{Stepping Phase}: Called every timestep with simulation time $t$. Components process inputs via \texttt{receive\_input()}, execute physics models, and prepare outputs for downstream consumers.
+\textbf{Phase 2 (Stepping)}: Physics execution is confined to the discrete \texttt{step(t)} method. All components advance exactly one timestep together, ensuring temporal consistency---no component can ``see the future'' or ``lag behind.''
 
-\textbf{State Access Phase}: Components expose internal state through \texttt{get\_state()}, enabling checkpoint persistence and monitoring.
+\textbf{Phase 3 (State Reporting)}: Data extraction is strictly read-only via \texttt{get\_state()}, preventing observation from inadvertently altering the physics. This separation is critical for accurate post-step recording.
 
-\subsection{Data Flow Patterns}
+By forcing every component---pump, tank, electrolyzer---to obey this 3-phase rhythm, the architecture transforms 50+ potentially chaotic independent agents into a single, synchronous mathematical system.
 
-The architecture implements distinct patterns for physics data and control signals:
+\subsection{Data Flow Patterns: The "Push-Pull" Mechanism}
 
-\subsubsection{Push Architecture (Stream Propagation)}
+In a hydrogen plant, two metaphorical ``rivers'' flow in opposite directions, and the architecture explicitly separates them to avoid circular dependencies:
 
-Mass and energy flow downstream via the \texttt{Stream} dataclass:
+\subsubsection{Push Architecture (Physics Downstream)}
+
+Mass and energy propagate \textit{downstream} via the \texttt{Stream} dataclass. A producer (e.g., electrolyzer) ``pushes'' output to a consumer (e.g., knock-out drum):
 \begin{center}
 \texttt{Producer.step()} $\rightarrow$ \texttt{Downstream.receive\_input(stream)}
 \end{center}
 
-Each producer calculates outputs and pushes them to connected consumers. The \texttt{FlowNetwork} orchestrates this propagation after all components have stepped.
+This adheres to physical causality: downstream states depend on upstream inputs. After all components have stepped, the \texttt{FlowNetwork} orchestrates stream propagation through the plant topology.
 
-\subsubsection{Pull Architecture (Control Flow)}
+\subsubsection{Pull Architecture (Control Upstream)}
 
-Control and monitoring data flow upstream via registry queries:
+Decision-making logic flows \textit{upstream}. A controller ``pulls'' state data (e.g., tank pressure, stack temperature) to inform decisions:
 \begin{center}
 \texttt{Dispatch.record\_post\_step()} $\rightarrow$ \texttt{component.get\_state()}
 \end{center}
 
-The dispatch strategy queries actual component states after physics execution to record outcomes that may differ from commanded setpoints.
+Critically, Pull operations are \textit{read-only}. The dispatch strategy queries actual component states \textit{after} physics execution, capturing outcomes that may differ from commanded setpoints.
+
+\vspace{0.5em}
+\noindent\textbf{Why This Matters}: Many simulators conflate these flows, leading to circular logic errors---for example, a dispatch trying to read tank pressure that hasn't been updated yet because the tank is waiting for compressor output. By enforcing directional separation (Push for physics, Pull for control), the architecture guarantees that all queries occur on fully-converged state.
 
 \begin{figure}[H]
 \centering
@@ -280,25 +294,32 @@ The dispatch strategy queries actual component states after physics execution to
     \draw[arrow, dashed] (comp) -- node[above, font=\tiny] {State} (disp);
     \node[above=0.2cm of disp, font=\tiny\bfseries] {Pull (Control)};
 \end{tikzpicture}
-\caption{Push vs. Pull Data Flow Patterns}
+\caption{Push vs. Pull Data Flow: Physics propagates downstream (solid arrows); Control queries upstream (dashed arrows).}
 \label{fig:push-pull}
 \end{figure}
 
-\subsection{The Registry Pattern}
+\subsection{Centralized Coordination: The Component Registry}
 
-The \texttt{ComponentRegistry} serves as the central orchestrator for dependency injection:
+To explain the function of the Component Registry, it is helpful to view the simulation not as a static calculation, but as an orchestrated performance. In a complex industrial plant, individual equipment cannot operate in isolation; the compressor must know the pressure of the tank, and the heat exchanger must know the temperature of the electrolyzer.
 
-\begin{equation}
-    T_\text{lookup} = O(1) \quad \text{(hash-based dictionary access)}
-\end{equation}
+In rigid, monolithic simulations, one might hard-wire these connections---explicitly telling the compressor code to ``look at the tank code.'' However, this creates a fragile system, analogous to an orchestra where musicians are handcuffed together. Replacing one musician breaks the entire chain; comparing alternative configurations requires rewriting the simulation core.
 
-This pattern provides:
+\subsubsection{The Dynamic Roster}
+
+The Component Registry acts as the central \textit{conductor} of the simulation, maintaining a \textbf{Dynamic Roster}---a live directory of every active piece of equipment in the facility.
+
 \begin{itemize}
-    \item \textbf{Decoupled Dependencies}: Components depend on string IDs, not concrete class references
-    \item \textbf{Lazy Resolution}: Dependencies resolved at initialization, avoiding circular imports
-    \item \textbf{Type-Indexed Queries}: Retrieve components by category (e.g., ``storage'')
-    \item \textbf{State Aggregation}: Single \texttt{get\_all\_states()} call for checkpointing
+    \item \textbf{Registration}: When the simulation initializes, components ``sign in'' to the Registry. The simulation engine does not need to know their specific types or connections.
+    \item \textbf{Discovery}: When the control logic requires aggregate data (e.g., total power consumption), it does not query 50 individual machines. It asks the Registry: ``Who is consuming power right now?'' The Registry consults its roster and returns the aggregate.
 \end{itemize}
+
+This provides \textbf{Topology Agnosticism}: the same core physics engine can simulate vastly different plant configurations (e.g., off-grid vs. grid-connected, single-stage vs. multi-stage compression) with zero modification to the underlying solver logic.
+
+\subsubsection{Synchronized Execution: The Simulation Heartbeat}
+
+Beyond organization, the Registry provides the simulation's ``heartbeat.'' At every minute of the 25-year simulation, the Registry iterates through its roster to trigger physics calculations for every component in precise, causal order. This architecture separates the \textbf{Model Topology} (which machines exist and how they connect) from the \textbf{Simulation Engine} (how time advances and physics are solved).
+
+This separation is the key scientific enabler of the study: it allows drastic changes to plant design---adding a battery bank, removing a buffer tank, swapping electrolyzer technologies---without rewriting the mathematical solver. Consequently, economic comparisons across scenarios remain \textit{consistent and fair}, free from confounding artifacts of structural code changes.
 
 \subsection{Event-Driven Architecture}
 
@@ -315,71 +336,99 @@ Event types include maintenance scheduling, price updates, setpoint changes, and
 
 The \texttt{SimulationEngine} does not merely iterate through timesteps; it orchestrates a strict multi-phase cycle that ensures consistency between \textbf{Economic Intent} (what the dispatch strategy commands) and \textbf{Physical Result} (what the thermodynamics permit).
 
-\subsubsection{Anatomy of a Timestep: The 3-Phase Loop}
+\subsubsection{Topological Propagation: The Causal Calculation Chain}
 
-Each timestep $t$ follows a rigorous three-phase execution pattern:
+While the simulation executes in discrete temporal steps, the internal logic within each timestep follows a strict \textbf{Topological Causal Chain}. This structure ensures that engineering dependencies---where downstream components rely on the physical output of upstream components---are mathematically respected. The simulation does not merely ``solve equations''; it \textit{propagates state} through the plant topology.
 
-\paragraph{Phase 1: Decision (Pre-Step)}
-The dispatch system, implemented via the \texttt{HybridArbitrageEngineStrategy} (a concrete realization of the abstract \texttt{EngineDispatchStrategy}), analyzes current conditions---electricity spot prices, hydrogen selling prices, and wind power availability---to calculate optimal power allocation:
+The calculation flow mirrors the physical flow of the plant, executing in three distinct logical stages per timestep:
+
+\paragraph{Stage 1: The Economic Trigger (Signal Propagation)}
+The process begins with the \textbf{Dispatch Logic}. Acting as the plant's central controller, it evaluates external boundary conditions (electricity prices, wind availability) to determine the system's \textbf{Intent}:
 
 \begin{center}
 \texttt{dispatch\_strategy.decide\_and\_apply(t, prices, wind)}
 \end{center}
 
-This phase produces \textit{setpoints} (Intent), which are injected into components via \texttt{receive\_input()}. For example, the dispatch may command the PEM electrolyzer to operate at \SI{2.5}{\mega\watt}, representing the economically optimal split between grid sales and hydrogen production.
+\noindent\textit{Example}: If electricity prices are negative, the logic sets a target load of \SI{100}{\percent} for the electrolyzer.\\
+\noindent\textit{Engineering Consequence}: This is purely a control signal (a setpoint). No physics has occurred yet; the simulation has merely established the \textit{desired} operating point.
 
-\paragraph{Phase 2: Physics (Step)}
-The \texttt{ComponentRegistry} orchestrates component execution in causal order:
+\paragraph{Stage 2: Component Physics (Local Constraints)}
+Once the setpoint is received, the primary conversion component (e.g., the Electrolyzer) executes its internal physics engine. It attempts to meet the target load but is constrained by its current thermodynamic state:
 
-\begin{center}
-\texttt{for component in execution\_order:} \\
-\hspace{2em}\texttt{component.step(t)}
-\end{center}
-
-The \textit{actual} physics happens here. Crucially, physical constraints may override economic commands. For example:
 \begin{itemize}
-    \item A \SI{2.5}{\mega\watt} setpoint may result in only \SI{2.1}{\mega\watt} actual consumption if the stack reaches thermal limits
-    \item Compressor throughput may be curtailed if discharge temperature exceeds \SI{150}{\celsius}
-    \item Storage tanks may refuse inflow if pressure exceeds $P_\text{max}$
+    \item \textbf{The Reality Gap}: If the unit is in ``Warm Standby,'' thermal inertia limits the ramp rate. The component might achieve only \SI{80}{\percent} load despite a \SI{100}{\percent} command.
+    \item \textbf{Result}: The component calculates the \textit{exact} mass flow and temperature of hydrogen produced and pushes this state into its \textbf{Outlet Stream} object.
 \end{itemize}
 
-After all components have stepped, the \texttt{FlowNetwork} propagates streams through the topology:
+\paragraph{Stage 3: The Network Cascade (Mass Propagation)}
+This is the critical topological step. The simulation engine does not simply ``calculate the compressor''; it allows mass flow to physically propagate down the graph connections:
 
-\begin{center}
-\texttt{flow\_network.execute\_flows(t)}
-\end{center}
+\begin{enumerate}
+    \item \textbf{Stream Transfer}: The \texttt{Stream} object, acting as the edge in the plant graph, transfers the mass/energy state from the Electrolyzer's output port to the Compressor's inlet port.
+    \item \textbf{Downstream Activation}: The Compressor executes \textit{only after} its inlet stream has been updated. It reads the incoming mass flow (determined by the Electrolyzer's constraint in Stage 2) and calculates the required compression work.
+    \item \textbf{Termination}: Finally, the mass reaches the Storage Tank, where it is integrated into accumulated inventory, updating system pressure for the \textit{next} timestep.
+\end{enumerate}
 
-This ``Push'' propagation delivers output streams from producers to connected consumers via \texttt{receive\_input()}.
+This \textbf{Causal Cascade} ensures that the economic dispatch decision does not ``guess'' the outcome; it triggers a chain reaction through the plant topology, where every physical constraint along the path (efficiency losses, ramp limits, pressure drops) modifies the final result.
 
-\paragraph{Phase 3: Recording (Post-Step)}
-The dispatch strategy queries \textit{actual} component states to record outcomes:
-
-\begin{center}
-\texttt{dispatch\_strategy.record\_post\_step()}
-\end{center}
-
-This phase reads operational metrics via \texttt{get\_state()} and writes them to pre-allocated NumPy arrays. The recorded values reflect what \textit{actually happened}, not what was \textit{commanded}---enabling accurate techno-economic analysis.
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=0.8cm,
+    box/.style={rectangle, draw, rounded corners, minimum width=2.2cm, minimum height=0.7cm, align=center, font=\footnotesize},
+    stream/.style={rectangle, draw, dashed, minimum width=1.2cm, minimum height=0.5cm, align=center, font=\scriptsize, fill=gray!10},
+    arrow/.style={-Stealth, thick}
+]
+    % Nodes
+    \node[box, fill=green!15] (dispatch) {Dispatch\\Logic};
+    \node[box, fill=blue!15, right=1.0cm of dispatch] (elec) {Electrolyzer};
+    \node[stream, right=0.6cm of elec] (stream1) {Stream};
+    \node[box, fill=orange!15, right=0.6cm of stream1] (comp) {Compressor};
+    \node[stream, right=0.6cm of comp] (stream2) {Stream};
+    \node[box, fill=purple!15, right=0.6cm of stream2] (tank) {Tank};
+    
+    % Arrows
+    \draw[arrow, dashed] (dispatch) -- node[above, font=\tiny] {Setpoint} (elec);
+    \draw[arrow] (elec) -- node[above, font=\tiny] {$\dot{m}, T, P$} (stream1);
+    \draw[arrow] (stream1) -- (comp);
+    \draw[arrow] (comp) -- node[above, font=\tiny] {$\dot{m}, T', P'$} (stream2);
+    \draw[arrow] (stream2) -- (tank);
+    
+    % Labels
+    \node[below=0.3cm of dispatch, font=\tiny\itshape] {Intent};
+    \node[below=0.3cm of elec, font=\tiny\itshape] {Upstream};
+    \node[below=0.3cm of comp, font=\tiny\itshape] {Downstream};
+    \node[below=0.3cm of tank, font=\tiny\itshape] {Accumulator};
+\end{tikzpicture}
+\caption{The Causal Calculation Chain: A dispatch decision propagates through the plant topology. The Intent (setpoint) triggers Upstream Physics (Electrolyzer), which populates the Stream (graph edge), causally triggering Downstream Physics (Compressor) before terminating at the Accumulator (Tank).}
+\label{fig:causal-chain}
+\end{figure}
 
 \subsubsection{Concrete Example: Wind to Hydrogen}
 
 Consider wind power becoming available at timestep $t$:
 
 \begin{enumerate}
-    \item \textbf{Decision}: Dispatch calculates that producing hydrogen yields higher value than grid export. Commands \SI{5}{\mega\watt} to PEM electrolyzer via \texttt{pem.receive\_input('power\_setpoint', 5000, 'kW')}.
+    \item \textbf{Economic Trigger}: Dispatch calculates that producing hydrogen yields higher value than grid export. It sets a \SI{5}{\mega\watt} target for the PEM electrolyzer.
     
-    \item \textbf{Physics}: PEM executes \texttt{step(t)}:
+    \item \textbf{Electrolyzer Physics}: The PEM executes its polarization model:
     \begin{itemize}
-        \item Calculates $\dot{m}_{\text{H}_2}$ from Faraday's law
-        \item Creates output \texttt{Stream(mass\_flow=45.2, T=353, P=3e6, composition=\{'H2': 0.98, 'H2O': 0.02\})}
+        \item Thermal state limits actual power to \SI{4.85}{\mega\watt} (de-rating)
+        \item Faraday's law yields $\dot{m}_{\text{H}_2} = \SI{45.2}{\kilogram\per\hour}$
+        \item Output: \texttt{Stream(mass\_flow=45.2, T=353K, P=30bar)}
     \end{itemize}
     
-    \item \textbf{Flow Propagation}: \texttt{FlowNetwork} pushes the stream to the Knock-Out Drum:
-    \begin{center}
-    \texttt{kod.receive\_input('inlet', pem\_stream, 'gas')}
-    \end{center}
+    \item \textbf{Network Cascade}: The \texttt{FlowNetwork} propagates the stream:
+    \begin{itemize}
+        \item Knock-Out Drum receives stream $\rightarrow$ separates liquid $\rightarrow$ outputs dry gas
+        \item Compressor receives dry gas $\rightarrow$ calculates $W = \SI{12}{\kilo\watt}$
+        \item Tank receives compressed gas $\rightarrow$ integrates into inventory
+    \end{itemize}
     
-    \item \textbf{Recording}: Dispatch reads \texttt{pem.get\_state()['actual\_power\_kw']} = 4850 (thermal de-rating) and stores in history array.
+    \item \textbf{Recording}: Dispatch reads \textit{actual} states: power consumed = \SI{4850}{\kilo\watt}, H$_2$ stored = \SI{44.8}{\kilogram} (after losses).
 \end{enumerate}
+
+The recorded outcome reflects the \textit{cumulative effect} of every constraint in the causal chain---not just the initial economic intent.
 
 \subsubsection{Algorithm: Main Simulation Loop}
 
@@ -413,6 +462,69 @@ def run(start_hour, end_hour):
         
         monitoring.collect(hour, registry)
 \end{lstlisting}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=1.0cm,
+    box/.style={
+        rectangle, 
+        draw, 
+        rounded corners, 
+        minimum width=7cm, 
+        minimum height=1.0cm, 
+        align=center,
+        font=\small
+    },
+    arrow/.style={-Stealth, thick},
+    label/.style={font=\footnotesize\itshape}
+]
+
+    % Nodes
+    \node (start) [font=\bfseries] {Start Timestep ($t$)};
+    
+    \node (control) [box, fill=blue!10, below=0.6cm of start] 
+        {\textbf{1. Event \& Control Processing} \\ 
+        \footnotesize Grid Signals $\cdot$ Dispatch Logic $\cdot$ Setpoints};
+        
+    \node (physics_container) [
+        rectangle, 
+        draw=gray, 
+        dashed, 
+        inner sep=0.5cm, 
+        fit={(control) (control)}, 
+        minimum height=4cm,
+        label={[gray, anchor=north east]north east:Component Physics}
+    ] at (0, -4.5) {};
+
+    \node (numerical) [box, fill=orange!10, below=1.0cm of control] 
+        {\textbf{2. Numerical Solving} \\ 
+        \footnotesize ODE Integration (RK4) $\cdot$ Newton-Raphson};
+        
+    \node (thermo) [box, fill=orange!10, below=0.8cm of numerical] 
+        {\textbf{3. Thermodynamic Equilibrium} \\ 
+        \footnotesize Flash Calculations $\cdot$ Property Lookups (LUT)};
+        
+    \node (network) [box, fill=green!10, below=1.5cm of thermo] 
+        {\textbf{4. Network Propagation} \\ 
+        \footnotesize Graph Traversal $\cdot$ Mass/Energy Balance};
+        
+    \node (record) [box, fill=gray!10, below=0.8cm of network] 
+        {\textbf{Data Recording} \\ 
+        \footnotesize Metric Collection $\cdot$ Checkpointing};
+
+    % Arrows
+    \draw[arrow] (start) -- (control);
+    \draw[arrow] (control) -- (numerical);
+    \draw[arrow] (numerical) -- node[right, font=\scriptsize] {Iteration} (thermo);
+    \draw[arrow, dashed] (thermo.east) to[out=0,in=0, looseness=2] node[right, font=\scriptsize, align=left] {Convergence\\Loop} (numerical.east);
+    \draw[arrow] (thermo) -- (network);
+    \draw[arrow] (network) -- (record);
+
+\end{tikzpicture}
+\caption{Anatomy of a Timestep: The sequential execution flow for a single simulation minute, highlighting the iterative coupling between numerical solvers and thermodynamic property calls.}
+\label{fig:timestep-anatomy}
 \end{figure}
 
 \subsubsection{Causal Execution Order}
@@ -477,12 +589,58 @@ where $\Delta t = \SI{60}{\second} = 1/60~\text{h}$ and $n$ denotes the timestep
 
 \textbf{Dimensional Note:} All rate quantities (e.g., $\dot{m}$) are stored in engineering units (kg/h) but are internally normalized to consistent time bases during integration. The timestep $\Delta t$ is expressed in hours when computing state updates to ensure dimensional homogeneity with mass flow rates.
 
-The explicit scheme is chosen for:
-\begin{itemize}
-    \item \textbf{Simplicity}: No matrix inversion required
-    \item \textbf{Speed}: Each component evaluates $g(\cdot)$ once per timestep
-    \item \textbf{Stability}: The \SI{60}{\second} timestep is well below the Courant-Friedrichs-Lewy (CFL) limit for the physical processes modeled
-\end{itemize}
+\subsubsection{Time-Scale Separation and Numerical Stability}
+
+The selection of a \SI{60}{\second} integration step is justified by rigorous \textbf{Time-Scale Separation} of the plant's dynamics. The system is mathematically modeled as a semi-explicit Differential-Algebraic Equation (DAE) system, partitioning the state vector into ``slow'' dynamic variables $\mathbf{x}_s$ (storage inventories, thermal masses) and ``fast'' algebraic variables $\mathbf{x}_f$ (pressure distribution, flow rates).
+
+\paragraph{Mathematical Formulation: The QSS Limit}
+Formally, the system dynamics are governed by singular perturbation theory, where $\varepsilon \approx 10^{-6}$ represents the ratio of fast to slow time constants ($\tau_f / \tau_s$):
+
+\begin{align}
+    \frac{d\mathbf{x}_s}{dt} &= f(\mathbf{x}_s, \mathbf{x}_f, u, t) \label{eq:slow-manifold} \\
+    \varepsilon \frac{d\mathbf{x}_f}{dt} &= g(\mathbf{x}_s, \mathbf{x}_f, u, t) \label{eq:fast-manifold}
+\end{align}
+
+By applying the \textbf{Quasi-Steady State (QSS)} limit ($\varepsilon \to 0$), the differential equation for the fast manifold degenerates into an algebraic constraint:
+
+\begin{equation}
+    0 = g(\mathbf{x}_s, \mathbf{x}_f, u, t)
+    \label{eq:qss-constraint}
+\end{equation}
+
+This formulation implies that transport phenomena (flow through pipes) and electrochemical polarization equilibrate instantaneously relative to the simulation timestep. Consequently, the pipe network is treated as a zero-inventory connector governed by algebraic constraints---there is no spatial advection discretization ($\Delta x$) for these elements. Therefore, the classical Courant-Friedrichs-Lewy (CFL) condition for hyperbolic transport ($\Delta t < \Delta x / u$) is \textit{not} the governing stability criterion for the transport submodel.
+
+\paragraph{Stability of the Slow Manifold}
+Numerical stability is governed solely by the explicit Euler integration of the slow manifold $\mathbf{x}_s$. The stability criterion reduces to ensuring that the per-step inventory change is small relative to capacity:
+
+\begin{equation}
+    \max_n \frac{|\Delta M_n|}{M_{\max}} = \max_n \frac{|\dot{m}_{in} - \dot{m}_{out}| \cdot \Delta t}{M_{\max}} \ll 1
+    \label{eq:stability-criterion}
+\end{equation}
+
+For the modeled hydrogen storage vessels, the minimum filling time $\tau = M_{\max}/\dot{m}_{\max}$ is on the order of hours ($\tau \sim 10^3~\text{s}$). With $\Delta t = \SI{60}{\second}$, the fractional mass change per step is typically $\sim 10^{-3}$, guaranteeing unconditional stability for the explicit scheme and strictly enforcing mass conservation boundaries (positivity and capacity limits) without requiring implicit solvers.
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    node distance=2.5cm,
+    block/.style={rectangle, draw, rounded corners, minimum width=3.5cm, minimum height=1.2cm, align=center, font=\footnotesize}
+]
+    % Nodes
+    \node [block, fill=blue!15] (slow) {\textbf{Slow Manifold} ($\mathbf{x}_s$)\\ \scriptsize Tanks, Reactors\\ \scriptsize $\tau > 10^3$ s};
+    \node [block, fill=red!15, right=of slow] (fast) {\textbf{Fast Manifold} ($\mathbf{x}_f$)\\ \scriptsize Pipes, Electrochemical\\ \scriptsize $\tau < 10^{-3}$ s};
+    
+    % Arrows
+    \draw [-Stealth, thick] (slow) -- node[above, font=\scriptsize] {State Coupling} (fast);
+    \draw [-Stealth, thick] (fast) to[out=270,in=270, looseness=0.5] node[below, font=\scriptsize] {Algebraic Feedback} (slow);
+    
+    % Labels
+    \node [above=0.3cm of slow, align=center, font=\scriptsize] {\textbf{Dynamic Integration}\\ $\dot{\mathbf{x}}_s = f(\mathbf{x})$};
+    \node [above=0.3cm of fast, align=center, font=\scriptsize] {\textbf{Algebraic Constraint}\\ $0 = g(\mathbf{x})$};
+\end{tikzpicture}
+\caption{Mathematical partitioning of the simulation state vector. Fast processes (pipes, electrochemical kinetics) are treated as algebraic constraints under the QSS limit ($\varepsilon \to 0$), while slow processes (storage, thermal) are time-integrated via explicit Euler, ensuring stability with $\Delta t = \SI{60}{\second}$.}
+\label{fig:dae-structure}
+\end{figure}
 
 \subsection{Conservation Laws}
 \label{sec:conservation}

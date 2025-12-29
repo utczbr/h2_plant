@@ -652,6 +652,7 @@ class CompressorSingle(Component):
         return {
             **super().get_state(),
             'mode': int(self.mode),
+            'power_kw': float(self.power_kw),
             'transfer_mass_kg': float(self.transfer_mass_kg),
             'actual_mass_transferred_kg': float(self.actual_mass_transferred_kg),
             'outlet_o2_ppm_mol': (self._inlet_stream.get_total_mole_frac('O2') * 1e6) if self._inlet_stream else 0.0,

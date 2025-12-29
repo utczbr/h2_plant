@@ -56,26 +56,40 @@ def plot_compressor_power(df: pd.DataFrame, component_ids: list, title: str, con
     stack_data = []
     labels = []
     
-    # Look for system-level or component-specific
-    if 'compressor_power_kw' in df.columns:
-        ax.fill_between(x, 0, df['compressor_power_kw'], color='tab:gray', alpha=0.6, label='Total')
-        has_data = True
-    
-    # Individual compressors
+    # Collect breakdown data
     for comp_id in component_ids:
+        # Try multiple suffixes
         for suffix in ['power_kw', 'shaft_power_kw', 'electric_power_kw']:
             col = f"{comp_id}_{suffix}"
             if col in df.columns:
                 stack_data.append(df[col].values)
-                labels.append(comp_id)
+                # Pretty label: Compressor_S1 -> S1
+                label = comp_id.replace('Compressor_', '').replace('_', ' ')
+                labels.append(label)
                 has_data = True
                 break
     
+    # Plot Logic
     if stack_data:
-        ax.stackplot(x, stack_data, labels=labels, alpha=0.7)
-        ax.legend(loc='upper left', fontsize=8)
+        # We have breakdown data - use stackplot
+        ax.stackplot(x, stack_data, labels=labels, alpha=0.8)
+        
+        # Add Total as a line for reference
+        if 'compressor_power_kw' in df.columns:
+            ax.plot(x, df['compressor_power_kw'], color='black', linestyle='--', linewidth=1.5, label='Total')
+        
+        # Calculate approximate energy for title
+        total_kwh = sum([np.sum(arr) for arr in stack_data]) * (df['minute'].diff().mean() / 60.0)
+        title += f" (Total: {total_kwh/1000:.2f} MWh)"
 
-    if not has_data:
+    elif 'compressor_power_kw' in df.columns:
+        # Only total available - use area fill
+        ax.fill_between(x, 0, df['compressor_power_kw'], color='tab:gray', alpha=0.6, label='Total')
+        has_data = True
+        
+    if has_data:
+        ax.legend(loc='upper left', fontsize=8, ncol=2)
+    else:
         ax.text(0.5, 0.5, 'No compressor power data', ha='center', va='center', transform=ax.transAxes)
 
     ax.set_title(title, fontsize=14, fontweight='bold')

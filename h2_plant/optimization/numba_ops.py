@@ -34,7 +34,7 @@ from h2_plant.core.constants import GasConstants
 # TANK OPERATIONS
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def find_available_tank(
     states: npt.NDArray[np.int32],
     masses: npt.NDArray[np.float64],
@@ -65,7 +65,7 @@ def find_available_tank(
     return -1
 
 
-@njit
+@njit(cache=True)
 def find_fullest_tank(
     states: npt.NDArray[np.int32],
     masses: npt.NDArray[np.float64],
@@ -98,7 +98,7 @@ def find_fullest_tank(
     return best_idx
 
 
-@njit
+@njit(cache=True)
 def batch_pressure_update(
     masses: np.ndarray,
     volumes: np.ndarray,
@@ -126,7 +126,7 @@ def batch_pressure_update(
             pressures[i] = 0.0
 
 
-@njit
+@njit(cache=True)
 def calculate_compression_work(
     p1: float,
     p2: float,
@@ -173,7 +173,7 @@ def calculate_compression_work(
     return work
 
 
-@njit
+@njit(cache=True)
 def distribute_mass_to_tanks(
     total_mass: float,
     states: npt.NDArray[np.int32],
@@ -216,7 +216,7 @@ def distribute_mass_to_tanks(
     return masses, remaining
 
 
-@njit
+@njit(cache=True)
 def calculate_total_mass_by_state(
     states: npt.NDArray[np.int32],
     masses: npt.NDArray[np.float64],
@@ -242,7 +242,7 @@ def calculate_total_mass_by_state(
     return total
 
 
-@njit
+@njit(cache=True)
 def simulate_filling_timestep(
     production_rate: float,
     dt: float,
@@ -281,7 +281,7 @@ def simulate_filling_timestep(
 # FLASH EQUILIBRIUM
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def solve_rachford_rice_single_condensable(
     z_condensable: float,
     K_value: float
@@ -341,7 +341,7 @@ def solve_rachford_rice_single_condensable(
 # THERMODYNAMIC PROPERTIES
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def calculate_mixture_enthalpy(
     temperature: float,
     mole_fractions: np.ndarray,
@@ -394,7 +394,7 @@ def calculate_mixture_enthalpy(
     return h_mix
 
 
-@njit
+@njit(cache=True)
 def calculate_mixture_cp(
     temperature: float,
     mole_fractions: np.ndarray,
@@ -824,7 +824,7 @@ def calc_boiler_batch_full(
 # PEM ELECTROLYZER
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def calculate_pem_voltage_jit(
     j: float,
     T: float,
@@ -890,7 +890,7 @@ def calculate_pem_voltage_jit(
     return U_rev + eta_act + eta_ohm + eta_conc
 
 
-@njit
+@njit(cache=True)
 def solve_pem_j_jit(
     target_power_W: float,
     T: float,
@@ -977,7 +977,7 @@ def solve_pem_j_jit(
 # SOEC ELECTROLYZER
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def simulate_soec_step_jit(
     reference_power: float,
     real_powers: npt.NDArray[np.float64],
@@ -1146,7 +1146,7 @@ def simulate_soec_step_jit(
 # INTERPOLATION
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def bilinear_interp_jit(
     grid_x: npt.NDArray[np.float64],
     grid_y: npt.NDArray[np.float64],
@@ -1257,7 +1257,7 @@ def batch_bilinear_interp_jit(
     return results
 
 
-@njit
+@njit(cache=True)
 def bilinear_interp_liquid(
     grid_p: npt.NDArray[np.float64],
     grid_t: npt.NDArray[np.float64],
@@ -1301,7 +1301,7 @@ def bilinear_interp_liquid(
 # REACTOR MODELS
 # =============================================================================
 
-@njit
+@njit(cache=True)
 def solve_deoxo_pfr_step(
     L_total: float,
     steps: int,
@@ -1476,7 +1476,200 @@ def solve_deoxo_pfr_step(
     return X, T, T_max, L_hist[:step_count], T_hist[:step_count], X_hist[:step_count]
 
 
-@njit
+@njit(cache=True)
+def solve_deoxo_multizone_jit(
+    # Arrays for Zone Parameters
+    L_zones: npt.NDArray[np.float64],
+    k0_zones: npt.NDArray[np.float64],
+    U_a_zones: npt.NDArray[np.float64],
+    # Scalar Inputs
+    T_in: float,
+    P_in_pa: float,
+    molar_flow_total: float,
+    y_o2_in: float,
+    Ea: float,
+    R: float,
+    delta_H: float,
+    T_jacket: float,
+    Area: float,
+    Cp_mix: float,
+    y_o2_target: float,
+    max_steps_per_zone: int = 50
+) -> Tuple[float, float, float, npt.NDArray[np.float64], npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """
+    Simulates a multi-zone PFR in a single JIT-compiled pass.
+    
+    Optimized to eliminate Python overhead by handling zone transitions
+    and profile aggregation in native code. RK4 gradients are inlined
+    to avoid Numba closure limitations.
+    
+    Args:
+        L_zones: Array of lengths for each zone (m).
+        k0_zones: Array of kinetic pre-factors for each zone.
+        U_a_zones: Array of heat transfer coefficients for each zone (W/m³/K).
+        T_in: Inlet temperature (K).
+        P_in_pa: Inlet pressure (Pa).
+        molar_flow_total: Total molar flow rate (mol/s).
+        y_o2_in: Inlet O2 mole fraction.
+        Ea: Activation energy (J/mol).
+        R: Gas constant (J/mol/K).
+        delta_H: Reaction enthalpy (J/mol O2, negative = exothermic).
+        T_jacket: Cooling jacket temperature (K).
+        Area: Reactor cross-sectional area (m²).
+        Cp_mix: Mixture molar heat capacity (J/mol/K).
+        y_o2_target: Target O2 fraction (not used in this version).
+        max_steps_per_zone: Integration steps per zone.
+        
+    Returns:
+        Tuple: (X_total, T_out, T_peak, L_profile, T_profile, X_profile)
+    """
+    num_zones = len(L_zones)
+    
+    # Pre-allocate profile arrays (static sizing for performance)
+    total_max_points = num_zones * (max_steps_per_zone + 1) + 1
+    L_hist = np.zeros(total_max_points)
+    T_hist = np.zeros(total_max_points)
+    X_hist = np.zeros(total_max_points)
+    
+    # State tracking
+    current_idx = 0
+    L_cumulative_offset = 0.0
+    T_curr = T_in
+    y_o2_curr = y_o2_in
+    T_max_global = T_in
+    X_global = 0.0
+    
+    # Initialize first point
+    L_hist[0] = 0.0
+    T_hist[0] = T_in
+    X_hist[0] = 0.0
+    current_idx = 1
+    
+    # Pre-calc constant term for heat capacity flow
+    flow_Cp = molar_flow_total * Cp_mix
+
+    for z in range(num_zones):
+        L_zone = L_zones[z]
+        if L_zone <= 1e-6:
+            continue
+            
+        k0 = k0_zones[z]
+        U_a = U_a_zones[z]
+        
+        # Reset local zone integration vars
+        X_local = 0.0
+        T_local = T_curr
+        
+        # Determine flux for this zone
+        F_o2_in_zone = molar_flow_total * y_o2_curr
+        
+        # Skip reaction if no O2 left, just record continuity point with cooling
+        if F_o2_in_zone <= 1e-12:
+            L_cumulative_offset += L_zone
+            L_hist[current_idx] = L_cumulative_offset
+            # Simple analytical cooling if U_a > 0
+            if U_a > 0 and flow_Cp > 0:
+                NTU = (U_a * Area * L_zone) / flow_Cp
+                T_curr = T_jacket + (T_local - T_jacket) * np.exp(-NTU)
+            T_hist[current_idx] = T_curr
+            X_hist[current_idx] = X_global
+            current_idx += 1
+            continue
+
+        # RK4 Integration Loop
+        dL = L_zone / max_steps_per_zone
+        L_local = 0.0
+        
+        for step in range(max_steps_per_zone):
+            # --- Inline RK4 Steps (k1, k2, k3, k4) ---
+            # State: (x, t) -> Gradients: (dx/dL, dT/dL)
+            
+            # K1
+            x_k = X_local
+            t_k = T_local
+            if x_k >= 1.0:
+                dx1 = 0.0
+                dt1 = (Area / flow_Cp) * (-U_a * (t_k - T_jacket))
+            else:
+                k_eff = k0 * np.exp(-Ea / (R * t_k))
+                y_loc = max(0.0, y_o2_curr * (1.0 - x_k))
+                C_o2 = (P_in_pa * y_loc) / (R * t_k)
+                r = k_eff * C_o2
+                dx1 = (Area / F_o2_in_zone) * r
+                dt1 = (Area / flow_Cp) * (-delta_H * r - U_a * (t_k - T_jacket))
+
+            # K2
+            x_k = X_local + 0.5 * dL * dx1
+            t_k = T_local + 0.5 * dL * dt1
+            if x_k >= 1.0:
+                dx2 = 0.0
+                dt2 = (Area / flow_Cp) * (-U_a * (t_k - T_jacket))
+            else:
+                k_eff = k0 * np.exp(-Ea / (R * t_k))
+                y_loc = max(0.0, y_o2_curr * (1.0 - x_k))
+                C_o2 = (P_in_pa * y_loc) / (R * t_k)
+                r = k_eff * C_o2
+                dx2 = (Area / F_o2_in_zone) * r
+                dt2 = (Area / flow_Cp) * (-delta_H * r - U_a * (t_k - T_jacket))
+
+            # K3
+            x_k = X_local + 0.5 * dL * dx2
+            t_k = T_local + 0.5 * dL * dt2
+            if x_k >= 1.0:
+                dx3 = 0.0
+                dt3 = (Area / flow_Cp) * (-U_a * (t_k - T_jacket))
+            else:
+                k_eff = k0 * np.exp(-Ea / (R * t_k))
+                y_loc = max(0.0, y_o2_curr * (1.0 - x_k))
+                C_o2 = (P_in_pa * y_loc) / (R * t_k)
+                r = k_eff * C_o2
+                dx3 = (Area / F_o2_in_zone) * r
+                dt3 = (Area / flow_Cp) * (-delta_H * r - U_a * (t_k - T_jacket))
+
+            # K4
+            x_k = X_local + dL * dx3
+            t_k = T_local + dL * dt3
+            if x_k >= 1.0:
+                dx4 = 0.0
+                dt4 = (Area / flow_Cp) * (-U_a * (t_k - T_jacket))
+            else:
+                k_eff = k0 * np.exp(-Ea / (R * t_k))
+                y_loc = max(0.0, y_o2_curr * (1.0 - x_k))
+                C_o2 = (P_in_pa * y_loc) / (R * t_k)
+                r = k_eff * C_o2
+                dx4 = (Area / F_o2_in_zone) * r
+                dt4 = (Area / flow_Cp) * (-delta_H * r - U_a * (t_k - T_jacket))
+
+            # Update State
+            X_next = X_local + (dL / 6.0) * (dx1 + 2*dx2 + 2*dx3 + dx4)
+            T_next = T_local + (dL / 6.0) * (dt1 + 2*dt2 + 2*dt3 + dt4)
+            
+            X_local = min(1.0, max(0.0, X_next))
+            T_local = T_next
+            L_local += dL
+            
+            # Global Tracking
+            if T_local > T_max_global:
+                T_max_global = T_local
+                
+            L_hist[current_idx] = L_cumulative_offset + L_local
+            T_hist[current_idx] = T_local
+            
+            # Global Conversion: 1 - (1 - X_prev_global) * (1 - X_local)
+            current_global_X = 1.0 - (1.0 - X_global) * (1.0 - X_local)
+            X_hist[current_idx] = current_global_X
+            
+            current_idx += 1
+            
+        # End of Zone Update
+        L_cumulative_offset += L_zone
+        T_curr = T_local
+        X_global = 1.0 - (1.0 - X_global) * (1.0 - X_local)
+        y_o2_curr = y_o2_curr * (1.0 - X_local)
+        
+    return X_global, T_curr, T_max_global, L_hist[:current_idx], T_hist[:current_idx], X_hist[:current_idx]
+
+@njit(cache=True)
 def solve_uv_flash(
     target_u_molar: float,
     volume_m3: float,
@@ -1547,7 +1740,7 @@ def solve_uv_flash(
     return T
 
 
-@njit
+@njit(cache=True)
 def dry_cooler_ntu_effectiveness(ntu: float, r: float) -> float:
     """
     Calculate effectiveness for unmixed-mixed crossflow heat exchanger.
@@ -1572,7 +1765,7 @@ def dry_cooler_ntu_effectiveness(ntu: float, r: float) -> float:
     term = np.exp(-ntu * (1.0 + r))
     return (1.0 - term) / (1.0 + r * term)
 
-@njit
+@njit(cache=True)
 def counter_flow_ntu_effectiveness(ntu: float, r: float) -> float:
     """
     Calculate effectiveness for counter-flow heat exchanger.

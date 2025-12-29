@@ -302,12 +302,14 @@ class ElectricBoiler(Component):
         
         # 3. Process Flow & Physics
         if inflow is None or inflow.mass_flow_kg_h <= 0:
+            # Idle: Preserve last known composition to avoid corrupting averages
+            idle_composition = getattr(self, '_last_composition', {'H2': 1.0})  # Default to H2 if never run
             outflow = Stream(
                 mass_flow_kg_h=0.0,
                 temperature_k=298.15,
                 pressure_pa=101325,
-                composition={'H2O': 1.0},
-                phase='liquid'
+                composition=idle_composition,
+                phase='gas'
             )
             self.current_power_w = 0.0
             self.vapor_fraction = 0.0
@@ -449,6 +451,9 @@ class ElectricBoiler(Component):
                 phase=phase,
                 extra=inflow.extra.copy() if inflow.extra else {}
             )
+            
+            # Save composition for idle fallback
+            self._last_composition = inflow.composition.copy()
             
             self.current_power_w = applied_power_w
             self.outlet_temp_k = outflow.temperature_k

@@ -16,7 +16,8 @@ import numpy as np
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
-from h2_plant.core.constants import ConversionFactors
+from h2_plant.core.constants import ConversionFactors, GasConstants
+from h2_plant.core.component_ids import ComponentID
 
 class Interchanger(Component):
     """
@@ -70,19 +71,24 @@ class Interchanger(Component):
 
     def step(self, t: float) -> None:
         """
-        Calculates heat transfer and updates stream states.
+        Calculates heat transfer and updates stream states using Enthalpy-Based logic.
 
-        Calculation Logic:
+        Calculation Logic (Enthalpy-Based):
         1. **Demand (Cold Side)**: Energy required to heat cold stream to target T.
-           `Q_demand = ṁ_c * Cp_c * (T_target - T_c_in)`
-           
-        2. **Availability (Hot Side)**: Maximum energy extractable without violating 
-           the Second Law (Approach Temperature constraint).
-           `T_h_out_min = T_c_in + ΔT_approach`
-           `Q_avail = ṁ_h * Cp_h * (T_h_in - T_h_out_min)`
-           
+           `Q_demand = m_c * Cp_c * (T_target - T_c_in)`
+
+        2. **Availability (Hot Side - Latent Heat Aware)**:
+           Instead of Cp * DeltaT, we calculate the Enthalpy Drop available if cooled
+           to the Second Law limit temperature (`T_limit = T_c_in + DeltaT_approach`).
+           `Q_avail = m_h * (H_h_in(T_in) - H_h_lim(T_limit))`
+           *Calculates mixtures by summing partial enthalpies of species.*
+
         3. **Equilibrium**: `Q_transferred = min(Q_demand, Q_avail)`
-        
+
+        4. **Outlet State**:
+           `H_h_out = H_h_in - Q_transferred / m_h`
+           Determine Phase, T, and Condensation based on `H_h_out` vs Saturation curve.
+
         Args:
             t (float): Simulation time (hours).
         """
@@ -95,65 +101,225 @@ class Interchanger(Component):
              self.q_transferred_kw = 0.0
              return
 
-        # Properties
-        m_h = self.hot_stream.mass_flow_kg_h / 3600.0
-        T_h_in = self.hot_stream.temperature_k
-        h_h_in = self.hot_stream.specific_enthalpy_j_kg
-        
-        m_c = self.cold_stream.mass_flow_kg_h / 3600.0
-        T_c_in = self.cold_stream.temperature_k
-        h_c_in = self.cold_stream.specific_enthalpy_j_kg
-        
-        if m_h <= 0 or m_c <= 0:
+        # --- 0. Setup & Inputs ---
+        m_h_kg_h = self.hot_stream.mass_flow_kg_h
+        m_c_kg_h = self.cold_stream.mass_flow_kg_h
+
+        if m_h_kg_h <= 0 or m_c_kg_h <= 0:
              self.hot_out = self.hot_stream
              self.cold_out = self.cold_stream
              return
 
-        # 1. Cold Side Demand (Target T)
-        # Simplify using average Cp for robustness, or Enthalpy if available
-        # Ideally we iterate or use stream property calls, but for speed simplified:
-        Cp_c = 4186.0 # Water J/kgK
-        Q_cold_demand_w = m_c * Cp_c * (self.target_cold_temp_k - T_c_in)
-        
-        # 2. Hot Side Availability (Second Law Limit)
-        # Hot stream cannot cool below Cold In + Approach
-        T_h_out_min = T_c_in + self.min_approach_temp_k
-        
-        # If hot stream is already colder than limit, no transfer
-        if T_h_in <= T_h_out_min:
-             Q_hot_avail_w = 0.0
-        else:
-             # Estimated Cp for gas mixture (Steam/H2/O2 mix ~ 152C)
-             # Cp mix approx 2000 J/kgK (Steam dominated)
-             Cp_h = 2200.0 # Approx
-             Q_hot_avail_w = m_h * Cp_h * (T_h_in - T_h_out_min)
+        # Get Component Registry and LUT Manager
+        # (Assuming registry is attached to self from initialize)
+        lut_mgr = None
+        if hasattr(self, '_registry') and self._registry:
+             lut_mgr = self._registry.get(ComponentID.LUT_MANAGER)
 
-        # 3. Actual Transfer
-        Q_transfer_w = min(max(0, Q_cold_demand_w), max(0, Q_hot_avail_w))
+        # Fallback if no LUT manager (use simple Cp model or error?)
+        # For robustness, we'll try to use it, else warn?
+        # Simulation should have LUT_MANAGER.
+
+        # Properties
+        T_h_in = self.hot_stream.temperature_k
+        P_h_in = self.hot_stream.pressure_pa
+        
+        T_c_in = self.cold_stream.temperature_k
+        
+        # --- 1. Calculate Inlet Specific Enthalpy (Hot) ---
+        # We need accurate H_in including latent potential of water vapor.
+        # H_mix = sum(y_i * H_i)
+        
+        def get_mixture_enthalpy(stream: Stream, T_k: float, P_pa: float, phase_check: bool = True) -> float:
+            h_mix = 0.0
+            # Get mole fractions for partial pressure calc
+            mole_fracs = stream.mole_fractions
+            
+            for species, mass_frac in stream.composition.items():
+                if mass_frac <= 0: continue
+                
+                h_spec = 0.0
+                if species == 'H2O' and lut_mgr:
+                    # Water: Use LUT with Partial Pressure for accurate Dew Point logic
+                    # or Total Pressure if we want to simplify?
+                    # Using Partial Pressure is physically correct (Dew Point).
+                    y_i = mole_fracs.get(species, 1.0)
+                    p_partial = P_pa * y_i
+                    
+                    # Ensure p_partial is within LUT bounds (0.05 bar min usually)
+                    # If very low, might clip, but usually H2O is significant.
+                    p_lookup = max(5000.0, p_partial) 
+                    
+                    # Lookup Enthalpy
+                    h_spec = lut_mgr.lookup('H2O', 'H', p_lookup, T_k)
+                    
+                elif lut_mgr and species in ['H2', 'O2', 'N2', 'CO2']:
+                     # Gases: LUT lookup (usually ideal gas region)
+                     # Partial pressure doesn't matter much for H ideal gas, but use total P
+                     # or partial? H(T) is dominant.
+                     h_spec = lut_mgr.lookup(species, 'H', P_pa, T_k)
+                else:
+                     # Fallback to Stream's Cp polynomial
+                     # (Create dummy stream for single species calc?)
+                     h_spec = stream.specific_enthalpy_j_kg # Approximate since it uses T_current
+                     # Actually better to calculate manual integral if T != stream.T
+                     # But for now, if LUT fails, ignore or use approx.
+                     pass 
+                
+                h_mix += mass_frac * h_spec
+            return h_mix
+
+        if lut_mgr:
+            h_h_in = get_mixture_enthalpy(self.hot_stream, T_h_in, P_h_in)
+        else:
+            h_h_in = self.hot_stream.specific_enthalpy_j_kg
+
+        # --- 2. Cold Side Demand ---
+        # Q_demand = m * Cp * dT (Water heating is simple liquid)
+        Cp_c = 4186.0 # J/kgK
+        Q_cold_demand_w = (m_c_kg_h / 3600.0) * Cp_c * (self.target_cold_temp_k - T_c_in)
+
+        # --- 3. Hot Side Availability (Latent-Aware) ---
+        T_h_limit = T_c_in + self.min_approach_temp_k
+        
+        # Calculate Enthalpy at Limit Temperature
+        if lut_mgr:
+            h_h_limit = get_mixture_enthalpy(self.hot_stream, T_h_limit, P_h_in)
+        else:
+            # Fallback (Sensible only error)
+            Cp_h_approx = 2200.0
+            h_h_limit = h_h_in - Cp_h_approx * (T_h_in - T_h_limit)
+            
+        dq_h_avail = max(0.0, h_h_in - h_h_limit)
+        Q_hot_avail_w = (m_h_kg_h / 3600.0) * dq_h_avail
+
+        # --- 4. Transfer & Outlet Enthalpy ---
+        Q_transfer_w = min(max(0, Q_cold_demand_w), Q_hot_avail_w)
         self.q_transferred_kw = Q_transfer_w / 1000.0
 
-        # 4. Final States
-        # Cold Out: T = T_in + Q / (m*Cp)
-        T_c_out = T_c_in + (Q_transfer_w / (m_c * Cp_c))
-        
-        # Hot Out: T = T_in - Q / (m*Cp)
-        T_h_out = T_h_in - (Q_transfer_w / (m_h * Cp_h))
+        if m_h_kg_h > 0:
+            h_h_out_target = h_h_in - (Q_transfer_w / (m_h_kg_h / 3600.0))
+        else:
+            h_h_out_target = h_h_in
 
-        # Update Streams
-        self.cold_out = Stream(
-            mass_flow_kg_h=self.cold_stream.mass_flow_kg_h,
-            temperature_k=T_c_out,
-            pressure_pa=self.cold_stream.pressure_pa, # Ignore dP for now
-            composition=self.cold_stream.composition,
-            phase='liquid'
+        # --- 5. Resolve Outlet State (Zonal Logic) ---
+        # Instead of solving for T blindly, we check phase zones based on H2O enthalpy.
+        
+        mole_fracs = self.hot_stream.mole_fractions
+        y_h2o = mole_fracs.get('H2O', 0.0)
+        
+        # Calculate Inert Enthalpy Function (H2, O2, etc)
+        # We assume Inerts don't condense.
+        def get_inert_enthalpy(T_k):
+            h_inert = 0.0
+            for s, mf in self.hot_stream.composition.items():
+                if s == 'H2O' or s == 'H2O_liq': continue
+                if mf <= 0: continue
+                # Look up gas property
+                h_s = lut_mgr.lookup(s, 'H', P_h_in, T_k) if lut_mgr else 0.0
+                h_inert += mf * h_s
+            return h_inert
+
+        new_composition = self.hot_stream.composition.copy()
+        output_phase = 'gas'
+        
+        if lut_mgr and y_h2o > 0:
+            p_partial_h2o = P_h_in * y_h2o
+            
+            # 1. Get Saturation Limits at P_partial
+            sat_props = lut_mgr.get_saturation_properties(max(5000.0, p_partial_h2o))
+            T_sat = sat_props['T_sat_K']
+            h_f_pure = sat_props['h_f_Jkg']
+            h_g_pure = sat_props['h_g_Jkg']
+            
+            # 2. Calculate Threshold Mix Enthalpies
+            # H_mix_dew = H_inerts(T_sat) + mass_frac_H2O * h_g_pure
+            # H_mix_bub = H_inerts(T_sat) + mass_frac_H2O * h_f_pure
+            
+            h_inerts_at_sat = get_inert_enthalpy(T_sat)
+            mf_h2o_total = self.hot_stream.composition.get('H2O', 0.0) + self.hot_stream.composition.get('H2O_liq', 0.0)
+            
+            h_mix_gas_sat = h_inerts_at_sat + mf_h2o_total * h_g_pure
+            h_mix_liq_sat = h_inerts_at_sat + mf_h2o_total * h_f_pure
+            
+            # 3. Determine Zone
+            if h_h_out_target >= h_mix_gas_sat:
+                # Zone 1: GAS (Superheated)
+                output_phase = 'gas'
+                # Solve T in [T_sat, T_in]
+                # Bisection
+                T_low, T_high = T_sat, max(T_sat + 1.0, T_h_in)
+                for _ in range(10):
+                    T_m = (T_low + T_high) / 2.0
+                    h_m = get_inert_enthalpy(T_m) + mf_h2o_total * lut_mgr.lookup('H2O', 'H', max(5000.0, p_partial_h2o), T_m)
+                    if h_m > h_h_out_target: T_high = T_m
+                    else: T_low = T_m
+                T_out_final = (T_low + T_high) / 2.0
+                
+            elif h_h_out_target <= h_mix_liq_sat:
+                # Zone 3: LIQUID (Subcooled) - assuming fully condensed
+                output_phase = 'liquid'
+                new_composition['H2O'] = 0.0
+                new_composition['H2O_liq'] = mf_h2o_total
+                
+                # Solve T < T_sat
+                T_low, T_high = 273.15, T_sat
+                for _ in range(10):
+                    T_m = (T_low + T_high) / 2.0
+                    # Liquid water enthalpy at T_m
+                    # Use P_total for liquid water or saturation? Coolprop handles liquid at P_total.
+                    h_w = lut_mgr.lookup('H2O', 'H', P_h_in, T_m) 
+                    h_m = get_inert_enthalpy(T_m) + mf_h2o_total * h_w
+                    if h_m > h_h_out_target: T_high = T_m
+                    else: T_low = T_m
+                T_out_final = (T_low + T_high) / 2.0
+
+            else:
+                # Zone 2: MIXED (Condensing)
+                output_phase = 'mixed'
+                T_out_final = T_sat
+                
+                # Quality x (fraction of H2O that is Vapor)
+                # H_target = H_inerts + mf_total * (x*h_g + (1-x)*h_f)
+                # H_target - H_inerts = mf_total * (h_f + x(h_g - h_f))
+                # (H_target - H_inerts)/mf_total - h_f = x(h_g - h_f)
+                
+                h_h2o_avg = (h_h_out_target - h_inerts_at_sat) / mf_h2o_total
+                x_quality = (h_h2o_avg - h_f_pure) / (h_g_pure - h_f_pure)
+                x_quality = max(0.0, min(1.0, x_quality))
+                
+                m_h2o_vap = x_quality * mf_h2o_total
+                m_h2o_liq = (1.0 - x_quality) * mf_h2o_total
+                
+                new_composition['H2O'] = m_h2o_vap
+                new_composition['H2O_liq'] = m_h2o_liq
+
+        else:
+             # Fallback if no LUT or no water
+             output_phase = 'gas'
+             T_out_final = T_h_in - (Q_transfer_w / (m_h_kg_h * 2000.0/3600.0)) # Approx Cp
+
+        # --- 7. Final Output Streams ---
+        
+        # Hot Out (Cooled)
+        self.hot_out = Stream(
+            mass_flow_kg_h=m_h_kg_h,
+            temperature_k=T_out_final,
+            pressure_pa=P_h_in,
+            composition=new_composition,
+            phase=output_phase
         )
 
-        self.hot_out = Stream(
-            mass_flow_kg_h=self.hot_stream.mass_flow_kg_h,
-            temperature_k=T_h_out,
-            pressure_pa=self.hot_stream.pressure_pa,
-            composition=self.hot_stream.composition,
-            phase='gas' # Assume phase change handled downstream in Cooler
+        # Cold Out (Heated) - Calculate T_c_out
+        dT_c = Q_transfer_w / ((m_c_kg_h / 3600.0) * Cp_c)
+        T_c_out = T_c_in + dT_c
+
+        self.cold_out = Stream(
+            mass_flow_kg_h=m_c_kg_h,
+            temperature_k=T_c_out,
+            pressure_pa=self.cold_stream.pressure_pa,
+            composition=self.cold_stream.composition,
+            phase='liquid'
         )
         
         # Clear inputs

@@ -20,151 +20,167 @@
 \@writefile{toc}{\contentsline {subsection}{\numberline {1.3}Optimization Approach}{2}{subsection.1.3}\protected@file@percent }
 \@writefile{toc}{\contentsline {section}{\numberline {2}System Architecture}{2}{section.2}\protected@file@percent }
 \newlabel{sec:architecture}{{2}{2}{System Architecture}{section.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Layered Design}{2}{subsection.2.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Six-Layer Architecture Overview}}{2}{table.1}\protected@file@percent }
-\newlabel{tab:layers}{{1}{2}{Six-Layer Architecture Overview}{table.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Component Lifecycle Contract}{2}{subsection.2.2}\protected@file@percent }
-\newlabel{sec:lifecycle}{{2.2}{2}{Component Lifecycle Contract}{subsection.2.2}{}}
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}Component Lifecycle Interface}{2}{lstlisting.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Data Flow Patterns}{3}{subsection.2.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.1}Push Architecture (Stream Propagation)}{3}{subsubsection.2.3.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.3.2}Pull Architecture (Control Flow)}{3}{subsubsection.2.3.2}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Push vs. Pull Data Flow Patterns}}{3}{figure.1}\protected@file@percent }
-\newlabel{fig:push-pull}{{1}{3}{Push vs. Pull Data Flow Patterns}{figure.1}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}The Registry Pattern}{3}{subsection.2.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Event-Driven Architecture}{3}{subsection.2.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {2.6}Execution Flow \& Orchestration}{3}{subsection.2.6}\protected@file@percent }
-\newlabel{sec:execution-flow}{{2.6}{3}{Execution Flow \& Orchestration}{subsection.2.6}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.6.1}Anatomy of a Timestep: The 3-Phase Loop}{3}{subsubsection.2.6.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Phase 1: Decision (Pre-Step)}{3}{section*.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Phase 2: Physics (Step)}{4}{section*.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Phase 3: Recording (Post-Step)}{4}{section*.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.6.2}Concrete Example: Wind to Hydrogen}{4}{subsubsection.2.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.6.3}Algorithm: Main Simulation Loop}{4}{subsubsection.2.6.3}\protected@file@percent }
-\newlabel{alg:main-loop}{{2}{4}{SimulationEngine Main Loop}{lstlisting.2}{}}
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}SimulationEngine Main Loop}{4}{lstlisting.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.6.4}Causal Execution Order}{4}{subsubsection.2.6.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {3}Mathematical Modeling}{5}{section.3}\protected@file@percent }
-\newlabel{sec:math}{{3}{5}{Mathematical Modeling}{section.3}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Thermodynamic State Vector}{5}{subsection.3.1}\protected@file@percent }
-\newlabel{eq:state-vector}{{3}{5}{Thermodynamic State Vector}{equation.3.3}{}}
-\newlabel{eq:transfer-function}{{4}{5}{Thermodynamic State Vector}{equation.3.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Time Discretization}{5}{subsection.3.2}\protected@file@percent }
-\newlabel{eq:ode}{{5}{5}{Time Discretization}{equation.3.5}{}}
-\newlabel{eq:euler}{{6}{5}{Time Discretization}{equation.3.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Conservation Laws}{5}{subsection.3.3}\protected@file@percent }
-\newlabel{sec:conservation}{{3.3}{5}{Conservation Laws}{subsection.3.3}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}Mass Balance}{5}{subsubsection.3.3.1}\protected@file@percent }
-\newlabel{eq:mass-balance}{{7}{5}{Mass Balance}{equation.3.7}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.2}Species Balance}{5}{subsubsection.3.3.2}\protected@file@percent }
-\newlabel{eq:species-balance}{{8}{5}{Species Balance}{equation.3.8}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.3}Energy Balance}{5}{subsubsection.3.3.3}\protected@file@percent }
-\newlabel{eq:energy-balance}{{9}{5}{Energy Balance}{equation.3.9}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.4}Quasi-Steady Approximation}{5}{subsubsection.3.3.4}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Thermodynamic Property Framework}{5}{subsection.3.4}\protected@file@percent }
-\newlabel{sec:property-framework}{{3.4}{5}{Thermodynamic Property Framework}{subsection.3.4}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.1}Equation of State}{6}{subsubsection.3.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Low-Pressure Gas Streams}{6}{section*.6}\protected@file@percent }
-\newlabel{eq:ideal-gas}{{11}{6}{Low-Pressure Gas Streams}{equation.3.11}{}}
-\@writefile{toc}{\contentsline {paragraph}{High-Pressure Pure Fluids}{6}{section*.7}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Liquid Water}{6}{section*.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.2}Caloric Properties}{6}{subsubsection.3.4.2}\protected@file@percent }
-\newlabel{eq:shomate-caloric}{{12}{6}{Caloric Properties}{equation.3.12}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.3}Mixing Rules}{6}{subsubsection.3.4.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Molar Properties}{6}{section*.9}\protected@file@percent }
-\newlabel{eq:mixing-enthalpy}{{13}{6}{Molar Properties}{equation.3.13}{}}
-\@writefile{toc}{\contentsline {paragraph}{Mass-Basis Properties}{6}{section*.10}\protected@file@percent }
-\newlabel{eq:mixing-mass}{{14}{6}{Mass-Basis Properties}{equation.3.14}{}}
-\@writefile{toc}{\contentsline {paragraph}{Kay's Rule for Pseudo-Critical Properties}{6}{section*.11}\protected@file@percent }
-\newlabel{eq:kays-rule}{{15}{6}{Kay's Rule for Pseudo-Critical Properties}{equation.3.15}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Governing Physics Summary}{6}{subsection.3.5}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Component Physics Summary}}{6}{table.2}\protected@file@percent }
-\newlabel{tab:physics-summary}{{2}{6}{Component Physics Summary}{table.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Component-Specific Physics}{6}{subsection.3.6}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.1}Caloric Property Integration}{6}{subsubsection.3.6.1}\protected@file@percent }
-\newlabel{eq:enthalpy-integration}{{16}{6}{Caloric Property Integration}{equation.3.16}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.2}Compression Systems}{6}{subsubsection.3.6.2}\protected@file@percent }
-\newlabel{sec:compression}{{3.6.2}{6}{Compression Systems}{subsubsection.3.6.2}{}}
-\@writefile{toc}{\contentsline {paragraph}{Regime A: Adiabatic Single-Stage}{6}{section*.12}\protected@file@percent }
-\newlabel{eq:compressor-adiabatic}{{17}{6}{Regime A: Adiabatic Single-Stage}{equation.3.17}{}}
-\@writefile{toc}{\contentsline {paragraph}{Regime B: Multi-Stage Intercooled}{7}{section*.13}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.3}Electrolysis Systems}{7}{subsubsection.3.6.3}\protected@file@percent }
-\newlabel{sec:electrolysis}{{3.6.3}{7}{Electrolysis Systems}{subsubsection.3.6.3}{}}
-\@writefile{toc}{\contentsline {paragraph}{PEM Electrolysis (Polarization Model)}{7}{section*.14}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{SOEC Electrolysis (Operational Model)}{7}{section*.15}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.4}Balance of Plant (Water Systems)}{7}{subsubsection.3.6.4}\protected@file@percent }
-\newlabel{sec:water-systems}{{3.6.4}{7}{Balance of Plant (Water Systems)}{subsubsection.3.6.4}{}}
-\newlabel{eq:pump_power}{{26}{7}{Balance of Plant (Water Systems)}{equation.3.26}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.5}Thermal Management (Dry Coolers)}{7}{subsubsection.3.6.5}\protected@file@percent }
-\newlabel{sec:thermal}{{3.6.5}{7}{Thermal Management (Dry Coolers)}{subsubsection.3.6.5}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.6}Flow Control (Throttling Valves)}{7}{subsubsection.3.6.6}\protected@file@percent }
-\newlabel{sec:valves}{{3.6.6}{7}{Flow Control (Throttling Valves)}{subsubsection.3.6.6}{}}
-\newlabel{eq:isenthalpic}{{31}{7}{Flow Control (Throttling Valves)}{equation.3.31}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.7}Mixing and Junction Systems}{8}{subsubsection.3.6.7}\protected@file@percent }
-\newlabel{sec:mixing}{{3.6.7}{8}{Mixing and Junction Systems}{subsubsection.3.6.7}{}}
-\@writefile{toc}{\contentsline {paragraph}{Gas Phase Mixing}{8}{section*.16}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Liquid Phase Mixing}{8}{section*.17}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Buffer Dynamics}{8}{section*.18}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.8}Chemical Reaction Systems}{8}{subsubsection.3.6.8}\protected@file@percent }
-\newlabel{sec:reactors}{{3.6.8}{8}{Chemical Reaction Systems}{subsubsection.3.6.8}{}}
-\@writefile{toc}{\contentsline {paragraph}{Catalytic Purification (Deoxo PFR) [Mechanistic Model]}{8}{section*.19}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Autothermal Reforming (ATR) [Surrogate Model]}{8}{section*.20}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.9}Separation \& Purification}{9}{subsubsection.3.6.9}\protected@file@percent }
-\newlabel{sec:separation}{{3.6.9}{9}{Separation \& Purification}{subsubsection.3.6.9}{}}
-\@writefile{toc}{\contentsline {paragraph}{Inertial Separation (Multi-Cyclone)}{9}{section*.21}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Aerosol Coalescence (Porous Media)}{9}{section*.22}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Gravity Separation (Knock-Out Drum)}{9}{section*.23}\protected@file@percent }
-\newlabel{eq:souders-brown}{{44}{9}{Gravity Separation (Knock-Out Drum)}{equation.3.44}{}}
-\@writefile{toc}{\contentsline {paragraph}{Pressure Swing Adsorption (PSA)}{9}{section*.24}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Thermal Swing Adsorption (TSA)}{9}{section*.25}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.10}Storage Systems}{9}{subsubsection.3.6.10}\protected@file@percent }
-\newlabel{sec:storage}{{3.6.10}{9}{Storage Systems}{subsubsection.3.6.10}{}}
-\@writefile{toc}{\contentsline {paragraph}{Vectorized Tank Arrays (Low-Fidelity)}{9}{section*.26}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Dynamic Pressure Vessels (High-Fidelity)}{9}{section*.27}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.11}Thermal Management \& Heat Recovery}{10}{subsubsection.3.6.11}\protected@file@percent }
-\newlabel{sec:thermal_mgmt}{{3.6.11}{10}{Thermal Management \& Heat Recovery}{subsubsection.3.6.11}{}}
-\@writefile{toc}{\contentsline {paragraph}{Active Heating (Electric Boiler)}{10}{section*.28}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Active Cooling (Chiller)}{10}{section*.29}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Passive Recovery (Interchanger)}{10}{section*.30}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Centralized Heat Management (Virtual Heat Bus)}{10}{section*.31}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.12}Water Management \& Balance of Plant (BoP)}{10}{subsubsection.3.6.12}\protected@file@percent }
-\newlabel{sec:water_mgmt_bop}{{3.6.12}{10}{Water Management \& Balance of Plant (BoP)}{subsubsection.3.6.12}{}}
-\@writefile{toc}{\contentsline {paragraph}{Thermodynamic Pumping}{10}{section*.32}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Inventory Control (Makeup Mixer)}{10}{section*.33}\protected@file@percent }
-\@writefile{toc}{\contentsline {paragraph}{Closed-Loop Mass Accounting}{11}{section*.34}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {4}Computational Optimization}{11}{section.4}\protected@file@percent }
-\newlabel{sec:optimization}{{4}{11}{Computational Optimization}{section.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Look-Up Table Architecture}{11}{subsection.4.1}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.1}Grid Specification}{11}{subsubsection.4.1.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces LUT Grid Specification}}{11}{table.3}\protected@file@percent }
-\newlabel{tab:lut-spec}{{3}{11}{LUT Grid Specification}{table.3}{}}
-\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.2}Cache Hit/Miss Mechanism}{11}{subsubsection.4.1.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}JIT-Compiled Numerical Kernels}{11}{subsection.4.2}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}JIT Flash Calculation}{11}{lstlisting.3}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {5}Integrated Control Architecture}{11}{section.5}\protected@file@percent }
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Architecture Diagram}{11}{subsection.5.1}\protected@file@percent }
-\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces Split-Layer Control: Intent vs. Outcome}}{11}{figure.2}\protected@file@percent }
-\newlabel{fig:control-arch}{{2}{11}{Split-Layer Control: Intent vs. Outcome}{figure.2}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Arbitrage Decision Logic}{11}{subsection.5.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {6}Assumptions and Validity Range}{11}{section.6}\protected@file@percent }
-\newlabel{sec:assumptions}{{6}{11}{Assumptions and Validity Range}{section.6}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Thermodynamic Assumptions}{11}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Design Philosophy: Reconciling Physics and Economics}{2}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Layered Design}{3}{subsection.2.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Six-Layer Architecture Overview}}{3}{table.1}\protected@file@percent }
+\newlabel{tab:layers}{{1}{3}{Six-Layer Architecture Overview}{table.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Component Lifecycle Contract}{3}{subsection.2.3}\protected@file@percent }
+\newlabel{sec:lifecycle}{{2.3}{3}{Component Lifecycle Contract}{subsection.2.3}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}Component Lifecycle Interface}{3}{lstlisting.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Data Flow Patterns: The "Push-Pull" Mechanism}{3}{subsection.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.1}Push Architecture (Physics Downstream)}{3}{subsubsection.2.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.4.2}Pull Architecture (Control Upstream)}{3}{subsubsection.2.4.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces Push vs. Pull Data Flow: Physics propagates downstream (solid arrows); Control queries upstream (dashed arrows).}}{4}{figure.1}\protected@file@percent }
+\newlabel{fig:push-pull}{{1}{4}{Push vs. Pull Data Flow: Physics propagates downstream (solid arrows); Control queries upstream (dashed arrows)}{figure.1}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.5}Centralized Coordination: The Component Registry}{4}{subsection.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.1}The Dynamic Roster}{4}{subsubsection.2.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.5.2}Synchronized Execution: The Simulation Heartbeat}{4}{subsubsection.2.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.6}Event-Driven Architecture}{4}{subsection.2.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.7}Execution Flow \& Orchestration}{4}{subsection.2.7}\protected@file@percent }
+\newlabel{sec:execution-flow}{{2.7}{4}{Execution Flow \& Orchestration}{subsection.2.7}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.7.1}Topological Propagation: The Causal Calculation Chain}{4}{subsubsection.2.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Stage 1: The Economic Trigger (Signal Propagation)}{4}{section*.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Stage 2: Component Physics (Local Constraints)}{5}{section*.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Stage 3: The Network Cascade (Mass Propagation)}{5}{section*.5}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces The Causal Calculation Chain: A dispatch decision propagates through the plant topology. The Intent (setpoint) triggers Upstream Physics (Electrolyzer), which populates the Stream (graph edge), causally triggering Downstream Physics (Compressor) before terminating at the Accumulator (Tank).}}{5}{figure.2}\protected@file@percent }
+\newlabel{fig:causal-chain}{{2}{5}{The Causal Calculation Chain: A dispatch decision propagates through the plant topology. The Intent (setpoint) triggers Upstream Physics (Electrolyzer), which populates the Stream (graph edge), causally triggering Downstream Physics (Compressor) before terminating at the Accumulator (Tank)}{figure.2}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.7.2}Concrete Example: Wind to Hydrogen}{5}{subsubsection.2.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.7.3}Algorithm: Main Simulation Loop}{5}{subsubsection.2.7.3}\protected@file@percent }
+\newlabel{alg:main-loop}{{2}{6}{SimulationEngine Main Loop}{lstlisting.2}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}SimulationEngine Main Loop}{6}{lstlisting.2}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Anatomy of a Timestep: The sequential execution flow for a single simulation minute, highlighting the iterative coupling between numerical solvers and thermodynamic property calls.}}{6}{figure.3}\protected@file@percent }
+\newlabel{fig:timestep-anatomy}{{3}{6}{Anatomy of a Timestep: The sequential execution flow for a single simulation minute, highlighting the iterative coupling between numerical solvers and thermodynamic property calls}{figure.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.7.4}Causal Execution Order}{6}{subsubsection.2.7.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}Mathematical Modeling}{6}{section.3}\protected@file@percent }
+\newlabel{sec:math}{{3}{6}{Mathematical Modeling}{section.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Thermodynamic State Vector}{7}{subsection.3.1}\protected@file@percent }
+\newlabel{eq:state-vector}{{2}{7}{Thermodynamic State Vector}{equation.3.2}{}}
+\newlabel{eq:transfer-function}{{3}{7}{Thermodynamic State Vector}{equation.3.3}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Time Discretization}{7}{subsection.3.2}\protected@file@percent }
+\newlabel{eq:ode}{{4}{7}{Time Discretization}{equation.3.4}{}}
+\newlabel{eq:euler}{{5}{7}{Time Discretization}{equation.3.5}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.2.1}Time-Scale Separation and Numerical Stability}{7}{subsubsection.3.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Mathematical Formulation: The QSS Limit}{7}{section*.6}\protected@file@percent }
+\newlabel{eq:slow-manifold}{{6}{7}{Mathematical Formulation: The QSS Limit}{equation.3.6}{}}
+\newlabel{eq:fast-manifold}{{7}{7}{Mathematical Formulation: The QSS Limit}{equation.3.7}{}}
+\newlabel{eq:qss-constraint}{{8}{7}{Mathematical Formulation: The QSS Limit}{equation.3.8}{}}
+\@writefile{toc}{\contentsline {paragraph}{Stability of the Slow Manifold}{7}{section*.7}\protected@file@percent }
+\newlabel{eq:stability-criterion}{{9}{7}{Stability of the Slow Manifold}{equation.3.9}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Mathematical partitioning of the simulation state vector. Fast processes (pipes, electrochemical kinetics) are treated as algebraic constraints under the QSS limit ($\varepsilon \to 0$), while slow processes (storage, thermal) are time-integrated via explicit Euler, ensuring stability with $\Delta t = \SI {60}{\second }$.}}{7}{figure.4}\protected@file@percent }
+\newlabel{fig:dae-structure}{{4}{7}{Mathematical partitioning of the simulation state vector. Fast processes (pipes, electrochemical kinetics) are treated as algebraic constraints under the QSS limit ($\varepsilon \to 0$), while slow processes (storage, thermal) are time-integrated via explicit Euler, ensuring stability with $\Delta t = \SI {60}{\second }$}{figure.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Conservation Laws}{8}{subsection.3.3}\protected@file@percent }
+\newlabel{sec:conservation}{{3.3}{8}{Conservation Laws}{subsection.3.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.1}Mass Balance}{8}{subsubsection.3.3.1}\protected@file@percent }
+\newlabel{eq:mass-balance}{{10}{8}{Mass Balance}{equation.3.10}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.2}Species Balance}{8}{subsubsection.3.3.2}\protected@file@percent }
+\newlabel{eq:species-balance}{{11}{8}{Species Balance}{equation.3.11}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.3}Energy Balance}{8}{subsubsection.3.3.3}\protected@file@percent }
+\newlabel{eq:energy-balance}{{12}{8}{Energy Balance}{equation.3.12}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.3.4}Quasi-Steady Approximation}{8}{subsubsection.3.3.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Thermodynamic Property Framework}{8}{subsection.3.4}\protected@file@percent }
+\newlabel{sec:property-framework}{{3.4}{8}{Thermodynamic Property Framework}{subsection.3.4}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.1}Equation of State}{8}{subsubsection.3.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Low-Pressure Gas Streams}{8}{section*.8}\protected@file@percent }
+\newlabel{eq:ideal-gas}{{14}{8}{Low-Pressure Gas Streams}{equation.3.14}{}}
+\@writefile{toc}{\contentsline {paragraph}{High-Pressure Pure Fluids}{8}{section*.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Liquid Water}{8}{section*.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.2}Caloric Properties}{8}{subsubsection.3.4.2}\protected@file@percent }
+\newlabel{eq:shomate-caloric}{{15}{8}{Caloric Properties}{equation.3.15}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.4.3}Mixing Rules}{8}{subsubsection.3.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Molar Properties}{8}{section*.11}\protected@file@percent }
+\newlabel{eq:mixing-enthalpy}{{16}{8}{Molar Properties}{equation.3.16}{}}
+\@writefile{toc}{\contentsline {paragraph}{Mass-Basis Properties}{8}{section*.12}\protected@file@percent }
+\newlabel{eq:mixing-mass}{{17}{8}{Mass-Basis Properties}{equation.3.17}{}}
+\@writefile{toc}{\contentsline {paragraph}{Kay's Rule for Pseudo-Critical Properties}{8}{section*.13}\protected@file@percent }
+\newlabel{eq:kays-rule}{{18}{8}{Kay's Rule for Pseudo-Critical Properties}{equation.3.18}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Governing Physics Summary}{9}{subsection.3.5}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Component Physics Summary}}{9}{table.2}\protected@file@percent }
+\newlabel{tab:physics-summary}{{2}{9}{Component Physics Summary}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Component-Specific Physics}{9}{subsection.3.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.1}Caloric Property Integration}{9}{subsubsection.3.6.1}\protected@file@percent }
+\newlabel{eq:enthalpy-integration}{{19}{9}{Caloric Property Integration}{equation.3.19}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.2}Compression Systems}{9}{subsubsection.3.6.2}\protected@file@percent }
+\newlabel{sec:compression}{{3.6.2}{9}{Compression Systems}{subsubsection.3.6.2}{}}
+\@writefile{toc}{\contentsline {paragraph}{Regime A: Adiabatic Single-Stage}{9}{section*.14}\protected@file@percent }
+\newlabel{eq:compressor-adiabatic}{{20}{9}{Regime A: Adiabatic Single-Stage}{equation.3.20}{}}
+\@writefile{toc}{\contentsline {paragraph}{Regime B: Multi-Stage Intercooled}{9}{section*.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.3}Electrolysis Systems}{9}{subsubsection.3.6.3}\protected@file@percent }
+\newlabel{sec:electrolysis}{{3.6.3}{9}{Electrolysis Systems}{subsubsection.3.6.3}{}}
+\@writefile{toc}{\contentsline {paragraph}{PEM Electrolysis (Polarization Model)}{9}{section*.16}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{SOEC Electrolysis (Operational Model)}{10}{section*.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.4}Balance of Plant (Water Systems)}{10}{subsubsection.3.6.4}\protected@file@percent }
+\newlabel{sec:water-systems}{{3.6.4}{10}{Balance of Plant (Water Systems)}{subsubsection.3.6.4}{}}
+\newlabel{eq:pump_power}{{29}{10}{Balance of Plant (Water Systems)}{equation.3.29}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.5}Thermal Management (Dry Coolers)}{10}{subsubsection.3.6.5}\protected@file@percent }
+\newlabel{sec:thermal}{{3.6.5}{10}{Thermal Management (Dry Coolers)}{subsubsection.3.6.5}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.6}Flow Control (Throttling Valves)}{10}{subsubsection.3.6.6}\protected@file@percent }
+\newlabel{sec:valves}{{3.6.6}{10}{Flow Control (Throttling Valves)}{subsubsection.3.6.6}{}}
+\newlabel{eq:isenthalpic}{{34}{10}{Flow Control (Throttling Valves)}{equation.3.34}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.7}Mixing and Junction Systems}{10}{subsubsection.3.6.7}\protected@file@percent }
+\newlabel{sec:mixing}{{3.6.7}{10}{Mixing and Junction Systems}{subsubsection.3.6.7}{}}
+\@writefile{toc}{\contentsline {paragraph}{Gas Phase Mixing}{10}{section*.18}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Liquid Phase Mixing}{10}{section*.19}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Buffer Dynamics}{10}{section*.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.8}Chemical Reaction Systems}{11}{subsubsection.3.6.8}\protected@file@percent }
+\newlabel{sec:reactors}{{3.6.8}{11}{Chemical Reaction Systems}{subsubsection.3.6.8}{}}
+\@writefile{toc}{\contentsline {paragraph}{Catalytic Purification (Deoxo PFR) [Mechanistic Model]}{11}{section*.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Autothermal Reforming (ATR) [Surrogate Model]}{11}{section*.22}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.9}Separation \& Purification}{11}{subsubsection.3.6.9}\protected@file@percent }
+\newlabel{sec:separation}{{3.6.9}{11}{Separation \& Purification}{subsubsection.3.6.9}{}}
+\@writefile{toc}{\contentsline {paragraph}{Inertial Separation (Multi-Cyclone)}{11}{section*.23}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Aerosol Coalescence (Porous Media)}{11}{section*.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Gravity Separation (Knock-Out Drum)}{11}{section*.25}\protected@file@percent }
+\newlabel{eq:souders-brown}{{47}{11}{Gravity Separation (Knock-Out Drum)}{equation.3.47}{}}
+\@writefile{toc}{\contentsline {paragraph}{Pressure Swing Adsorption (PSA)}{12}{section*.26}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Thermal Swing Adsorption (TSA)}{12}{section*.27}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.10}Storage Systems}{12}{subsubsection.3.6.10}\protected@file@percent }
+\newlabel{sec:storage}{{3.6.10}{12}{Storage Systems}{subsubsection.3.6.10}{}}
+\@writefile{toc}{\contentsline {paragraph}{Vectorized Tank Arrays (Low-Fidelity)}{12}{section*.28}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Dynamic Pressure Vessels (High-Fidelity)}{12}{section*.29}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.11}Thermal Management \& Heat Recovery}{12}{subsubsection.3.6.11}\protected@file@percent }
+\newlabel{sec:thermal_mgmt}{{3.6.11}{12}{Thermal Management \& Heat Recovery}{subsubsection.3.6.11}{}}
+\@writefile{toc}{\contentsline {paragraph}{Active Heating (Electric Boiler)}{12}{section*.30}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Active Cooling (Chiller)}{12}{section*.31}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Passive Recovery (Interchanger)}{12}{section*.32}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Centralized Heat Management (Virtual Heat Bus)}{13}{section*.33}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {3.6.12}Water Management \& Balance of Plant (BoP)}{13}{subsubsection.3.6.12}\protected@file@percent }
+\newlabel{sec:water_mgmt_bop}{{3.6.12}{13}{Water Management \& Balance of Plant (BoP)}{subsubsection.3.6.12}{}}
+\@writefile{toc}{\contentsline {paragraph}{Thermodynamic Pumping}{13}{section*.34}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Inventory Control (Makeup Mixer)}{13}{section*.35}\protected@file@percent }
+\@writefile{toc}{\contentsline {paragraph}{Closed-Loop Mass Accounting}{13}{section*.36}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Computational Optimization}{13}{section.4}\protected@file@percent }
+\newlabel{sec:optimization}{{4}{13}{Computational Optimization}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Look-Up Table Architecture}{13}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.1}Grid Specification}{13}{subsubsection.4.1.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces LUT Grid Specification}}{13}{table.3}\protected@file@percent }
+\newlabel{tab:lut-spec}{{3}{13}{LUT Grid Specification}{table.3}{}}
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.1.2}Cache Hit/Miss Mechanism}{13}{subsubsection.4.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}JIT-Compiled Numerical Kernels}{14}{subsection.4.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}JIT Flash Calculation}{14}{lstlisting.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Integrated Control Architecture}{14}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Architecture Diagram}{14}{subsection.5.1}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Split-Layer Control: Intent vs. Outcome}}{14}{figure.5}\protected@file@percent }
+\newlabel{fig:control-arch}{{5}{14}{Split-Layer Control: Intent vs. Outcome}{figure.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Arbitrage Decision Logic}{14}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Assumptions and Validity Range}{14}{section.6}\protected@file@percent }
+\newlabel{sec:assumptions}{{6}{14}{Assumptions and Validity Range}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Thermodynamic Assumptions}{14}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Numerical Assumptions}{14}{subsection.6.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Performance Benchmarks}{14}{section.7}\protected@file@percent }
+\newlabel{sec:benchmarks}{{7}{14}{Performance Benchmarks}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Baseline Simulation Parameters}{14}{subsection.7.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Standard Simulation Configuration}}{14}{table.4}\protected@file@percent }
+\newlabel{tab:sim-params}{{4}{14}{Standard Simulation Configuration}{table.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Speedup Summary}{14}{subsection.7.2}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Performance Optimization Results}}{14}{table.5}\protected@file@percent }
+\newlabel{tab:speedup}{{5}{14}{Performance Optimization Results}{table.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{14}{section.8}\protected@file@percent }
 \bibcite{coolprop}{1}
 \bibcite{numba}{2}
 \bibcite{soec}{3}
 \bibcite{rachford}{4}
 \bibcite{ergun}{5}
 \bibcite{hoffmann}{6}
-\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Numerical Assumptions}{12}{subsection.6.2}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {7}Performance Benchmarks}{12}{section.7}\protected@file@percent }
-\newlabel{sec:benchmarks}{{7}{12}{Performance Benchmarks}{section.7}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Baseline Simulation Parameters}{12}{subsection.7.1}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {4}{\ignorespaces Standard Simulation Configuration}}{12}{table.4}\protected@file@percent }
-\newlabel{tab:sim-params}{{4}{12}{Standard Simulation Configuration}{table.4}{}}
-\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Speedup Summary}{12}{subsection.7.2}\protected@file@percent }
-\@writefile{lot}{\contentsline {table}{\numberline {5}{\ignorespaces Performance Optimization Results}}{12}{table.5}\protected@file@percent }
-\newlabel{tab:speedup}{{5}{12}{Performance Optimization Results}{table.5}{}}
-\@writefile{toc}{\contentsline {section}{\numberline {8}Conclusion}{12}{section.8}\protected@file@percent }
-\@writefile{toc}{\contentsline {section}{\numberline {A}System Configuration Example}{12}{appendix.A}\protected@file@percent }
-\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}PEM System Configuration (YAML)}{13}{lstlisting.4}\protected@file@percent }
-\gdef \@abspage@last{13}
+\@writefile{toc}{\contentsline {section}{\numberline {A}System Configuration Example}{15}{appendix.A}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}PEM System Configuration (YAML)}{15}{lstlisting.4}\protected@file@percent }
+\gdef \@abspage@last{15}

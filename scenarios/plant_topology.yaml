@@ -22,23 +22,19 @@ nodes:
       num_modules: 6
       max_power_nominal_mw: 2.4
       optimal_limit: 0.80
-      steam_input_ratio_kg_per_kg_h2: 10.5
+      steam_input_ratio_kg_per_kg_h2: 11.0 
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
       process_step: 10
     connections:
-      # DIRECT CONNECTION: Wet H2 (H2 + H2O + trace O2) goes straight to Heat Recovery
       - source_port: "h2_out"
         target_name: "Interchanger_1"
         target_port: "hot_in"
         resource_type: "stream"
-      # Anode side O2
       - source_port: "o2_out"
         target_name: "O2_DryCooler"
         target_port: "fluid_in"
         resource_type: "stream"
-
-  # NOTE: Cathode_Mixer has been REMOVED. The SOEC now outputs combined exhaust.
 
   # 2. Heat Recovery (Interchanger)
   - id: "Interchanger_1"
@@ -49,7 +45,7 @@ nodes:
       process_step: 20
     connections:
       - source_port: "hot_out"
-        target_name: "DryCooler_HX"  # Changed: Now goes to DryCooler first
+        target_name: "DryCooler_1"
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "cold_out"
@@ -58,12 +54,11 @@ nodes:
         resource_type: "stream"
 
 
-  # 3b. Dry Cooler (Post-Heat Recovery) - Matches legacy "Dry Cooler 1"
-  # Cools gas to 90°C to ensure proper condensation before KOD_1
-  - id: "DryCooler_HX"
+  # 3b. Dry Cooler (Post-Heat Recovery)
+  - id: "DryCooler_1"
     type: "DryCooler"
     params:
-      target_temp_c: 90.0  # Legacy target: T_DRY_COOLER_OUT_H2_C = 90°C
+      target_temp_c: 40.0  
       process_step: 30
     connections:
       - source_port: "fluid_out"

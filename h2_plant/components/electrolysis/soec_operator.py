@@ -220,9 +220,10 @@ class SOECOperator(Component):
         self.uniform_module_max_limit = self.effective_max_module_power * self.optimal_limit_ratio
 
         # Initialize module vectors
-        self.real_limits = np.full(self.num_modules, self.uniform_module_max_limit, dtype=float)
-        self.real_powers = np.full(self.num_modules, self.power_standby_mw, dtype=float)
-        self.real_states = np.full(self.num_modules, 1, dtype=int)  # State 1: Hot standby
+        # PERFORMANCE: Use strict Numba-compatible dtypes to avoid copying per-step.
+        self.real_limits = np.full(self.num_modules, self.uniform_module_max_limit, dtype=np.float64)
+        self.real_powers = np.full(self.num_modules, self.power_standby_mw, dtype=np.float64)
+        self.real_states = np.full(self.num_modules, 1, dtype=np.int32)  # State 1: Hot standby
 
         # Apply offline modules from configuration
         off_modules = self.config.get("real_off_modules", [])
@@ -233,8 +234,9 @@ class SOECOperator(Component):
             self.real_limits[off_indices] = 0.0
 
         # Virtual map maps priority order to physical module indices
+        # PERFORMANCE: Enforce int32 to match Numba kernel signature.
         active_indices = np.where(self.real_states != 0)[0]
-        self.virtual_map = active_indices
+        self.virtual_map = active_indices.astype(np.int32)
 
         # Tracking variables
         self.difference_history = []
@@ -303,12 +305,14 @@ class SOECOperator(Component):
         """
         from h2_plant.optimization.numba_ops import simulate_soec_step_jit
 
+        # PERFORMANCE: real_states and virtual_map are now int32 at init.
+        # No astype() copy needed per step.
         self.real_powers, self.real_states, self.real_limits = simulate_soec_step_jit(
             reference_power,
             self.real_powers,
-            self.real_states.astype(np.int32),
+            self.real_states,
             self.real_limits,
-            self.virtual_map.astype(np.int32),
+            self.virtual_map,
             self.uniform_module_max_limit,
             self.power_standby_mw,
             self.power_first_step_mw,
@@ -402,6 +406,7 @@ class SOECOperator(Component):
         # Steam consumption (stoichiometric + excess)
         steam_input_kg = h2_produced_kg * self.steam_input_ratio
         self.total_steam_consumed += steam_input_kg
+        self.last_step_steam_input_kg = steam_input_kg
 
         # Unreacted steam output (excess above stoichiometric)
         reaction_steam_kg = h2_produced_kg * 9.0
@@ -488,7 +493,7 @@ class SOECOperator(Component):
 
             return Stream(
                 mass_flow_kg_h=total_mass_flow,
-                temperature_k=1073.15,  # 800 °C
+                temperature_k=425.15,  # 152 °C (exit temp per legacy design)
                 pressure_pa=self.out_pressure_pa,
                 composition={'H2': w_h2, 'H2O': w_h2o, 'O2': w_o2},
                 phase='gas'
@@ -520,7 +525,7 @@ class SOECOperator(Component):
 
             return Stream(
                 mass_flow_kg_h=total_anode_flow,
-                temperature_k=1073.15,
+                temperature_k=425.15,  # 152 °C (exit temp per legacy design)
                 pressure_pa=self.out_pressure_pa,
                 composition={'O2': w_o2, 'H2': w_h2},
                 phase='gas'
@@ -535,7 +540,7 @@ class SOECOperator(Component):
             )
             return Stream(
                 mass_flow_kg_h=0.0,
-                temperature_k=1073.15,
+                temperature_k=425.15,  # 152 °C (exit temp per legacy design)
                 pressure_pa=self.out_pressure_pa,
                 composition={'H2O': 1.0},
                 phase='gas'

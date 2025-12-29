@@ -1,17 +1,15 @@
 """
 Stream Summary Table Generator.
 
-Provides a reusable function for printing enhanced stream summary tables
-with section grouping, connection arrows, phase indicators, and compact formatting.
-
-Enhanced with:
-- Dual-unit formatting: % (ppm) for trace species
-- Enthalpy (H) and Density (ρ) columns
-- 3-decimal precision for H2 purity
+Refactored to provide a single, high-density summary table grouped by plant topology sections.
+Features:
+- 6-Section Topology Grouping
+- Dual-unit formatting (% and ppm)
+- Total H2O (Vapor + Liquid) calculation
+- Phase determination (%Liq, %Vap)
 """
 
 from typing import Dict, List, Any, Optional
-
 
 # Molecular weights (kg/mol)
 MW_SPECIES = {
@@ -24,17 +22,8 @@ MW_SPECIES = {
     'CH4': 16.0e-3,
 }
 
-
 def mass_frac_to_mole_frac(composition: dict) -> dict:
-    """
-    Convert mass fractions to mole fractions.
-    
-    Args:
-        composition: Dictionary of {species: mass_fraction}
-        
-    Returns:
-        Dictionary of {species: mole_fraction}
-    """
+    """Convert mass fractions to mole fractions."""
     n_species = {}
     n_total = 0.0
     for species, mass_frac in composition.items():
@@ -48,34 +37,70 @@ def mass_frac_to_mole_frac(composition: dict) -> dict:
         return {s: n / n_total for s, n in n_species.items()}
     return composition.copy()
 
-
-def _format_species_dual(mole_frac: float, mass_kg_h: float, precision: int = 2) -> str:
+def _format_ppm_pct(mole_frac: float, precision: int = 4) -> str:
     """
-    Format species with dual-unit display (% and ppm for trace).
-    
-    - Major components (>=1%): "XX.XX%"
-    - Trace components (<1%): "X.XXX% (XXXX ppm)"
-    - Negligible (<0.1 ppm): "—"
-    
-    Args:
-        mole_frac: Mole fraction (0-1)
-        mass_kg_h: Mass flow rate for this species (kg/h)
-        precision: Decimal places for percentage
-        
-    Returns:
-        Formatted string with dual units for trace species.
+    Format as % if >= 0.01% (100 ppm), else as ppm.
     """
-    if mole_frac < 1e-7:  # < 0.1 ppm
-        return "—"
+    if mole_frac < 1e-9:
+        return "0 ppm"
     
-    ppm = mole_frac * 1e6
-    pct = mole_frac * 100
-    
-    if mole_frac < 0.01:  # < 1% -> show dual format
-        return f"{pct:.3f}% ({ppm:.0f} ppm)"
-    else:
+    pct = mole_frac * 100.0
+    if pct >= 0.01:
         return f"{pct:.{precision}f}%"
+    else:
+        ppm = mole_frac * 1e6
+        return f"{ppm:.0f} ppm"
 
+def _format_species_dual(mole_frac: float, mass_kg_h: float = 0.0, precision: int = 4) -> str:
+    """
+    Backward compatibility wrapper for _format_ppm_pct.
+    Ignores mass_kg_h as the new table doesn't use it for formatting decisions.
+    """
+    return _format_ppm_pct(mole_frac, precision)
+
+def _get_topology_section(comp_id: str, comp_type: str) -> int:
+    """
+    Determine the topology section index (1-6) for sorting.
+    
+    Section 1: Components upstream of the SOEC (Feed -> SOEC).
+    Section 2: Components upstream of the PEM (Feed -> PEM).
+    Section 3: SOEC H2 Output Train (Cathode side).
+    Section 4: SOEC O2 Output Train (Anode side).
+    Section 5: PEM H2 Output Train.
+    Section 6: PEM O2 Output Train.
+    """
+    cid = comp_id.upper()
+    ctype = comp_type.upper()
+    
+    # Electrolyzers are the boundary lines
+    if "SOEC" in cid:
+        return 3 # Start of H2 Train (or section 1 end, but put in 3 for visibility)
+    if "PEM" in cid:
+        return 5
+
+    # O2 Trains (Anode)
+    if "O2_" in cid or ("O2" in cid and "COMPRESSOR" in cid):
+        # Determine if SOEC or PEM O2
+        # Heuristic: If we had a PEM named 'PEM_1', associated O2 might be 'PEM_O2_...'
+        # For now, default O2 components to SOEC Anode (Section 4) unless marked PEM
+        if "PEM" in cid:
+            return 6
+        return 4
+
+    # Upstream / Feed
+    if any(x in cid for x in ["FEED", "PUMP", "SOURCE", "WATER", "STEAM"]):
+        # Heuristic: Steam/Boiler is usually SOEC upstream
+        if "KAOWOOL" in cid or "PEM" in cid:
+            return 2
+        return 1
+
+    # H2 Trains (Cathode) - Default for Compressors, KODs, Chillers not marked O2
+    # Determine if PEM or SOEC H2
+    if "PEM" in cid:
+        return 5
+    
+    # Default to SOEC H2 Train (Section 3) for standard compressors/intercoolers
+    return 3
 
 def _get_phase_abbrev(stream) -> str:
     """Determine abbreviated phase string (G/L/M) from stream composition."""
@@ -88,175 +113,110 @@ def _get_phase_abbrev(stream) -> str:
         vap_pct = int((1.0 - liq_frac) * 100)
         return f"M{vap_pct}V"
 
-
-
 def _get_section(comp_id: str) -> str:
     """
-    Determine the display section for a component based on its ID and function.
-    Prioritizes distinguishing between H2 and O2 trains.
+    Determine the display section string for a component.
+    Backward compatibility wrapper for _get_topology_section.
     """
-    id_upper = comp_id.upper()
+    # Heuristic type guess since we only have ID here
+    # This is imperfect but satisfies the legacy interface
+    comp_type = "Unknown"
+    if "SOEC" in comp_id: comp_type = "SOEC"
+    elif "PEM" in comp_id: comp_type = "PEM"
     
-    # === 1. Utility & Water Loop (Global) ===
-    if any(x in id_upper for x in ["DRAIN", "MAKEUP", "PUMP", "STEAM_GENERATOR", "STEAMGEN", "WATER"]):
-        return "=== Water Recirculation & Utility ==="
+    sec_idx = _get_topology_section(comp_id, comp_type)
+    return SECTION_HEADERS.get(sec_idx, "=== Other / General ===")
 
-    # === 2. O2 Purification Train (Anode) ===
-    # Identified by 'O2_' prefix or explicit reference (but not Deoxo/SOEC)
-    if "O2_" in id_upper or ("O2" in id_upper and "DEOXO" not in id_upper and "SOEC" not in id_upper):
-        return "=== O2 Purification Train (Anode) ==="
-
-    # === 3. H2 Compression Train ===
-    if "COMPRESSOR" in id_upper or "INTERCOOLER" in id_upper:
-        return "=== H2 Compression Train ==="
-
-    # === 4. H2 Purification Train ===
-    if any(x in id_upper for x in ["DEOXO", "PSA", "BOILER", "TSA"]):
-        return "=== H2 Purification Train ==="
-
-    # === 5. Electrolysis Core ===
-    if "SOEC" in id_upper or "CATHODE" in id_upper or "ELECTROLYZER" in id_upper or "PEM" in id_upper:
-        return "=== Electrolysis Core ==="
-
-    # === 6. H2 Separation & Conditioning (Cathode) ===
-    # Default bin for KODs, Chillers, etc. that are NOT O2 (already caught above)
-    if any(x in id_upper for x in ["KOD", "CHILLER", "DRYCOOLER", "DRY_COOLER", "CYCLONE", "COALESCER", "INTERCHANGER", "HEATEXCHANGER"]):
-        return "=== H2 Separation & Conditioning (Cathode) ==="
-
-    return "=== Other / General ==="
-
-
+SECTION_HEADERS = {
+    1: "=== Section 1: Feed & Upstream (SOEC) ===",
+    2: "=== Section 2: Feed & Upstream (PEM) ===",
+    3: "=== Section 3: SOEC H2 Train (Cathode) ===",
+    4: "=== Section 4: SOEC O2 Train (Anode) ===",
+    5: "=== Section 5: PEM H2 Train (Cathode) ===",
+    6: "=== Section 6: PEM O2 Train (Anode) ==="
+}
 
 def print_stream_summary_table(
     components: Dict[str, Any],
-    topo_order: List[str],
-    connection_map: Optional[Dict[str, List[str]]] = None
-) -> List[Dict[str, Any]]:
+    topo_order: List[str]
+) -> None:
     """
-    Print an enhanced stream summary table with section grouping and connection arrows.
-    
-    Columns: Component, T(°C), P(bar), Ph, ṁ(kg/h), H(kJ/kg), ρ(kg/m³), H2(Mol%), H2O, O2, → Next
-    
-    Args:
-        components: Dictionary of component_id -> component instance.
-        topo_order: List of component IDs in topology order.
-        connection_map: Optional dict of source_id -> list of target_ids.
-            If None, connection arrows will show "—".
-    
-    Returns:
-        List of profile data dictionaries for further processing (e.g., graphing).
+    Print consolidated stream summary table.
     """
-    if connection_map is None:
-        connection_map = {}
+    print("\n" + "="*145)
+    print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>9} | {'H2%':>9} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'Total':>9} | {'%Liq':>8} | {'%Vap':>8}")
+    print("-" * 145)
+
+    # Group components by section
+    sections = {i: [] for i in range(1, 7)}
     
-    # Print header (160 chars wide to accommodate new columns)
-    TABLE_WIDTH = 175
-    print(f"\n### Stream Summary Table (Topology Order) - TOTAL MOLAR (Vapor + Liquid)")
-    print("─" * TABLE_WIDTH)
-    header = (
-        f"{'Component':<20} │ {'T(°C)':>6} │ {'P(bar)':>6} │ {'Ph':>5} │ "
-        f"{'ṁ(kg/h)':>8} │ {'H(kJ/kg)':>9} │ {'ρ(kg/m³)':>9} │ "
-        f"{'H2 (Mol%)':>18} │ {'H2O':>18} │ {'O2':>18} │ {'→ Next':<15}"
-    )
-    print(header)
-    print("─" * TABLE_WIDTH)
-    
-    profile_data = []
-    current_section = None
-    
-    for comp_id in topo_order:
-        comp = components.get(comp_id)
-        if not comp:
-            continue
+    # Sort components into sections based on ID/Type rules
+    # We use the passed topo_order to maintain flow order *within* sections
+    for cid in topo_order:
+        comp = components.get(cid)
+        if not comp: continue
         
-        # Try to get output stream
+        # Get component output stream (try common ports)
         stream = None
-        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out']:
+        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out']:
             try:
-                stream = comp.get_output(port)
-                if stream is not None and stream.mass_flow_kg_h > 1e-6:
+                s = comp.get_output(port)
+                if s and s.mass_flow_kg_h > 1e-6:
+                    stream = s
                     break
-                stream = None
-            except:
-                pass
+            except: pass
+            
+        if not stream: continue # Skip components with no flow
         
-        if stream is None:
-            continue
+        sec_idx = _get_topology_section(cid, type(comp).__name__)
+        sections[sec_idx].append((cid, stream))
+
+    # Print by section
+    for i in range(1, 7):
+        comps = sections[i]
+        if not comps: continue
         
-        # Section header
-        section = _get_section(comp_id)
-        if section != current_section:
-            current_section = section
-            print(f"\n{section}")
-            print("─" * TABLE_WIDTH)
+        print(f"{SECTION_HEADERS[i]}")
+        print("-" * 145)
         
-        T_c = stream.temperature_k - 273.15
-        P_bar = stream.pressure_pa / 1e5
-        phase_str = _get_phase_abbrev(stream)
-        mass_flow = stream.mass_flow_kg_h
+        for cid, stream in comps:
+            # 1. Properties
+            T_c = stream.temperature_k - 273.15
+            P_bar = stream.pressure_pa / 1e5
+            total_kg_h = stream.mass_flow_kg_h
+            
+            # 2. Composition (Mass)
+            mass_h2o_vap = stream.composition.get('H2O', 0.0)
+            mass_h2o_liq = stream.composition.get('H2O_liq', 0.0)
+            mass_h2o_total = mass_h2o_vap + mass_h2o_liq
+            
+            mass_h2 = stream.composition.get('H2', 0.0)
+            mass_o2 = stream.composition.get('O2', 0.0)
+            
+            kg_h_h2 = mass_h2 * total_kg_h
+            kg_h_o2 = mass_o2 * total_kg_h
+            kg_h_h2o = mass_h2o_total * total_kg_h
+            
+            # 3. Composition (Molar)
+            mole_fracs = mass_frac_to_mole_frac(stream.composition)
+            
+            mol_h2 = mole_fracs.get('H2', 0.0)
+            mol_o2 = mole_fracs.get('O2', 0.0)
+            # Total molar water handles vapor+liquid as species
+            mol_h2o_vap = mole_fracs.get('H2O', 0.0)
+            mol_h2o_liq = mole_fracs.get('H2O_liq', 0.0)
+            mol_h2o_total = mol_h2o_vap + mol_h2o_liq
+            
+            # 4. Phase Fractions (Mass based)
+            # %Liq is mass fraction of H2O_liq in total stream (assuming only H2O condenses)
+            pct_liq = mass_h2o_liq * 100.0
+            pct_vap = 100.0 - pct_liq
+            
+            # 5. Formatting
+            h2_str = _format_ppm_pct(mol_h2)
+            h2o_str = _format_ppm_pct(mol_h2o_total)
+            o2_str = _format_ppm_pct(mol_o2)
+            
+            print(f"{cid:<18} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>9} | {kg_h_h2:>8.3f} | {h2o_str:>9} | {kg_h_h2o:>9.4f} | {o2_str:>9} | {kg_h_o2:>8.5f} | {total_kg_h:>9.2f} | {pct_liq:>7.3f}% | {pct_vap:>7.3f}%")
         
-        # Thermodynamic properties
-        try:
-            h_kj_kg = stream.specific_enthalpy_j_kg / 1000.0
-        except:
-            h_kj_kg = 0.0
-        
-        try:
-            rho_kg_m3 = stream.density_kg_m3
-        except:
-            rho_kg_m3 = 0.0
-        
-        # Extract mass fractions
-        h2_frac = stream.composition.get('H2', 0.0)
-        h2o_frac = stream.composition.get('H2O', 0.0) + stream.composition.get('H2O_liq', 0.0)
-        o2_frac = stream.composition.get('O2', 0.0)
-        
-        # Convert to mole fractions
-        mole_fracs = mass_frac_to_mole_frac(stream.composition)
-        h2_mol = mole_fracs.get('H2', 0.0)
-        h2o_mol = mole_fracs.get('H2O', 0.0) + mole_fracs.get('H2O_liq', 0.0)
-        o2_mol = mole_fracs.get('O2', 0.0)
-        
-        # Format species with dual-unit for trace, 3-decimal for H2
-        h2_str = _format_species_dual(h2_mol, h2_frac * mass_flow, precision=3)
-        h2o_str = _format_species_dual(h2o_mol, h2o_frac * mass_flow)
-        o2_str = _format_species_dual(o2_mol, o2_frac * mass_flow)
-        
-        # Get connection target
-        targets = connection_map.get(comp_id, [])
-        next_comp = targets[0] if targets else "—"
-        if len(next_comp) > 15:
-            next_comp = next_comp[:12] + "..."
-        
-        # Store profile data for graphing
-        try:
-            s_val = stream.specific_entropy_j_kgK / 1000.0
-        except:
-            s_val = 0.0
-        
-        profile_data.append({
-            'Component': comp_id,
-            'T_c': T_c,
-            'P_bar': P_bar,
-            'H_kj_kg': h_kj_kg,
-            'S_kj_kgK': s_val,
-            'rho_kg_m3': rho_kg_m3,
-            'MolFrac_H2': h2_mol,
-            'MolFrac_O2': o2_mol,
-            'MolFrac_H2O': h2o_mol,
-            'MassFrac_H2': h2_frac,
-            'MassFrac_O2': o2_frac,
-            'MassFrac_H2O': h2o_frac
-        })
-        
-        # Print row
-        row = (
-            f"{comp_id:<20} │ {T_c:>5.1f}° │ {P_bar:>6.2f} │ {phase_str:>5} │ "
-            f"{mass_flow:>8.2f} │ {h_kj_kg:>9.2f} │ {rho_kg_m3:>9.4f} │ "
-            f"{h2_str:>18} │ {h2o_str:>18} │ {o2_str:>18} │ → {next_comp:<13}"
-        )
-        print(row)
-    
-    print("─" * TABLE_WIDTH)
-    
-    return profile_data
+        print("-" * 145)

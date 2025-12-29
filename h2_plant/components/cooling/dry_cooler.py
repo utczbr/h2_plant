@@ -352,8 +352,9 @@ class DryCooler(Component):
         
 
 
-        # New total mass includes the merged 'extra' liquid
-        m_total_new = m_total_out + m_H2O_liq_extra_in
+        # New total mass - DO NOT add extra liquid (it's already in inlet mass_flow if present)
+        # Prevents double-counting when upstream (e.g., Cyclone) includes entrained liquid in mass_flow
+        m_total_new = m_total_out
         
         if m_total_new > 0:
              # Recalculate fractions based on new total mass
@@ -464,6 +465,7 @@ class DryCooler(Component):
             'fluid_type': self.fluid_type,
             'tqc_duty_kw': self.tqc_duty_kw,
             'dc_duty_kw': self.dc_duty_kw,
+            'heat_rejected_kw': self.dc_duty_kw,  # Alias for engine_dispatch
             'fan_power_kw': self.fan_power_kw,
             'outlet_temp_c': self.outlet_temp_c,
             'glycol_hot_c': self.t_glycol_hot_c,

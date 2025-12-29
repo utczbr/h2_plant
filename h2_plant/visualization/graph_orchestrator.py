@@ -44,6 +44,9 @@ class GraphOrchestrator:
         self.handlers = {
             # Profile/Train
             'process_train_profile': profiles.plot_profile,
+            'temperature_profile': profiles.plot_temperature_profile,
+            'pressure_profile': profiles.plot_pressure_profile,
+            'flow_profile': profiles.plot_flow_profile,
             
             # Thermal & Separation
             'thermal_load_breakdown': thermal.plot_load_breakdown,

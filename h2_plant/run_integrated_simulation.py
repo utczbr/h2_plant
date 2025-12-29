@@ -156,10 +156,7 @@ def run_with_dispatch_strategy(
     if dispatch_strategy:
         dispatch_strategy.print_summary()
     
-    # Print stream summary table
-    from h2_plant.reporting.stream_table import print_stream_summary_table
-    
-    # Build connection map from topology
+    # Build connection map from topology (required for report)
     connection_map = {}
     for node in context.topology.nodes:
         targets = [conn.target_name for conn in node.connections]
@@ -167,7 +164,7 @@ def run_with_dispatch_strategy(
     
     topo_order = [node.id for node in context.topology.nodes]
     components_dict = {cid: comp for cid, comp in registry.list_components()}
-    print_stream_summary_table(components_dict, topo_order, connection_map)
+    # print_stream_summary_table(components_dict, topo_order, connection_map) # Legacy signature incompatibility
 
     # Extract component metadata for visualization grouping
     component_metadata = {}
@@ -509,6 +506,11 @@ def main():
         action="store_true",
         help="Skip graph generation"
     )
+    parser.add_argument(
+        "--profile",
+        action="store_true",
+        help="Enable cProfile benchmarking"
+    )
 
     args = parser.parse_args()
 
@@ -521,11 +523,42 @@ def main():
 
     # Run simulation
     output_dir = Path(args.output_dir) if args.output_dir else Path(args.scenarios_dir) / "simulation_output"
-    history = run_with_dispatch_strategy(
-        scenarios_dir=args.scenarios_dir,
-        hours=args.hours,
-        output_dir=output_dir
-    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.profile:
+        import cProfile
+        import pstats
+        
+        logger.info("Running with cProfile enabled...")
+        profiler = cProfile.Profile()
+        profiler.enable()
+        
+        try:
+            history = run_with_dispatch_strategy(
+                scenarios_dir=args.scenarios_dir,
+                hours=args.hours,
+                output_dir=output_dir
+            )
+        finally:
+            profiler.disable()
+            stats_path = output_dir / "profile.stats"
+            profiler.dump_stats(stats_path)
+            
+            # Print summary
+            print("\n" + "="*80)
+            print("BENCHMARKING SUMMARY (Top 20 by Cumulative Time)")
+            print("="*80)
+            stats = pstats.Stats(profiler).sort_stats('cumtime')
+            stats.print_stats(20)
+            print("="*80)
+            logger.info(f"Profile stats saved to {stats_path}")
+
+    else:
+        history = run_with_dispatch_strategy(
+            scenarios_dir=args.scenarios_dir,
+            hours=args.hours,
+            output_dir=output_dir
+        )
 
     # Summary stats
     if history:

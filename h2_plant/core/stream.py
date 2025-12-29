@@ -27,12 +27,45 @@ class Stream:
     extra: Dict[str, float] = field(default_factory=dict)
     
     def __post_init__(self):
-        """Validate composition."""
+        """Validate composition and cache expensive properties."""
         total_fraction = sum(self.composition.values())
         if abs(total_fraction - 1.0) > 1e-3 and total_fraction > 0:
             # Normalize if not summing to 1 (unless empty)
             for k in self.composition:
                 self.composition[k] /= total_fraction
+        
+        # PERFORMANCE: Cache enthalpy calculation (called ~47k times per simulation)
+        self._cached_enthalpy: float = self._compute_specific_enthalpy()
+
+    def _compute_specific_enthalpy(self) -> float:
+        """
+        Internal method to compute specific enthalpy (J/kg).
+        Called once at construction and cached.
+        """
+        h_total = 0.0
+        t_ref = StandardConditions.TEMPERATURE_K
+        
+        for species, fraction in self.composition.items():
+            if species in GasConstants.SPECIES_DATA:
+                data = GasConstants.SPECIES_DATA[species]
+                # Cp(T) = A + B*T + C*T^2 + D*T^3 + E/T^2
+                # H(T) - H(Tref) = integral from Tref to T of Cp(T) dT
+                # Integral = A*T + B*T^2/2 + C*T^3/3 + D*T^4/4 - E/T
+                
+                coeffs = data.get('cp_coeffs', [0, 0, 0, 0, 0])
+                A, B, C, D, E = coeffs
+                
+                def integral_cp(t):
+                    return (A * t + 
+                            B * t**2 / 2 + 
+                            C * t**3 / 3 + 
+                            D * t**4 / 4 - 
+                            E / t) 
+                
+                h_species_j_kg = (integral_cp(self.temperature_k) - integral_cp(t_ref)) * 1000.0 / data['molecular_weight']
+                h_total += fraction * h_species_j_kg
+                
+        return h_total
 
     @property
     def entrained_liq_kg_s(self) -> float:
@@ -124,34 +157,10 @@ class Stream:
     @property
     def specific_enthalpy_j_kg(self) -> float:
         """
-        Calculate specific enthalpy (J/kg) relative to reference state (298.15K).
-        Assumes ideal gas mixture behavior for gases.
-        h = sum(xi * hi) where hi = integral(Cp_i * dT)
+        Return cached specific enthalpy (J/kg) relative to reference state (298.15K).
+        Computed once at Stream construction for performance.
         """
-        h_total = 0.0
-        t_ref = StandardConditions.TEMPERATURE_K
-        
-        for species, fraction in self.composition.items():
-            if species in GasConstants.SPECIES_DATA:
-                data = GasConstants.SPECIES_DATA[species]
-                # Cp(T) = A + B*T + C*T^2 + D*T^3 + E/T^2
-                # H(T) - H(Tref) = integral from Tref to T of Cp(T) dT
-                # Integral = A*T + B*T^2/2 + C*T^3/3 + D*T^4/4 - E/T
-                
-                coeffs = data.get('cp_coeffs', [0, 0, 0, 0, 0])
-                A, B, C, D, E = coeffs
-                
-                def integral_cp(t):
-                    return (A * t + 
-                            B * t**2 / 2 + 
-                            C * t**3 / 3 + 
-                            D * t**4 / 4 - 
-                            E / t) 
-                
-                h_species_j_kg = (integral_cp(self.temperature_k) - integral_cp(t_ref)) * 1000.0 / data['molecular_weight']
-                h_total += fraction * h_species_j_kg
-                
-        return h_total
+        return self._cached_enthalpy
 
     @property
     def specific_entropy_j_kgK(self) -> float:

@@ -145,7 +145,7 @@ visualization:
       enabled: true
       plots:
         - title: "H2 Train Cooling Load"
-          components: ["DryCooler_HX", "Chiller_1", "Chiller_2", "Intercooler_1", "Intercooler_2", "Intercooler_3", "Intercooler_4", "Intercooler_5", "Intercooler_6"]
+          components: ["DryCooler_1", "Chiller_1", "Chiller_2", "Intercooler_1", "Intercooler_2", "Intercooler_3", "Intercooler_4", "Intercooler_5", "Intercooler_6"]
         - title: "O2 Train Cooling Load"
           components: ["O2_DryCooler", "O2_Chiller"]
     
@@ -160,13 +160,18 @@ visualization:
     # 7. PROCESS TRAIN PROFILES
     # ----------------------------------------------------------------------
     process_train_profile:
+      enabled: false  # Disabled in favor of separate plots
+      plots: []
+
+    # 7.1 SEPARATED H2 TRAIN PROFILES
+    temperature_profile:
       enabled: true
       plots:
-        - title: "H2 Main Train Profile"
+        - title: "H2 Main Train - Temperature Profile"
           components: 
             - "SOEC_Cluster"
             - "Interchanger_1"
-            - "DryCooler_HX"
+            - "DryCooler_1"
             - "KOD_1"
             - "Chiller_1"
             - "KOD_2"
@@ -175,12 +180,16 @@ visualization:
             - "Intercooler_1"
             - "Compressor_S2"
             - "Intercooler_2"
+            - "Cyclone_2"
             - "Compressor_S3"
             - "Intercooler_3"
+            - "Cyclone_3"
             - "Compressor_S4"
             - "Intercooler_4"
+            - "Cyclone_4"
             - "Compressor_S5"
             - "Intercooler_5"
+            - "Cyclone_5"
             - "Compressor_S6"
             - "Intercooler_6"
             - "Deoxo_1"
@@ -188,6 +197,78 @@ visualization:
             - "Coalescer_2"
             - "ElectricBoiler_PSA"
             - "PSA_1"
+
+    pressure_profile:
+      enabled: true
+      plots:
+        - title: "H2 Main Train - Pressure Profile"
+          components: 
+            - "SOEC_Cluster"
+            - "Interchanger_1"
+            - "DryCooler_1"
+            - "KOD_1"
+            - "Chiller_1"
+            - "KOD_2"
+            - "Cyclone_1"
+            - "Compressor_S1"
+            - "Intercooler_1"
+            - "Compressor_S2"
+            - "Intercooler_2"
+            - "Cyclone_2"
+            - "Compressor_S3"
+            - "Intercooler_3"
+            - "Cyclone_3"
+            - "Compressor_S4"
+            - "Intercooler_4"
+            - "Cyclone_4"
+            - "Compressor_S5"
+            - "Intercooler_5"
+            - "Cyclone_5"
+            - "Compressor_S6"
+            - "Intercooler_6"
+            - "Deoxo_1"
+            - "Chiller_2"
+            - "Coalescer_2"
+            - "ElectricBoiler_PSA"
+            - "PSA_1"
+            
+    flow_profile:
+      enabled: true
+      plots:
+        - title: "H2 Main Train - Flow & Composition Profile"
+          components: 
+            - "SOEC_Cluster"
+            - "Interchanger_1"
+            - "DryCooler_1"
+            - "KOD_1"
+            - "Chiller_1"
+            - "KOD_2"
+            - "Cyclone_1"
+            - "Compressor_S1"
+            - "Intercooler_1"
+            - "Compressor_S2"
+            - "Intercooler_2"
+            - "Cyclone_2"
+            - "Compressor_S3"
+            - "Intercooler_3"
+            - "Cyclone_3"
+            - "Compressor_S4"
+            - "Intercooler_4"
+            - "Cyclone_4"
+            - "Compressor_S5"
+            - "Intercooler_5"
+            - "Cyclone_5"
+            - "Compressor_S6"
+            - "Intercooler_6"
+            - "Deoxo_1"
+            - "Chiller_2"
+            - "Coalescer_2"
+            - "ElectricBoiler_PSA"
+            - "PSA_1"
+
+    # 7.2 O2 TRAIN PROFILE (Example of keeping combined if desired, or reuse process_train_profile)
+    # process_train_profile: # Re-enable for other trains if needed
+    
         
         - title: "O2 Train Profile"
           components:
@@ -462,7 +543,7 @@ visualization:
           components:
             - "SOEC_Cluster"
             - "Interchanger_1"
-            - "DryCooler_HX"
+            - "DryCooler_1"
             - "KOD_1"
             - "Chiller_1"
             - "KOD_2"
@@ -513,7 +594,7 @@ visualization:
           components:
             - "SOEC_Cluster"
             - "Interchanger_1"
-            - "DryCooler_HX"
+            - "DryCooler_1"
             - "KOD_1"
             - "Chiller_1"
             - "KOD_2"

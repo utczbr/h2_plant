@@ -650,7 +650,7 @@ class KnockOutDrum(Component):
             pressure_pa=P_out,
             composition=gas_comp,
             phase='gas',
-            extra={'m_dot_H2O_liq_accomp_kg_s': m_liq_carryover_kg_h / 3600.0}
+            extra={} # Do not pass carryover in extra, it is already in mass_flow
         )
 
         # Drain stream: simplify composition if dissolved gas is negligible

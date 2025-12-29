@@ -316,8 +316,28 @@ class HydrogenMultiCyclone(Component):
         inlet = self._input_stream
         if inlet is None or inlet.mass_flow_kg_h <= 1e-6:
             self._set_idle_state()
-            self._outlet_stream = None
-            self._drain_stream = None
+            
+            # Use inlet conditions if available, else standard ambient
+            T_idle = inlet.temperature_k if inlet else 298.15
+            P_idle = inlet.pressure_pa if inlet else 101325.0
+            
+            # Create Zero-Flow Output Stream (fixes graph zeros)
+            self._outlet_stream = Stream(
+                mass_flow_kg_h=0.0,
+                temperature_k=T_idle,
+                pressure_pa=P_idle,
+                composition={self.gas_species: 1.0},
+                phase='gas'
+            )
+            
+            self._drain_stream = Stream(
+                mass_flow_kg_h=0.0,
+                temperature_k=T_idle,
+                pressure_pa=P_idle,
+                composition={'H2O': 1.0},
+                phase='liquid'
+            )
+            
             self._input_stream = None
             return
 
@@ -427,7 +447,7 @@ class HydrogenMultiCyclone(Component):
             pressure_pa=P_out,
             composition=out_comp,
             phase='gas',
-            extra={'m_dot_H2O_liq_accomp_kg_s': m_liq_carryover_kg_h / 3600.0}
+            extra={} # Do not pass carryover in extra, it is already in composition['H2O_liq'] and mass_flow
         )
         
         # Calculate dissolved gas in drain (OUT) using MOLE FRACTIONS
@@ -528,7 +548,9 @@ class HydrogenMultiCyclone(Component):
             
             'water_removed_kg_h': self._drain_stream.mass_flow_kg_h if self._drain_stream else 0.0,
             'drain_temp_k': self._drain_stream.temperature_k if self._drain_stream else 0.0,
-            'drain_pressure_bar': self._drain_stream.pressure_pa / 1e5 if self._drain_stream else 0.0
+            'drain_pressure_bar': self._drain_stream.pressure_pa / 1e5 if self._drain_stream else 0.0,
+            'dissolved_gas_ppm': (self._last_dissolved_gas_out_kg_h / self._drain_stream.mass_flow_kg_h * 1e6) 
+                                 if (self._drain_stream and self._drain_stream.mass_flow_kg_h > 0) else 0.0
         })
         return state
 

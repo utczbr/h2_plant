@@ -262,12 +262,14 @@ class SimulationEngine:
         self.event_scheduler.process_events(hour, self.registry)
 
         # Apply dispatch setpoints before component execution
+        t0_dispatch = time.perf_counter()
         if self.dispatch_strategy and self._dispatch_prices is not None:
             self.dispatch_strategy.decide_and_apply(
                 t=hour,
                 prices=self._dispatch_prices,
                 wind=self._dispatch_wind
             )
+        t1_dispatch = time.perf_counter()
 
         # Causal execution order ensures correct physics propagation
         execution_order = [
@@ -284,7 +286,8 @@ class SimulationEngine:
 
         # Execute ordered components first (each exactly once)
         executed_instances = set()
-
+        
+        t0_physics = time.perf_counter()
         for comp_id in execution_order:
             if self.registry.has(comp_id):
                 try:
@@ -305,20 +308,32 @@ class SimulationEngine:
                 except Exception as e:
                     logger.error(f"Component {comp_id} step failed at hour {hour}: {e}")
                     raise
+        t1_physics = time.perf_counter()
 
         # Propagate flows after component updates
+        t0_flow = time.perf_counter()
         try:
             self.flow_network.execute_flows(hour)
         except Exception as e:
             logger.error(f"Flow execution failed at hour {hour}: {e}")
             raise
+        t1_flow = time.perf_counter()
 
         # Record dispatch results after physics execution
         if self.dispatch_strategy and hasattr(self.dispatch_strategy, 'record_post_step'):
             self.dispatch_strategy.record_post_step()
-
+            
         if self.post_step_callback:
             self.post_step_callback(hour)
+            
+        # Log performance metrics (every 100 steps or if slow)
+        dt_dispatch = t1_dispatch - t0_dispatch
+        dt_physics = t1_physics - t0_physics
+        dt_flow = t1_flow - t0_flow
+        total_time = dt_dispatch + dt_physics + dt_flow
+        
+        if total_time > 0.05: # Warn on slow steps (>50ms)
+             logger.warning(f"Slow Step {hour:.2f}h: Total={total_time*1000:.1f}ms (Disp={dt_dispatch*1000:.1f}ms, Phys={dt_physics*1000:.1f}ms, Flow={dt_flow*1000:.1f}ms)")
 
     def _should_checkpoint(self, hour: int) -> bool:
         """

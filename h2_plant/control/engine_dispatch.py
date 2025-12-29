@@ -48,9 +48,13 @@ from h2_plant.components.separation.coalescer import Coalescer
 from h2_plant.components.purification.deoxo_reactor import DeoxoReactor
 from h2_plant.components.separation.psa import PSA
 from h2_plant.components.separation.knock_out_drum import KnockOutDrum
+from h2_plant.components.separation.hydrogen_cyclone import HydrogenMultiCyclone
+from h2_plant.components.thermal.interchanger import Interchanger
 from h2_plant.components.compression.compressor_single import CompressorSingle
 from h2_plant.components.cooling.dry_cooler import DryCooler
 from h2_plant.components.thermal.heat_exchanger import HeatExchanger
+from h2_plant.components.thermal.electric_boiler import ElectricBoiler
+from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +223,10 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             c for _, c in registry.list_components() 
             if isinstance(c, KnockOutDrum)
         ]
+        self._cyclones = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, HydrogenMultiCyclone)
+        ]
         self._compressors = [
             c for _, c in registry.list_components() 
             if isinstance(c, CompressorSingle)
@@ -230,6 +238,18 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._heat_exchangers = [
             c for _, c in registry.list_components() 
             if isinstance(c, HeatExchanger)
+        ]
+        self._drain_mixers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, DrainRecorderMixer)
+        ]
+        self._interchangers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, Interchanger)
+        ]
+        self._boilers = [
+            c for _, c in registry.list_components() 
+            if isinstance(c, ElectricBoiler)
         ]
 
         if self._soec and not self._pem:
@@ -262,6 +282,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             'cumulative_h2_kg': np.zeros(total_steps, dtype=np.float64),
             'steam_soec_kg': np.zeros(total_steps, dtype=np.float64),
             'H2O_soec_out_kg': np.zeros(total_steps, dtype=np.float64),
+            'H2O_soec_out_kg': np.zeros(total_steps, dtype=np.float64),
             'soec_active_modules': np.zeros(total_steps, dtype=np.int32),
             'H2O_pem_kg': np.zeros(total_steps, dtype=np.float64),
             'O2_pem_kg': np.zeros(total_steps, dtype=np.float64),
@@ -278,54 +299,193 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             cid = chiller.component_id
             self._history[f"{cid}_cooling_load_kw"] = np.zeros(total_steps, dtype=np.float64)
             self._history[f"{cid}_electrical_power_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         for coal in self._coalescers:
             cid = coal.component_id
             self._history[f"{cid}_delta_p_bar"] = np.zeros(total_steps, dtype=np.float64)
             self._history[f"{cid}_drain_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_ppm"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_in_kg_h"] = np.zeros(total_steps, dtype=np.float64)  # IN tracking
+            self._history[f"{cid}_dissolved_gas_out_kg_h"] = np.zeros(total_steps, dtype=np.float64) # OUT tracking
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for each deoxo
         for deoxo in self._deoxos:
             cid = deoxo.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_inlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_inlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_o2_in_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_peak_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_conversion_percent"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for PSA
         for psa in self._psas:
             cid = psa.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for KOD
         for kod in self._kods:
             cid = kod.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_water_removed_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_drain_temp_k"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_drain_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_ppm"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_m_dot_H2O_liq_accomp_kg_s"] = np.zeros(total_steps, dtype=np.float64)
+            # Dissolved Gas IN/OUT tracking
+            self._history[f"{cid}_dissolved_gas_in_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_out_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for Cyclone
+        for cyc in self._cyclones:
+            cid = cyc.component_id
+            self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_water_removed_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_drain_temp_k"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_drain_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_ppm"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_in_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dissolved_gas_out_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_pressure_drop_mbar"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for Compressor
         for comp in self._compressors:
             cid = comp.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_power_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for DryCooler
         for dc in self._dry_coolers:
             cid = dc.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_heat_rejected_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_tqc_duty_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_dc_duty_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_fan_power_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for HeatExchanger
         for hx in self._heat_exchangers:
             cid = hx.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_heat_removed_kw"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for DrainRecorderMixer
+        for mixer in self._drain_mixers:
+            cid = mixer.component_id
+            self._history[f"{cid}_dissolved_gas_ppm"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_temperature_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_kpa"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for Interchanger
+        for ic in self._interchangers:
+            cid = ic.component_id
+            self._history[f"{cid}_q_transferred_kw"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_hot_out_temp_k"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_cold_out_temp_k"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph - Hot Side)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history tracks for Chiller impurity (already tracked for cooling load/power)
         for chiller in self._chillers:
             cid = chiller.component_id
             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Add history tracks for ElectricBoiler
+        for boiler in self._boilers:
+            cid = boiler.component_id
+            self._history[f"{cid}_power_input_kw"] = np.zeros(total_steps, dtype=np.float64)
+            # Outlet Stream Properties (for Stacked Properties Graph)
+            self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
 
         # Add history track for PEM impurity if present
         if self._pem:
             # Using generic name 'PEM' + suffix, or component id
             # Graph plotter looks for suffix '_o2_impurity_ppm_mol'
             cid = self._pem.component_id if hasattr(self._pem, 'component_id') else 'PEM'
+            cid = self._pem.component_id if hasattr(self._pem, 'component_id') else 'PEM'
             self._history[f"{cid}_o2_impurity_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+
+        # Monitor SOEC individual modules
+        if self._soec:
+            num_modules = getattr(self._soec, 'num_modules', 0)
+            cid = self._soec.component_id if hasattr(self._soec, 'component_id') else 'SOEC_Cluster'
+            if cid:
+                self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
+                self._history[f"{cid}_outlet_temp_c"] = np.zeros(total_steps, dtype=np.float64)
+                self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
+                self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"] = np.zeros(total_steps, dtype=np.float64)
+            
+            for i in range(num_modules):
+                self._history[f"soec_module_powers_{i+1}"] = np.zeros(total_steps, dtype=np.float64)
 
         self._state = IntegratedDispatchState()
 
@@ -442,7 +602,21 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             elif hasattr(self._soec, 'h2_output_kg'):
                 h2_soec = self._soec.h2_output_kg
 
-            steam_soec = getattr(self._soec, 'last_steam_output_kg', 0.0)
+            steam_soec = getattr(self._soec, 'last_step_steam_input_kg', 0.0)
+
+            # Record SOEC outlet flow (constructed on demand)
+            cid = self._soec.component_id if hasattr(self._soec, 'component_id') else 'SOEC_Cluster'
+            if cid:
+                try:
+                    out_stream = self._soec.get_output('h2_out')
+                    if out_stream:
+                        self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
+                        self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                        self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                        self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                        self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                except Exception:
+                    pass
 
         self._state.P_soec_prev = P_soec_actual
 
@@ -488,6 +662,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # SOEC active modules
         if self._soec and hasattr(self._soec, 'real_powers'):
             self._history['soec_active_modules'][step_idx] = int(np.sum(self._soec.real_powers > 0.01))
+            
+            # Record individual module powers for Wear Graph
+            for i, power_mw in enumerate(self._soec.real_powers):
+                # We use 1-based indexing for user-facing labels
+                key = f"soec_module_powers_{i+1}"
+                if key in self._history:
+                    self._history[key][step_idx] = power_mw
 
         h2o_soec_out = getattr(self._soec, 'last_water_output_kg', 0.0) if self._soec else 0.0
         self._history['H2O_soec_out_kg'][step_idx] = h2o_soec_out
@@ -502,9 +683,22 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         tank_main = self._registry.get("H2_Tank") if self._registry.has("H2_Tank") else None
         comp_main = self._registry.get("H2_Compressor") if self._registry.has("H2_Compressor") else None
 
-        self._history['tank_level_kg'][step_idx] = getattr(tank_main, 'current_level_kg', 0.0) if tank_main else 0.0
-        self._history['tank_pressure_bar'][step_idx] = getattr(tank_main, 'pressure_bar', 0.0) if tank_main else 0.0
-        self._history['compressor_power_kw'][step_idx] = getattr(comp_main, 'power_kw', 0.0) if comp_main else 0.0
+        if tank_main:
+            self._history['tank_level_kg'][step_idx] = getattr(tank_main, 'current_level_kg', 0.0)
+            self._history['tank_pressure_bar'][step_idx] = getattr(tank_main, 'pressure_bar', 0.0)
+        else:
+             self._history['tank_level_kg'][step_idx] = 0.0
+             self._history['tank_pressure_bar'][step_idx] = 0.0
+        
+        # Aggregate compressor power
+        total_comp_power = 0.0
+        if comp_main:
+            total_comp_power = getattr(comp_main, 'power_kw', 0.0)
+        else:
+            for comp in self._compressors:
+                 total_comp_power += getattr(comp, 'power_kw', 0.0)
+
+        self._history['compressor_power_kw'][step_idx] = total_comp_power
         
         # Record Chiller states
         for chiller in self._chillers:
@@ -512,6 +706,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             state = chiller.get_state()
             self._history[f"{cid}_cooling_load_kw"][step_idx] = state.get('cooling_load_kw', 0.0)
             self._history[f"{cid}_electrical_power_kw"][step_idx] = state.get('electrical_power_kw', 0.0)
+            # Stacked properties
+            out_stream = getattr(chiller, 'outlet_stream', None)
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record Coalescer states
         for coal in self._coalescers:
@@ -519,12 +721,40 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             state = coal.get_state()
             self._history[f"{cid}_delta_p_bar"][step_idx] = state.get('delta_p_bar', 0.0)
             self._history[f"{cid}_drain_flow_kg_h"][step_idx] = state.get('drain_flow_kg_h', 0.0)
+            self._history[f"{cid}_dissolved_gas_ppm"][step_idx] = state.get('dissolved_gas_ppm', 0.0)
+            self._history[f"{cid}_dissolved_gas_in_kg_h"][step_idx] = state.get('dissolved_gas_in_kg_h', 0.0)
+            self._history[f"{cid}_dissolved_gas_out_kg_h"][step_idx] = state.get('dissolved_gas_out_kg_h', 0.0)
+            
+            # Stacked properties (Coalescer usually has output_stream)
+            out_stream = getattr(coal, 'output_stream', None)
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record Deoxo states
         for deoxo in self._deoxos:
             cid = deoxo.component_id
             state = deoxo.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            # Deoxo specific
+            self._history[f"{cid}_inlet_temp_c"][step_idx] = state.get('inlet_temp_c', 0.0)
+            self._history[f"{cid}_inlet_pressure_bar"][step_idx] = state.get('inlet_pressure_bar', 0.0)
+            self._history[f"{cid}_o2_in_kg_h"][step_idx] = state.get('o2_in_kg_h', 0.0)
+            self._history[f"{cid}_peak_temp_c"][step_idx] = state.get('peak_temp_c', 0.0)
+            self._history[f"{cid}_conversion_percent"][step_idx] = state.get('conversion_percent', 0.0)
+            self._history[f"{cid}_mass_flow_kg_h"][step_idx] = state.get('mass_flow_kg_h', 0.0)
+            
+            # Stacked properties (Deoxo uses output_stream)
+            out_stream = getattr(deoxo, 'output_stream', None)
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record PSA states
         for psa in self._psas:
@@ -532,17 +762,90 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             state = psa.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
             
+            # Stacked properties (PSA uses 'purified_gas_out' port)
+            out_stream = psa.get_output('purified_gas_out')
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
         # Record KOD states
         for kod in self._kods:
             cid = kod.component_id
             state = kod.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            # KOD specific
+            self._history[f"{cid}_water_removed_kg_h"][step_idx] = state.get('water_removed_kg_h', 0.0)
+            self._history[f"{cid}_drain_temp_k"][step_idx] = state.get('drain_temp_k', 0.0)
+            self._history[f"{cid}_drain_pressure_bar"][step_idx] = state.get('drain_pressure_bar', 0.0)
+            self._history[f"{cid}_dissolved_gas_ppm"][step_idx] = state.get('dissolved_gas_ppm', 0.0)
+            self._history[f"{cid}_m_dot_H2O_liq_accomp_kg_s"][step_idx] = state.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+            self._history[f"{cid}_dissolved_gas_in_kg_h"][step_idx] = state.get('dissolved_gas_in_kg_h', 0.0)
+            self._history[f"{cid}_dissolved_gas_out_kg_h"][step_idx] = state.get('dissolved_gas_out_kg_h', 0.0)
+
+            # Stacked properties (KOD usually has outlet_stream)
+            out_stream = getattr(kod, '_gas_outlet_stream', None) # Note: KOD uses specific internal name
+            if not out_stream: out_stream = kod._gas_outlet_stream
+            
+            # KOD might use different internal stream name? 
+            # In KOD code: self._gas_outlet_stream
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
+
+        # Record Cyclone states
+        for cyc in self._cyclones:
+            cid = cyc.component_id
+            state = cyc.get_state()
+            self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            # Cyclone specific
+            self._history[f"{cid}_water_removed_kg_h"][step_idx] = state.get('water_removed_kg_h', 0.0)
+            self._history[f"{cid}_drain_temp_k"][step_idx] = state.get('drain_temp_k', 0.0)
+            self._history[f"{cid}_drain_pressure_bar"][step_idx] = state.get('drain_pressure_bar', 0.0)
+            self._history[f"{cid}_dissolved_gas_ppm"][step_idx] = state.get('dissolved_gas_ppm', 0.0)
+            self._history[f"{cid}_dissolved_gas_in_kg_h"][step_idx] = state.get('dissolved_gas_in_kg_h', 0.0)
+            self._history[f"{cid}_dissolved_gas_out_kg_h"][step_idx] = state.get('dissolved_gas_out_kg_h', 0.0)
+            self._history[f"{cid}_pressure_drop_mbar"][step_idx] = state.get('pressure_drop_mbar', 0.0)
+            
+            # Stacked properties (Cyclone usually has outlet_stream or _outlet_stream)
+            out_stream = getattr(cyc, '_outlet_stream', None) 
+            # In Cyclone code: self._outlet_stream
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
+
+        # Record DrainRecorderMixer states
+        for mixer in self._drain_mixers:
+            cid = mixer.component_id
+            state = mixer.get_state()
+            self._history[f"{cid}_dissolved_gas_ppm"][step_idx] = state.get('dissolved_gas_ppm', 0.0)
+            self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = state.get('outlet_mass_flow_kg_h', 0.0)
+            self._history[f"{cid}_outlet_temperature_c"][step_idx] = state.get('outlet_temperature_c', 0.0)
+            self._history[f"{cid}_outlet_pressure_kpa"][step_idx] = state.get('outlet_pressure_kpa', 0.0)
 
         # Record Compressor states
         for comp in self._compressors:
             cid = comp.component_id
             state = comp.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            # Compressor specific
+            self._history[f"{cid}_power_kw"][step_idx] = state.get('power_kw', 0.0)
+            self._history[f"{cid}_outlet_temp_c"][step_idx] = state.get('outlet_temperature_c', 0.0)
+            self._history[f"{cid}_outlet_pressure_bar"][step_idx] = state.get('outlet_pressure_bar', 0.0)
+            
+            # Stacked properties (Compressor constructs output on demand via get_output)
+            out_stream = comp.get_output('outlet')
+            if out_stream:
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record Coalescer impurity (added later so manual update here)
         for coal in self._coalescers:
@@ -555,18 +858,85 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             cid = dc.component_id
             state = dc.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            # DryCooler specific
+            self._history[f"{cid}_heat_rejected_kw"][step_idx] = state.get('heat_rejected_kw', 0.0)
+            self._history[f"{cid}_tqc_duty_kw"][step_idx] = state.get('tqc_duty_kw', 0.0)
+            self._history[f"{cid}_dc_duty_kw"][step_idx] = state.get('dc_duty_kw', 0.0)
+            self._history[f"{cid}_fan_power_kw"][step_idx] = state.get('fan_power_kw', 0.0)
+            self._history[f"{cid}_outlet_temp_c"][step_idx] = state.get('outlet_temp_c', 0.0)
+            
+            # Stacked properties (DryCooler uses outlet_stream)
+            out_stream = getattr(dc, 'outlet_stream', None)
+            if out_stream:
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record HeatExchanger impurity
         for hx in self._heat_exchangers:
             cid = hx.component_id
             state = hx.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+            # HX specific
+            self._history[f"{cid}_heat_removed_kw"][step_idx] = state.get('heat_removed_kw', 0.0)
+            
+            # Stacked properties
+            out_stream = getattr(hx, 'output_stream', None)
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record Chiller impurity
         for chiller in self._chillers:
             cid = chiller.component_id
             state = chiller.get_state()
             self._history[f"{cid}_outlet_o2_ppm_mol"][step_idx] = state.get('outlet_o2_ppm_mol', 0.0)
+
+            # Stacked properties (Chiller uses output_stream usually, or fluid_out but stored as out_stream attribute?)
+            # Chiller component uses self.output_stream in get_state? No, it exposes keys.
+            out_stream = getattr(chiller, 'output_stream', getattr(chiller, '_output_stream', None))
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
+
+        # Record Interchanger
+        for ic in self._interchangers:
+            cid = ic.component_id
+            state = ic.get_state()
+            self._history[f"{cid}_q_transferred_kw"][step_idx] = state.get('q_transferred_kw', 0.0)
+            self._history[f"{cid}_hot_out_temp_k"][step_idx] = state.get('hot_out_temp_k', 0.0)
+            self._history[f"{cid}_cold_out_temp_k"][step_idx] = state.get('cold_out_temp_k', 0.0)
+            
+            # Use hot_out as primary outlet for profile graph
+            out_stream = ic.get_output('hot_out')
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
+
+        # Record ElectricBoiler states
+        for boiler in self._boilers:
+            cid = boiler.component_id
+            state = boiler.get_state()
+            self._history[f"{cid}_power_input_kw"][step_idx] = state.get('power_input_kw', 0.0)
+            
+            # Stacked properties (ElectricBoiler uses _output_stream, accessible via get_output)
+            out_stream = boiler.get_output('fluid_out')
+            if out_stream:
+                self._history[f"{cid}_outlet_temp_c"][step_idx] = out_stream.temperature_k - 273.15
+                self._history[f"{cid}_outlet_pressure_bar"][step_idx] = out_stream.pressure_pa / 1e5
+                self._history[f"{cid}_outlet_h2o_frac"][step_idx] = out_stream.composition.get('H2O', 0.0) + out_stream.composition.get('H2O_liq', 0.0)
+                self._history[f"{cid}_outlet_enthalpy_kj_kg"][step_idx] = out_stream.specific_enthalpy_j_kg / 1000.0
+                self._history[f"{cid}_outlet_mass_flow_kg_h"][step_idx] = out_stream.mass_flow_kg_h
 
         # Record PEM impurity
         if self._pem:
@@ -619,591 +989,24 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 return comp
         return None
 
-    def print_summary(self) -> None:
+    def print_summary(self):
         """
-        Print topology-aware simulation summary.
-        
-        Dynamically detects which components are present in the registry
-        and displays only relevant metrics for the current topology.
+        Print a unified stream summary table grouped by topology sections.
+        Delegates to reporting.stream_table.print_stream_summary_table.
         """
-        dt = self._context.simulation.timestep_hours
-        hist = self.get_history()
-        actual_steps = self._state.step_idx
-        duration_hours = actual_steps * dt
-        
-        # Component detection by class name patterns
-        components_by_type = self._categorize_components()
-        
-        print("\n" + "=" * 70)
-        print("## Simulation Summary")
-        print(f"   Duration: {duration_hours:.1f} hours ({actual_steps} steps)")
-        print("=" * 70)
-        
-        # === H2 Source Section ===
-        if components_by_type.get('h2_source'):
-            print("\n### H2 Source")
-            for comp_id, comp in components_by_type['h2_source']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                flow_kg_h = state.get('mass_flow_kg_h', 0.0)
-                total_h2 = state.get('cumulative_h2_kg', flow_kg_h * duration_hours)
-                temp_k = state.get('temperature_k', 0.0)
-                temp_c = temp_k - 273.15 if temp_k > 0 else 0.0
-                pressure_bar = state.get('pressure_bar', state.get('pressure_pa', 0.0) / 1e5)
-                h2_purity = state.get('h2_purity', 0.0) * 100
-                h2o_impurity = state.get('h2o_impurity', 0.0) * 100
-                
-                print(f"   [{comp_id}]")
-                print(f"   * Total H2 Supplied: {total_h2:,.2f} kg")
-                print(f"   * Flow Rate: {flow_kg_h:.2f} kg/h")
-                print(f"   * Conditions: {pressure_bar:.1f} bar, {temp_c:.1f}°C")
-                print(f"   * H2 Purity: {h2_purity:.2f}% | H2O: {h2o_impurity:.2f}%")
-                
-                # Get output stream
-                if hasattr(comp, 'get_output'):
-                    try:
-                        h2_out = comp.get_output('h2_out')
-                        print(f"   ─── Output Stream ───")
-                        # self._format_stream_properties(h2_out, "H2 Out", "   ")
-                    except Exception:
-                        pass
-        
-        # === Knock-Out Drum Section ===
-        if components_by_type.get('knock_out_drum'):
-            print("\n### Knock-Out Drums (Water Separation)")
-            for comp_id, comp in components_by_type['knock_out_drum']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                water_removed = state.get('water_removed_kg_h', 0.0) * duration_hours
-                status = state.get('separation_status', 'N/A')
-                v_real = state.get('v_real', 0.0)
-                v_max = state.get('v_max', 1.0)
-                velocity_margin = ((v_max - v_real) / v_max * 100) if v_max > 0 else 0
-                dissolved_gas = state.get('dissolved_gas_kg_h', 0.0) * duration_hours
-                
-                print(f"   [{comp_id}]")
-                print(f"   * Water Removed (Total): {water_removed:,.4f} kg")
-                print(f"   * Separation Status: {status}")
-                print(f"   * Velocity Margin: {velocity_margin:.1f}% (V_real={v_real:.3f} < V_max={v_max:.3f} m/s)")
-                print(f"   * Dissolved Gas Loss: {dissolved_gas:.6f} kg")
-                
-                # Get inlet/outlet streams if available
-                inlet_stream = getattr(comp, '_input_stream', None)
-                gas_outlet = getattr(comp, '_gas_outlet_stream', None)
-                liquid_drain = getattr(comp, '_liquid_drain_stream', None)
-                
-                # Also try get_output methods
-                if gas_outlet is None and hasattr(comp, 'get_output'):
-                    try:
-                        gas_outlet = comp.get_output('gas_outlet')
-                    except Exception:
-                        pass
-                if liquid_drain is None and hasattr(comp, 'get_output'):
-                    try:
-                        liquid_drain = comp.get_output('liquid_drain')
-                    except Exception:
-                        pass
-                
-                # print(f"   ─── Stream Properties ───")
-                # self._format_stream_properties(gas_outlet, "Gas Outlet", "   ")
-                # self._format_stream_properties(liquid_drain, "Liquid Drain", "   ")
-        
-        # === Coalescer Section ===
-        if components_by_type.get('coalescer'):
-            print("\n### Coalescers (Aerosol Removal)")
-            for comp_id, comp in components_by_type['coalescer']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                liquid_removed = state.get('liquid_removed_kg_h', state.get('drain_flow_kg_h', 0.0)) * duration_hours
-                print(f"   [{comp_id}] Liquid Removed: {liquid_removed:,.4f} kg")
-                
-                # Get output stream (Coalescer uses 'outlet' port)
-                gas_outlet = None
-                if hasattr(comp, 'get_output'):
-                    try:
-                        gas_outlet = comp.get_output('outlet')
-                    except Exception:
-                        pass
-                if gas_outlet:
-                    # print(f"   ─── Gas Outlet ───")
-                    # self._format_stream_properties(gas_outlet, "Gas Out", "   ")
-                    pass
-        
-        # === Chiller Section ===
-        if components_by_type.get('chiller'):
-            print("\n### Chillers (Active Cooling)")
-            for comp_id, comp in components_by_type['chiller']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                cooling_kw = state.get('cooling_load_kw', 0.0)
-                power_kw = state.get('electrical_power_kw', 0.0)
-                # Get outlet temp from state OR from outlet stream
-                temp_out_c = state.get('outlet_temp_k', 0.0) - 273.15 if state.get('outlet_temp_k', 0.0) > 0 else 0.0
-                if temp_out_c <= -273:
-                    # Try 'outlet_temp_c' or get from stream
-                    outlet_stream = getattr(comp, 'outlet_stream', None)
-                    if outlet_stream and hasattr(outlet_stream, 'temperature_k'):
-                        temp_out_c = outlet_stream.temperature_k - 273.15
-                # Water condensed is stored directly in the component
-                water_condensed_kg_h = getattr(comp, 'water_condensed_kg_h', 0.0)
-                water_condensed = water_condensed_kg_h * duration_hours
-                
-                print(f"   [{comp_id}]")
-                print(f"   * Cooling: {cooling_kw:.2f} kW | Elec. Power: {power_kw:.2f} kW")
-                print(f"   * Outlet Temp: {temp_out_c:.1f}°C | Water Condensed: {water_condensed:.4f} kg")
-                
-                # Get output stream
-                gas_outlet = None
-                if hasattr(comp, 'get_output'):
-                    try:
-                        gas_outlet = comp.get_output('fluid_out')
-                    except Exception:
-                        try:
-                            gas_outlet = comp.get_output('gas_outlet')
-                        except Exception:
-                            pass
-                if gas_outlet:
-                    # print(f"   ─── Gas Outlet ───")
-                    # self._format_stream_properties(gas_outlet, "Gas Out", "   ")
-                    pass
-        
-        # === Dry Cooler Section ===
-        if components_by_type.get('dry_cooler'):
-            print("\n### Dry Coolers (Passive Cooling)")
-            for comp_id, comp in components_by_type['dry_cooler']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                # DryCooler returns 'tqc_duty_kw' and 'dc_duty_kw' for heat duties
-                tqc_duty_kw = state.get('tqc_duty_kw', 0.0)
-                dc_duty_kw = state.get('dc_duty_kw', 0.0)
-                fan_power_kw = state.get('fan_power_kw', 0.0)
-                # DryCooler returns 'outlet_temp_c' directly (not in Kelvin!)
-                temp_out_c = state.get('outlet_temp_c', 0.0)
-                
-                print(f"   [{comp_id}] Heat Duty: {tqc_duty_kw:.2f} kW | Fan: {fan_power_kw:.2f} kW | T_out: {temp_out_c:.1f}°C")
-                
-                # Get output stream
-                gas_outlet = None
-                if hasattr(comp, 'get_output'):
-                    try:
-                        gas_outlet = comp.get_output('fluid_out')
-                    except Exception:
-                        try:
-                            gas_outlet = comp.get_output('gas_outlet')
-                        except Exception:
-                            pass
-                if gas_outlet:
-                    # print(f"   ─── Gas Outlet ───")
-                    # self._format_stream_properties(gas_outlet, "Gas Out", "   ")
-                    pass
-        
-        # === Tank Section ===
-        if components_by_type.get('tank'):
-            print("\n### Storage Tanks")
-            for comp_id, comp in components_by_type['tank']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                level_kg = state.get('current_level_kg', state.get('level_kg', 0.0))
-                capacity_kg = state.get('capacity_kg', state.get('max_capacity_kg', 1.0))
-                pressure_bar = state.get('pressure_bar', 0.0)
-                fill_pct = (level_kg / capacity_kg * 100) if capacity_kg > 0 else 0
-                
-                print(f"   [{comp_id}] Level: {level_kg:,.2f}/{capacity_kg:,.0f} kg ({fill_pct:.1f}%) | P: {pressure_bar:.1f} bar")
-        
-        # === Compressor Section ===
-        if components_by_type.get('compressor'):
-            print("\n### Compressors")
-            for comp_id, comp in components_by_type['compressor']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                # Compressor stores energy in timestep_energy_kwh, cumulative in cumulative_energy_kwh
-                total_energy_kwh = state.get('cumulative_energy_kwh', 0.0)
-                # Power = energy / time
-                power_kw = total_energy_kwh / duration_hours if duration_hours > 0 else 0.0
-                eta_isen = state.get('isentropic_efficiency', 0.65) * 100
-                p_out_bar = state.get('outlet_pressure_bar', 0.0)
-                
-                print(f"   [{comp_id}] Power: {power_kw:.2f} kW | Energy: {total_energy_kwh:.2f} kWh | η_isen: {eta_isen:.1f}%")
-        
-        # === Deoxo Section ===
-        if components_by_type.get('deoxo'):
-            print("\n### Deoxidizer Reactors")
-            for comp_id, comp in components_by_type['deoxo']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                # DeoxoReactor returns 'conversion_o2_percent' (already in %), 'peak_temperature_c', 'outlet_o2_ppm_mol'
-                o2_conversion = state.get('conversion_o2_percent', 0.0)  # Already in %
-                temp_max = state.get('peak_temperature_c', state.get('t_peak_total_c', 0.0))
-                o2_out_ppm = state.get('outlet_o2_ppm_mol', 0.0)
-                
-                print(f"   [{comp_id}] O2 Conversion: {o2_conversion:.1f}% | T_max: {temp_max:.1f}°C | O2 out: {o2_out_ppm:.1f} ppm")
-                
-                # Get output stream
-                gas_outlet = None
-                if hasattr(comp, 'get_output'):
-                    try:
-                        gas_outlet = comp.get_output('h2_out')
-                    except Exception:
-                        try:
-                            gas_outlet = comp.get_output('gas_outlet')
-                        except Exception:
-                            pass
-                if gas_outlet:
-                    print(f"   ─── Gas Outlet ───")
-                    self._format_stream_properties(gas_outlet, "Gas Out", "   ")
-        
-        # === PSA/VSA Section ===
-        if components_by_type.get('adsorption'):
-            print("\n### Adsorption Units (PSA/VSA)")
-            for comp_id, comp in components_by_type['adsorption']:
-                state = comp.get_state() if hasattr(comp, 'get_state') else {}
-                
-                # PSA returns: product_flow_kg_h, tail_gas_flow_kg_h, power_consumption_kw
-                product_flow = state.get('product_flow_kg_h', 0.0)
-                tail_gas_flow = state.get('tail_gas_flow_kg_h', 0.0)  # This IS the H2 loss!
-                power_kw = state.get('power_consumption_kw', 0.0)
-                
-                # Calculate totals over duration
-                h2_loss_total = tail_gas_flow * duration_hours
-                
-                # Get inlet stream to calculate water removed
-                inlet_stream = getattr(comp, 'inlet_stream', None)
-                product_stream = getattr(comp, 'product_outlet', None)
-                water_removed = 0.0
-                if inlet_stream and product_stream:
-                    inlet_h2o = inlet_stream.composition.get('H2O', 0.0) * inlet_stream.mass_flow_kg_h
-                    outlet_h2o = product_stream.composition.get('H2O', 0.0) * product_stream.mass_flow_kg_h
-                    water_removed = (inlet_h2o - outlet_h2o) * duration_hours
-                
-                print(f"   [{comp_id}]")
-                print(f"   * Tail Gas Loss: {tail_gas_flow:.3f} kg/h (Total: {h2_loss_total:.3f} kg)")
-                print(f"   * Water Removed: {water_removed:.4f} kg | Power: {power_kw:.2f} kW")
-                
-                # Get output stream (PSA uses 'purified_gas_out' port)
-                gas_outlet = None
-                if hasattr(comp, 'get_output'):
-                    try:
-                        gas_outlet = comp.get_output('purified_gas_out')
-                    except Exception:
-                        try:
-                            gas_outlet = comp.get_output('gas_outlet')
-                        except Exception:
-                            pass
-                if gas_outlet:
-                    print(f"   ─── Purified Gas ───")
-                    self._format_stream_properties(gas_outlet, "Product", "   ")
-        
-        # === SOEC Section (only if present) ===
-        if components_by_type.get('soec'):
-            print("\n### SOEC Electrolyzers")
-            E_soec = np.sum(hist['P_soec_actual']) * dt
-            H2_soec_total = np.sum(hist['H2_soec_kg'])
-            print(f"   * Energy Consumed: {E_soec:.2f} MWh")
-            print(f"   * H2 Produced: {H2_soec_total:.2f} kg")
-        
-        # === PEM Section (only if present) ===
-        if components_by_type.get('pem'):
-            print("\n### PEM Electrolyzers")
-            E_pem = np.sum(hist['P_pem']) * dt
-            H2_pem_total = np.sum(hist['H2_pem_kg'])
-            print(f"   * Energy Consumed: {E_pem:.2f} MWh")
-            print(f"   * H2 Produced: {H2_pem_total:.2f} kg")
-        
-        # === System Totals ===
-        print("\n### System Totals")
-        E_bop = np.sum(hist['P_bop_mw']) * dt
-        E_total_offer = np.sum(hist['P_offer']) * dt
-        E_sold = np.sum(hist['P_sold']) * dt
-        
-        # Only show energy offered/sold if there's actual power data
-        if E_total_offer > 0.01:
-            print(f"   * Total Offered Energy: {E_total_offer:.2f} MWh")
-            print(f"   * Energy Sold to Market: {E_sold:.2f} MWh")
-        
-        print(f"   * BoP Energy Consumption: {E_bop:.2f} MWh")
-        
-        # Show H2 production totals only if electrolyzers present
-        if components_by_type.get('soec') or components_by_type.get('pem'):
-            H2_total = np.sum(hist['H2_soec_kg']) + np.sum(hist['H2_pem_kg'])
-            print(f"   * Total H2 Production: {H2_total:.2f} kg")
-        
-        # === Stream Summary Table ===
-        self._print_stream_summary_table(components_by_type)
-        
-        print("=" * 70)
-
-    def _categorize_components(self) -> Dict[str, list]:
-        """
-        Categorize registered components by type for summary generation.
-        
-        Returns:
-            Dict mapping component category to list of (comp_id, component) tuples.
-        """
-        categories = {
-            'h2_source': [],
-            'knock_out_drum': [],
-            'coalescer': [],
-            'chiller': [],
-            'dry_cooler': [],
-            'tank': [],
-            'compressor': [],
-            'deoxo': [],
-            'adsorption': [],
-            'soec': [],
-            'pem': [],
-            'valve': [],
-            'mixer': [],
-        }
-        
-        class_patterns = {
-            'h2_source': ['ExternalH2Source', 'H2Source', 'O2Source'],
-            'knock_out_drum': ['KnockOutDrum', 'KOD'],
-            'coalescer': ['Coalescer'],
-            'chiller': ['Chiller', 'ActiveCooler'],
-            'dry_cooler': ['DryCooler', 'AirCooler'],
-            'tank': ['Tank', 'H2Tank', 'StorageTank', 'FlashDrum'],
-            'compressor': ['Compressor', 'H2Compressor'],
-            'deoxo': ['Deoxo', 'Deoxidizer', 'DeoxoReactor'],
-            'adsorption': ['PSA', 'VSA', 'TSA', 'AdsorptionDryer'],
-            'soec': ['SOEC', 'SOECOperator', 'SOECCluster'],
-            'pem': ['PEM', 'DetailedPEMElectrolyzer', 'PEMElectrolyzer'],
-            'valve': ['Valve', 'ThrottlingValve'],
-            'mixer': ['Mixer', 'WaterMixer'],
-        }
-        
-        for comp_id, comp in self._registry.list_components():
-            class_name = comp.__class__.__name__
-            
-            for category, patterns in class_patterns.items():
-                if any(pattern in class_name for pattern in patterns):
-                    categories[category].append((comp_id, comp))
-                    break
-        
-        return categories
-
-    def _format_stream_properties(self, stream, label: str = "Stream", indent: str = "      ") -> None:
-        """
-        Format and print stream thermodynamic properties.
-        
-        Displays: Composition, Phase, T, P, m_dot, H, ρ for a complete
-        thermodynamic state characterization.
-        
-        Args:
-            stream: Stream object with thermodynamic properties
-            label: Description label for the stream
-            indent: Whitespace prefix for formatting
-        """
-        if stream is None:
-            print(f"{indent}{label}: No flow")
-            return
-        
-        # Extract properties (handle both Stream objects and dicts)
-        if hasattr(stream, 'mass_flow_kg_h'):
-            m_dot = stream.mass_flow_kg_h
-            T_k = stream.temperature_k
-            P_pa = stream.pressure_pa
-            composition = stream.composition
-            phase = stream.phase
-            try:
-                h_j_kg = stream.specific_enthalpy_j_kg
-                rho = stream.density_kg_m3
-            except Exception:
-                h_j_kg = 0.0
-                rho = 0.0
+        # Collect all components from registry directly
+        # This avoids AttributeError for missing list collections (e.g. self._electrolyzers)
+        if self._registry:
+            components = {cid: comp for cid, comp in self._registry.list_components()}
         else:
-            # Dict-like access
-            m_dot = stream.get('mass_flow_kg_h', 0.0)
-            T_k = stream.get('temperature_k', 273.15)
-            P_pa = stream.get('pressure_pa', 101325)
-            composition = stream.get('composition', {})
-            phase = stream.get('phase', 'unknown')
-            h_j_kg = stream.get('specific_enthalpy_j_kg', 0.0)
-            rho = stream.get('density_kg_m3', 0.0)
-        
-        if m_dot <= 0:
-            print(f"{indent}{label}: No flow")
-            return
-        
-        # Convert units
-        T_c = T_k - 273.15
-        P_bar = P_pa / 1e5
-        h_kj_kg = h_j_kg / 1000.0
-        m_dot_kg_s = m_dot / 3600.0
-        
-        print(f"{indent}{label}:")
-        print(f"{indent}  ├─ Phase: {phase}")
-        print(f"{indent}  ├─ T: {T_c:.1f}°C ({T_k:.1f} K)")
-        print(f"{indent}  ├─ P: {P_bar:.2f} bar ({P_pa/1000:.1f} kPa)")
-        print(f"{indent}  ├─ ṁ: {m_dot:.2f} kg/h ({m_dot_kg_s:.4f} kg/s)")
-        
-        if h_kj_kg != 0:
-            print(f"{indent}  ├─ H_mix: {h_kj_kg:.2f} kJ/kg ({h_j_kg:.0f} J/kg)")
-        if rho > 0:
-            print(f"{indent}  ├─ ρ: {rho:.4f} kg/m³")
-        
-        # Composition breakdown
-        if composition:
-            comp_parts = []
-            for species, frac in sorted(composition.items(), key=lambda x: -x[1]):
-                if frac > 0.0001:  # Show species > 0.01%
-                    if frac >= 0.01:
-                        comp_parts.append(f"{species}:{frac*100:.2f}%")
-                    else:
-                        comp_parts.append(f"{species}:{frac*1e6:.0f}ppm")
-            print(f"{indent}  └─ Composition: {', '.join(comp_parts)}")
+            components = {}
 
-    def _print_stream_summary_table(self, components_by_type: Dict[str, list]) -> None:
-        """
-        Print a consolidated summary table of all component output streams.
+        # Get topology order
+        topo_order = self._get_topology_order()
         
-        Shows Component | T_out | P_out | H2 Purity | H2O for each component
-        in topology order (following the connection flow).
-        """
-        # Build ordered list by traversing topology connections
-        ordered_comp_ids = self._get_topology_order()
-        
-        if not ordered_comp_ids:
-            # Fallback: just list all components from registry
-            ordered_comp_ids = [comp_id for comp_id, _ in self._registry.list_components()]
-        
-        # Port preferences for each component type
-        port_preferences = {
-            'ExternalH2Source': ['h2_out'],
-            'KnockOutDrum': ['gas_outlet'],
-            'DryCooler': ['fluid_out'],
-            'Chiller': ['fluid_out'],
-            'Coalescer': ['outlet'],
-            'DeoxoReactor': ['outlet'],
-            'ElectricBoiler': ['fluid_out'],  # Added for thermal heater
-            'HeatExchanger': ['fluid_out'],   # Added for heat exchanger
-            'PSA': ['purified_gas_out'],
-            'Compressor': ['outlet', 'h2_out'],
-            'Tank': ['h2_out', 'gas_out'],
-        }
-        
-        # Collect stream data in topology order
-        rows = []
-        for comp_id in ordered_comp_ids:
-            comp = self._registry.get(comp_id)
-            if comp is None:
-                continue
-            
-            class_name = comp.__class__.__name__
-            
-            # Get preferred ports for this component type
-            ports_to_try = port_preferences.get(class_name, [])
-            # Add generic fallbacks
-            ports_to_try += ['fluid_out', 'gas_outlet', 'outlet', 'h2_out', 'purified_gas_out']
-            
-            stream = None
-            if hasattr(comp, 'get_output'):
-                for port in ports_to_try:
-                    try:
-                        stream = comp.get_output(port)
-                        if stream and hasattr(stream, 'mass_flow_kg_h') and stream.mass_flow_kg_h > 0:
-                            break
-                        stream = None
-                    except Exception:
-                        continue
-            
-            if stream and hasattr(stream, 'mass_flow_kg_h') and stream.mass_flow_kg_h > 0:
-                T_c = stream.temperature_k - 273.15
-                P_bar = (stream.pressure_pa / 1e5) if hasattr(stream, 'pressure_pa') else 1.01325
-                
-                # Molecular weights (g/mol)
-                MW_H2 = 2.016    # g/mol
-                MW_H2O = 18.015  # g/mol
-                MW_O2 = 32.0     # g/mol
-                
-                # --- Calculate Total Species Mass (including 'extra' liquid) ---
-                m_dot_main = stream.mass_flow_kg_h
-                
-                # 1. Check for accompanying liquid in 'extra' (e.g. from PEM or Separators)
-                m_dot_extra_liq = 0.0
-                if hasattr(stream, 'extra') and stream.extra:
-                    # Convert kg/s from extra to kg/h
-                    m_dot_extra_liq = stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0
-                
-                # 2. Calculate mass of each species
-                # H2 mass
-                m_h2 = stream.composition.get('H2', 0.0) * m_dot_main
-                
-                # Total Water Mass = Vapor (comp) + Liquid (comp) + Liquid (extra)
-                m_h2o_vapor = stream.composition.get('H2O', 0.0) * m_dot_main
-                m_h2o_liq_comp = stream.composition.get('H2O_liq', 0.0) * m_dot_main
-                
-                # Total water: ALWAYS sum all sources. 'extra' contains entrained liquid 
-                # (e.g., from PEM mist) which is separate from composition-tracked water.
-                m_h2o_total = m_h2o_vapor + m_h2o_liq_comp + m_dot_extra_liq
-                
-                # O2 mass
-                m_o2 = stream.composition.get('O2', 0.0) * m_dot_main
-                
-                # 3. Convert to Moles
-                n_h2 = m_h2 / MW_H2
-                n_h2o = m_h2o_total / MW_H2O
-                n_o2 = m_o2 / MW_O2
-                n_total = n_h2 + n_h2o + n_o2
-                
-                # 4. Calculate Molar fractions (TOTAL including all water)
-                y_h2 = n_h2 / n_total if n_total > 0 else 0
-                y_h2o = n_h2o / n_total if n_total > 0 else 0
-                y_o2 = n_o2 / n_total if n_total > 0 else 0
-                
-                # Format H2O display (TOTAL MOLAR - vapor + liquid)
-                if y_h2o >= 0.01:
-                    h2o_str = f"{y_h2o*100:.2f}%"
-                elif y_h2o > 0:
-                    h2o_str = f"{y_h2o*1e6:.0f} ppm"
-                else:
-                    h2o_str = "0 ppm"
-                
-                # Format O2 display (MOLAR ppm)
-                if y_o2 >= 0.01:
-                    o2_str = f"{y_o2*100:.2f}%"
-                elif y_o2 > 0:
-                    o2_str = f"{y_o2*1e6:.0f} ppm"
-                else:
-                    o2_str = "0 ppm"
-                
-                # Calculate liquid vs vapor percentage of TOTAL STREAM (not just water)
-                # Liquid mass = liquid water only (vapor H2O is NOT liquid)
-                # Total mass = H2 + H2O (all) + O2
-                m_total_stream = m_h2 + m_h2o_total + m_o2
-                
-                if m_total_stream > 1e-9:
-                    # Liquid in stream = H2O_liq (composition) + entrained liquid (extra)
-                    m_liq_only = m_h2o_liq_comp + m_dot_extra_liq
-                    
-                    pct_liq = (m_liq_only / m_total_stream) * 100.0
-                    pct_vap = 100.0 - pct_liq
-                else:
-                    pct_liq = 0.0
-                    pct_vap = 0.0
-                
-                # Calculate total mass (sum of all species)
-                m_total = m_h2 + m_h2o_total + m_o2
-                
-                rows.append({
-                    'id': comp_id,
-                    'T_c': T_c,
-                    'P_bar': P_bar,
-                    'H2_purity': y_h2 * 100,  # Molar purity
-                    'H2_kg_h': m_h2,           # H2 mass flow (kg/h)
-                    'H2O': h2o_str,
-                    'H2O_kg_h': m_h2o_total,   # Total H2O mass flow (kg/h)
-                    'O2': o2_str,
-                    'O2_kg_h': m_o2,           # O2 mass flow (kg/h)
-                    'Total_kg_h': m_total,     # Total mass flow (kg/h)
-                    'pct_liq': pct_liq,
-                    'pct_vap': pct_vap
-                })
-        
-        if not rows:
-            return
-        
-        # Print table (TOTAL Molar - includes entrained liquid)
-        print("\n### Stream Summary Table (Topology Order) - TOTAL MOLAR (Vapor + Liquid)")
-        print("-" * 180)
-        print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>8} | {'H2%':>10} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'Total':>10} | {'%Liq':>7} | {'%Vap':>7}")
-        print("-" * 180)
-        
-        for row in rows:
-            print(f"{row['id']:<18} | {row['T_c']:>5.1f}°C | {row['P_bar']:>6.2f} bar | {row['H2_purity']:>9.4f}% | {row['H2_kg_h']:>8.3f} | {row['H2O']:>9} | {row['H2O_kg_h']:>9.4f} | {row['O2']:>9} | {row['O2_kg_h']:>8.5f} | {row['Total_kg_h']:>10.2f} | {row['pct_liq']:>6.3f}% | {row['pct_vap']:>6.3f}%")
-        
-        print("-" * 180)
+        # New imported logic
+        from h2_plant.reporting.stream_table import print_stream_summary_table
+        print_stream_summary_table(components, topo_order)
 
     def _get_topology_order(self) -> list:
         """

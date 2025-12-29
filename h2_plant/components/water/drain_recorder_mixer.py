@@ -201,11 +201,31 @@ class DrainRecorderMixer(Component):
             mixed_temp_k = weighted_temp_sum / total_mass_kg_h
             outlet_pressure = min_pressure if min_pressure < float('inf') else 101325.0
             
+            # Weighted Composition Mixing
+            mixed_comp = {}
+            # Initialize with zero for all species found
+            all_species = set()
+            for s in self._received_streams.values():
+                all_species.update(s.composition.keys())
+            
+            for species in all_species:
+                total_species_mass = 0.0
+                for source_id, s in self._received_streams.items():
+                    total_species_mass += s.mass_flow_kg_h * s.composition.get(species, 0.0)
+                
+                if total_mass_kg_h > 0:
+                    mixed_comp[species] = total_species_mass / total_mass_kg_h
+            
+            # Normalize
+            total_frac = sum(mixed_comp.values())
+            if total_frac > 0:
+                mixed_comp = {k: v / total_frac for k, v in mixed_comp.items()}
+            
             self.outlet_stream = Stream(
                 mass_flow_kg_h=total_mass_kg_h,
                 temperature_k=mixed_temp_k,
                 pressure_pa=outlet_pressure,
-                composition={'H2O': 1.0},
+                composition=mixed_comp,
                 phase='liquid'
             )
         else:
