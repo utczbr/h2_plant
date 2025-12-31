@@ -36,6 +36,14 @@ from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
 from h2_plant.core.constants import CoalescerConstants, ConversionFactors, HenryConstants
 
+# Import mixture thermodynamics for rigorous density calculations
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
+
 
 class Coalescer(Component):
     """
@@ -294,6 +302,7 @@ class Coalescer(Component):
         # Get compressibility factor Z from LUT or fallback to Z=1 (ideal gas)
         R_UNIV = 8.31446  # J/(mol·K)
         Z = 1.0  # Default ideal gas assumption
+        lut_manager = None
         if hasattr(self, 'registry') and self.registry is not None:
             try:
                 lut_manager = self.registry.get('lut_manager')
@@ -302,11 +311,29 @@ class Coalescer(Component):
             except Exception:
                 pass  # Use Z=1 fallback
         
-        # Compute mixture density via equation of state
-        if in_stream.temperature_k > 0 and M_avg > 0:
-            rho_mix = (in_stream.pressure_pa * M_avg) / (Z * R_UNIV * in_stream.temperature_k)
-        else:
-            rho_mix = in_stream.density_kg_m3  # Fallback to stream property
+        # Compute mixture density: PREFER rigorous mixture thermodynamics (Amagat's Law)
+        # PERFORMANCE: Skip mix_thermo for near-pure streams (>98% single species)
+        rho_mix = 0.0
+        dominant_frac = max(in_stream.composition.values()) if in_stream.composition else 0
+        use_mix_thermo = (dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None and lut_manager is not None)
+        
+        if use_mix_thermo:
+            try:
+                rho_mix = mix_thermo.get_mixture_density(
+                    in_stream.composition, 
+                    in_stream.pressure_pa, 
+                    in_stream.temperature_k, 
+                    lut_manager
+                )
+            except Exception:
+                pass  # Fall through to Z-factor method
+        
+        # Fallback: Z-factor method: ρ = PM / (ZRT)
+        if rho_mix <= 0:
+            if in_stream.temperature_k > 0 and M_avg > 0:
+                rho_mix = (in_stream.pressure_pa * M_avg) / (Z * R_UNIV * in_stream.temperature_k)
+            else:
+                rho_mix = in_stream.density_kg_m3  # Fallback to stream property
         
         if rho_mix <= 0:
             self._reset_outputs()

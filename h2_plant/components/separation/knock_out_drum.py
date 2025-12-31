@@ -37,6 +37,14 @@ from h2_plant.core.constants import GasConstants, HenryConstants
 from h2_plant.optimization.coolprop_lut import CoolPropLUT
 from h2_plant.optimization.numba_ops import solve_rachford_rice_single_condensable
 
+# Import mixture thermodynamics for rigorous density calculations
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -392,24 +400,12 @@ class KnockOutDrum(Component):
                 n_species[species] = n_i
                 n_total_mol_s += n_i
 
-        # IMPORTANT: Capture entrained H2O_liq SEPARATELY from flash calculation.
-        # Entrained liquid from upstream (e.g., chiller or PEM) should be directly captured,
-        # not re-added to flash equilibrium. The KOD physically separates droplets.
+        # IMPORTANT: Capture entrained H2O_liq DIRECTLY from composition.
+        # The upstream component (PEM, Chiller) outputs liquid mass directly in
+        # composition['H2O_liq']. This is the single source of truth for liquid.
         h2o_liq_mass_frac = composition.get('H2O_liq', 0.0)
         m_entrained_liq_kg_h = h2o_liq_mass_frac * m_dot_in_kg_h
-        
-        # ALSO CHECK Stream.extra for entrained liquid from PEM electrolyzer
-        # The PEM outputs liquid mist as 'm_dot_H2O_liq_accomp_kg_s' in extra dict
-        if hasattr(inlet, 'extra') and inlet.extra:
-            m_liq_from_extra_kg_s = inlet.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
-            if m_liq_from_extra_kg_s > 0:
-                m_entrained_liq_kg_h += m_liq_from_extra_kg_s * 3600.0
-                # Store for tracking
-                self._entrained_liq_from_upstream_kg_h = m_liq_from_extra_kg_s * 3600.0
-            else:
-                self._entrained_liq_from_upstream_kg_h = 0.0
-        else:
-            self._entrained_liq_from_upstream_kg_h = 0.0
+        self._entrained_liq_from_upstream_kg_h = m_entrained_liq_kg_h
         
         # Do NOT add H2O_liq to molar count for flash - it's already liquid!
 
@@ -506,6 +502,7 @@ class KnockOutDrum(Component):
 
         # Real gas compressibility factor (Z) - use LUTManager for consistency
         Z = 1.0  # Default ideal gas
+        lut_manager = None
         if hasattr(self, 'registry') and self.registry is not None:
             try:
                 lut_manager = self.registry.get('lut_manager')
@@ -519,11 +516,46 @@ class KnockOutDrum(Component):
             except Exception:
                 Z = 1.0
 
-        # Gas density: ρ = PM / (ZRT)
-        if Z > 0 and T_in > 0:
-            rho_g = (P_out * M_mix) / (Z * R_UNIV * T_in)
-        else:
-            rho_g = 0.0
+        # Gas density: PREFER rigorous mixture thermodynamics (Amagat's Law)
+        # PERFORMANCE: Skip mix_thermo for near-pure streams (>98% single species)
+        rho_g = 0.0
+        dominant_z = max(z_species.values()) if z_species else 0
+        use_mix_thermo = (dominant_z < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None and lut_manager is not None)
+        
+        if use_mix_thermo:
+            try:
+                # Build vapor composition mass fractions from mole fractions
+                # y_i → x_i: x_i = y_i * M_i / M_mix
+                vapor_comp_mass = {}
+                for species, z_i in z_species.items():
+                    if species in GasConstants.SPECIES_DATA:
+                        mw_i = GasConstants.SPECIES_DATA[species]['molecular_weight'] / 1000.0
+                        if species == 'H2O':
+                            y_i = y_H2O
+                        else:
+                            if z_H2O < 1.0:
+                                y_i = z_i * (1.0 - y_H2O) / (1.0 - z_H2O)
+                            else:
+                                y_i = 0.0
+                        if M_mix > 0:
+                            vapor_comp_mass[species] = y_i * mw_i / M_mix
+                
+                # Normalize
+                total_mass = sum(vapor_comp_mass.values())
+                if total_mass > 0:
+                    vapor_comp_mass = {s: f/total_mass for s, f in vapor_comp_mass.items()}
+                    rho_g = mix_thermo.get_mixture_density(
+                        vapor_comp_mass, P_out, T_in, lut_manager
+                    )
+            except Exception:
+                pass  # Fall through to Z-factor method
+        
+        # Fallback: Z-factor method: ρ = PM / (ZRT)
+        if rho_g <= 0:
+            if Z > 0 and T_in > 0 and M_mix > 0:
+                rho_g = (P_out * M_mix) / (Z * R_UNIV * T_in)
+            else:
+                rho_g = 0.0
 
         self._rho_g = rho_g
 
@@ -567,17 +599,46 @@ class KnockOutDrum(Component):
         self._power_consumption_w = V_dot_g_m3_s * delta_p_pa
 
         # Mass flow rates with separation efficiency applied.
-        # Efficiency < 1.0 means some liquid is carried over as mist.
-        # m_flash_liquid: liquid formed by flash condensation in KOD
-        # m_entrained_liq_kg_h: liquid droplets already present in inlet (from upstream chiller)
+        # UPDATED PHYSICS: Use Mist Carryover Limit (mg/Nm³) instead of fixed efficiency.
+        # This correctly handles bulk liquid separation where 97% efficiency is non-physical.
+        
         m_flash_liquid_kg_h = n_liq_mol_s * mw_h2o * 3600.0
         m_total_liquid_kg_h = m_flash_liquid_kg_h + m_entrained_liq_kg_h
 
-        m_liq_removed_kg_h = m_total_liquid_kg_h * self.separation_efficiency
-        m_liq_carryover_kg_h = m_total_liquid_kg_h - m_liq_removed_kg_h
+        # Calculate Standard Volumetric Flow (Nm³/h) for Mist Limit
+        # Density at STP (0°C, 1 atm)
+        rho_stp = 0.0
+        if self.gas_species == 'H2':
+             rho_stp = 0.08988 # kg/m3
+        elif self.gas_species == 'O2':
+             rho_stp = 1.429 # kg/m3
+        else: # Default air-like
+             rho_stp = 1.29 
+             
+        # m_vap_kg_s is pure vapor mass flow
+        m_vap_kg_h = m_vap_kg_s * 3600.0
+        if rho_stp > 0:
+             Q_gas_nm3_h = m_vap_kg_h / rho_stp
+        else:
+             Q_gas_nm3_h = 0.0
 
-        m_dot_vap_kg_h = m_vap_kg_s * 3600.0
-
+        # MIST LIMIT: 20 mg/Nm³ (Legacy/Industrial Standard)
+        MIST_LIMIT_MG_NM3 = 20.0
+        max_mist_carryover_kg_h = Q_gas_nm3_h * (MIST_LIMIT_MG_NM3 / 1e6)
+        
+        # Apply Logic based on Sizing
+        if self._separation_status == "OK":
+            # Proper gravity separation: Carryover is limited by mist entrainment
+            m_liq_carryover_kg_h = min(m_total_liquid_kg_h, max_mist_carryover_kg_h)
+            m_liq_removed_kg_h = m_total_liquid_kg_h - m_liq_carryover_kg_h
+        else:
+            # Undersized/Flooded: Fallback to poor efficiency (e.g. 50% or fixed factor)
+            # Legacy fallback was implicit; here we penalize significantly
+            m_liq_removed_kg_h = m_total_liquid_kg_h * 0.50 # 50% carryover penalty
+            m_liq_carryover_kg_h = m_total_liquid_kg_h - m_liq_removed_kg_h
+            
+        m_dot_vap_kg_h = m_vap_kg_h
+        
         # Gas outlet includes vapor and any liquid carryover as mist
         m_gas_out_total = m_dot_vap_kg_h + m_liq_carryover_kg_h
         
@@ -658,11 +719,11 @@ class KnockOutDrum(Component):
         # Drain stream: simplify composition if dissolved gas is negligible
         m_drain_total = m_liq_removed_kg_h + dissolved_gas_kg_h
         if dissolved_gas_kg_h < 1e-9 * m_liq_removed_kg_h or m_liq_removed_kg_h <= 0:
-            drain_comp = {'H2O': 1.0}
+            drain_comp = {'H2O_liq': 1.0}
         else:
             h2o_frac = m_liq_removed_kg_h / m_drain_total
             gas_frac = dissolved_gas_kg_h / m_drain_total
-            drain_comp = {'H2O': h2o_frac, self.gas_species: gas_frac}
+            drain_comp = {'H2O_liq': h2o_frac, self.gas_species: gas_frac}
 
         self._liquid_drain_stream = Stream(
             mass_flow_kg_h=m_drain_total,

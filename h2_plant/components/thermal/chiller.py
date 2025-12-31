@@ -42,7 +42,16 @@ from h2_plant.core.constants import GasConstants
 from h2_plant.models.thermal_inertia import ThermalInertiaModel
 from h2_plant.models.flow_dynamics import PumpFlowDynamics
 from h2_plant.optimization.coolprop_lut import CoolPropLUT
+from h2_plant.optimization import numba_ops
 import math
+
+# Import mixture thermodynamics for rigorous enthalpy calculations
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
 
 
 class Chiller(Component):
@@ -160,16 +169,69 @@ class Chiller(Component):
 
     def _calculate_cooling_fallback(self) -> float:
         """
-        Calculate cooling load using gas-specific constant Cp.
+        Calculate cooling load using mixture enthalpy (preferred) or constant Cp.
 
-        Uses H₂ Cp (14,300 J/kg·K) or O₂ Cp (918 J/kg·K) based on
-        dominant gas species in the stream composition.
+        Priority:
+        1. Rigorous: mix_thermo.get_mixture_enthalpy for inlet/outlet
+        2. Fallback: Gas-specific constant Cp (H2: 14300, O2: 918 J/kg·K)
 
         Returns:
             float: Cooling load in Watts (positive = heat removed).
         """
         composition = self.inlet_stream.composition
+        mass_flow_kg_s = self.inlet_stream.mass_flow_kg_h / 3600.0
+        T_in = self.inlet_stream.temperature_k
+        P_in = self.inlet_stream.pressure_pa
+        T_target = self.target_temp_k
+        
+        # PERFORMANCE: Only use rigorous mix_thermo for true multi-species streams
+        dominant_frac = max(composition.values()) if composition else 0
+        use_mix_thermo = (dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None)
+        
+        if use_mix_thermo:
+            try:
+                lut_manager = None
+                if hasattr(self, 'registry') and self.registry is not None:
+                    lut_manager = self.registry.get('lut_manager')
+                
+                if (lut_manager is not None and 
+                    lut_manager.stacked_H is not None and 
+                    lut_manager._pressure_grid is not None):
+                    
+                    # optimized JIT path
+                    mass_fracs_arr, _, _, _ = self.inlet_stream.get_composition_arrays()
+                    
+                    # Import numba_ops locally if not at top level (or assume it's available via module)
+                    # Ideally import at top, but for minimal diff we use the module reference
+                    from h2_plant.optimization import numba_ops # Ensure imported
+                    
+                    h_in = numba_ops.get_mix_enthalpy_fast_jit(
+                        P_in, T_in, mass_fracs_arr, 
+                        lut_manager.stacked_H, lut_manager._pressure_grid, lut_manager._temperature_grid
+                    )
+                    h_out = numba_ops.get_mix_enthalpy_fast_jit(
+                        P_in, T_target, mass_fracs_arr, 
+                        lut_manager.stacked_H, lut_manager._pressure_grid, lut_manager._temperature_grid
+                    )
 
+                    Q_dot_W = mass_flow_kg_s * (h_in - h_out)
+                    return Q_dot_W
+                
+                elif lut_manager is not None:
+                    h_in = mix_thermo.get_mixture_enthalpy(composition, P_in, T_in, lut_manager)
+                    h_out = mix_thermo.get_mixture_enthalpy(composition, P_in, T_target, lut_manager)
+                    
+                    Q_dot_W = mass_flow_kg_s * (h_in - h_out)
+                    
+                    self.logger.debug(
+                        f"Chiller {self.component_id} using mixture enthalpy: "
+                        f"h_in={h_in/1000:.1f} kJ/kg, h_out={h_out/1000:.1f} kJ/kg"
+                    )
+                    return Q_dot_W
+            except Exception as e:
+                self.logger.debug(f"Mixture enthalpy failed, using Cp fallback: {e}")
+        
+        # Fallback to constant Cp
         h2_fraction = composition.get('H2', 0.0)
         o2_fraction = composition.get('O2', 0.0)
 
@@ -180,8 +242,7 @@ class Chiller(Component):
             Cp_avg = GasConstants.CP_O2_AVG
             gas_type = 'O2'
 
-        mass_flow_kg_s = self.inlet_stream.mass_flow_kg_h / 3600.0
-        delta_T = self.inlet_stream.temperature_k - self.target_temp_k
+        delta_T = T_in - T_target
 
         # Q = ṁ × Cp × ΔT (positive when cooling: T_in > T_target)
         Q_dot_W = mass_flow_kg_s * Cp_avg * delta_T
@@ -273,8 +334,37 @@ class Chiller(Component):
                 f"Capped at {self.cooling_capacity_kw} kW"
             )
             # Recalculate outlet temperature with limited Q
+            # Use LUT-derived Cp or fallback to estimated constant
             comp = self.inlet_stream.composition
-            Cp_est = 14300.0 if comp.get('H2', 0) > 0.5 else 918.0
+            T_in = self.inlet_stream.temperature_k
+            P_in = self.inlet_stream.pressure_pa
+            
+            Cp_est = 14300.0 if comp.get('H2', 0) > 0.5 else 918.0  # Default
+            
+            # PERFORMANCE: Only use rigorous mix_thermo for multi-species streams
+            dominant_frac = max(comp.values()) if comp else 0
+            if dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None:
+                try:
+                    lut_manager = None
+                    if hasattr(self, 'registry') and self.registry is not None:
+                        lut_manager = self.registry.get('lut_manager')
+                    if (lut_manager is not None and 
+                        lut_manager.stacked_C is not None):
+                         
+                        # JIT Path
+                        from h2_plant.optimization import numba_ops
+                        mass_fracs_arr, _, _, _ = self.inlet_stream.get_composition_arrays()
+                        Cp_est = numba_ops.get_mix_cp_jit(
+                            P_in, T_in, mass_fracs_arr, 
+                            lut_manager.stacked_C, lut_manager._pressure_grid, lut_manager._temperature_grid
+                        )
+                    elif lut_manager is not None:
+                        h_t1 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in, lut_manager)
+                        h_t2 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in - 1.0, lut_manager)
+                        Cp_est = h_t1 - h_t2  # dH/dT
+                except Exception:
+                    pass
+            
             delta_T_real = Q_dot_W / (mass_flow_kg_s * Cp_est)
             final_temp_k = self.inlet_stream.temperature_k - delta_T_real
 

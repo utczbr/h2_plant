@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>H2 Plant Simulation Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { background: #fff; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .kpi-value { font-size: 24px; font-weight: bold; color: #2c3e50; }
+        .kpi-label { color: #7f8c8d; font-size: 14px; }
+        h1 { margin: 0; color: #2c3e50; }
+        h2 { color: #34495e; margin-top: 0; }
+        canvas { width: 100% !important; height: 300px !important; }
+        #sankeyChart { width: 100%; height: 500px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background-color: #f8f9fa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Hydrogen Plant Simulation Results</h1>
+            <p id="sim-info">Simulation completed successfully.</p>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <div class="kpi-label">Total H2 Production</div>
+                <div class="kpi-value" id="kpi-production">-</div>
+            </div>
+            <div class="card">
+                <div class="kpi-label">Total Demand</div>
+                <div class="kpi-value" id="kpi-demand">-</div>
+            </div>
+            <div class="card">
+                <div class="kpi-label">Total Cost</div>
+                <div class="kpi-value" id="kpi-cost">-</div>
+            </div>
+            <div class="card">
+                <div class="kpi-label">Avg Cost / kg H2</div>
+                <div class="kpi-value" id="kpi-avg-cost">-</div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 20px;">
+            <h2>System Flow (Sankey)</h2>
+            <div id="sankeyChart"></div>
+        </div>
+
+        <div class="card" style="margin-bottom: 20px;">
+            <h2>Production vs Demand</h2>
+            <canvas id="productionChart"></canvas>
+        </div>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Storage Levels</h2>
+                <canvas id="storageChart"></canvas>
+            </div>
+            <div class="card">
+                <h2>Energy Price</h2>
+                <canvas id="priceChart"></canvas>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom: 20px;">
+            <h2>Flow Matrix</h2>
+            <div id="flowMatrixContainer" style="overflow-x: auto;"></div>
+        </div>
+
+        <div class="header">
+            <h1>Advanced Analytics (Generated Graphs)</h1>
+        </div>
+
+        <div class="grid" style="grid-template-columns: 1fr;">
+            <!-- Generated Plotly Graphs -->
+            <div class="card">
+                <h3>Total Production Stacked</h3>
+                <iframe src="graphs/total_h2_production_stacked.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+            <div class="card">
+                <h3>Cumulative Production</h3>
+                <iframe src="graphs/cumulative_h2_production.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+            <div class="card">
+                <h3>PEM Performance Surface</h3>
+                <iframe src="graphs/pem_performance_surface.html" style="border:none; width:100%; height:800px;"></iframe>
+            </div>
+             <div class="card">
+                <h3>Grid Interaction Phase Portrait</h3>
+                <iframe src="graphs/grid_interaction_phase_portrait.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+            <div class="card">
+                <h3>Dispatch Strategy</h3>
+                <iframe src="graphs/dispatch_strategy_stacked.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+            <div class="card">
+                <h3>Energy Price</h3>
+                <iframe src="graphs/energy_price_over_time.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+             <div class="card">
+                <h3>Wind Utilization</h3>
+                <iframe src="graphs/wind_utilization_duration_curve.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+             <div class="card">
+                <h3>Power Consumption Breakdown</h3>
+                <iframe src="graphs/power_consumption_breakdown_pie.html" style="border:none; width:100%; height:600px;"></iframe>
+            </div>
+            
+            <div class="grid">
+                <div class="card">
+                    <h3>PEM Production</h3>
+                    <iframe src="graphs/pem_h2_production_over_time.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+                <div class="card">
+                    <h3>SOEC Production</h3>
+                    <iframe src="graphs/soec_h2_production_over_time.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>PEM Voltage</h3>
+                    <iframe src="graphs/pem_cell_voltage_over_time.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+                <div class="card">
+                    <h3>PEM Efficiency</h3>
+                    <iframe src="graphs/pem_efficiency_over_time.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>SOEC Active Modules</h3>
+                    <iframe src="graphs/soec_active_modules_over_time.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+                <div class="card">
+                    <h3>Ramp Rate Stress</h3>
+                    <iframe src="graphs/ramp_rate_stress_distribution.html" style="border:none; width:100%; height:500px;"></iframe>
+                </div>
+            </div>
+
+            <div class="header">
+                <h2>Thermal & Separation (Integrated)</h2>
+            </div>
+            <div class="grid">
+                 <div class="card">
+                    <h3>Total Water Removal</h3>
+                    <!-- Matplotlib generates PNGs, so we use img tag -->
+                    <img src="graphs/water_removal_total.png" alt="Total Water Removal" style="width:100%; height:auto;">
+                </div>
+                 <div class="card">
+                    <h3>Discarded Drains Overview</h3>
+                    <img src="graphs/drains_discarded.png" alt="Discarded Drains" style="width:100%; height:auto;">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Embedded Simulation Data
+        const data = {"simulation": {"start_hour": 0, "end_hour": 1.0, "duration_hours": 1.0, "timestep_hours": 0.016666666666666666, "execution_time_seconds": 0.2874324321746826}, "final_states": {"lut_manager": {"component_id": "lut_manager", "initialized": true, "lut_config": {"pressure_min": 5000.0, "pressure_max": 100000000.0, "pressure_points": 2000, "temperature_min": 273.15, "temperature_max": 1200.0, "temperature_points": 2000, "entropy_min": 0.0, "entropy_max": 100000.0, "entropy_points": 500, "properties": ["D", "H", "S", "C", "Z"], "fluids": ["H2", "O2", "N2", "CO2", "CH4", "H2O"], "interpolation": "linear", "cache_dir": "/home/stuart/Documentos/Planta Hidrogenio/.h2_plant/lut_cache"}, "luts_loaded_fluids": ["H2", "O2", "N2", "CO2", "CH4", "H2O"]}, "SOEC_Cluster": {"component_id": "SOEC_Cluster", "initialized": true, "total_power_mw": 10.0, "active_modules": 6, "total_h2_kg": 249.4577777777781, "module_powers": [1.92, 1.92, 1.92, 1.92, 1.92, 0.40000000000000036], "module_states": [4, 4, 4, 4, 4, 3], "last_water_output_kg": 8.888888888888893}, "SOEC_H2_Interchanger_1": {"component_id": "SOEC_H2_Interchanger_1", "initialized": true, "q_transferred_kw": 309.5112347871055, "hot_out_temp_k": 331.2825345202252, "cold_out_temp_k": 368.15}, "SOEC_H2_DryCooler_1": {"component_id": "SOEC_H2_DryCooler_1", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 32.04662327759791, "dc_duty_kw": 32.046623277597625, "heat_rejected_kw": 32.046623277597625, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 32.8731355583426, "glycol_hot_c": 34.69918154714492, "glycol_cold_c": 32.857421588662305, "tqc_effectiveness": 0.999378282909246, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 163.42957271317803}, "SOEC_H2_KOD_1": {"component_id": "SOEC_H2_KOD_1", "initialized": true, "rho_g": 0.10206431842545721, "v_max": 7.918279966019091, "v_real": 2.186314755648197, "separation_status": "OK", "power_consumption_w": 5494.808299823472, "dissolved_gas_kg_h": 0.0005398968328457037, "total_drain_removed_kg": 356.22170383595505, "diameter_m": 0.8, "delta_p_bar": 0.05, "gas_species": "H2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 0.0005482576680640785, "dissolved_gas_out_kg_h": 0.0005398968328457037, "dissolved_gas_in": 0.0005482576680640785, "dissolved_gas_out": 0.0005398968328457037, "water_removed_kg_h": 396.96423638901166, "drain_temp_k": 306.0231355583426, "drain_pressure_bar": 0.9, "dissolved_gas_ppm": 1.3600641653688492, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 189.17608014806484}, "SOEC_H2_Chiller_1": {"component_id": "SOEC_H2_Chiller_1", "initialized": true, "cooling_load_kw": 31.55426694637381, "sensible_heat_kw": 0.0, "latent_heat_kw": 72.81511200559684, "outlet_temp_k": 277.15, "outlet_pressure_bar": 0.7, "heat_rejected_kw": 39.44283368296726, "electrical_power_kw": 7.888566736593453, "timestep_energy_kwh": 0.13147611227655753, "cooling_water_flow_kg_h": 3396.9904607340227, "cop": 4.0, "pressure_drop_bar": 0.2, "outlet_o2_ppm_mol": 189.17608014806484}, "SOEC_H2_KOD_2": {"component_id": "SOEC_H2_KOD_2", "initialized": true, "rho_g": 0.06248648138882044, "v_max": 10.120066881416808, "v_real": 4.666394938903058, "separation_status": "OK", "power_consumption_w": 6596.960426462898, "dissolved_gas_kg_h": 9.259990150698874e-05, "total_drain_removed_kg": 87.2620495625237, "diameter_m": 0.6, "delta_p_bar": 0.05, "gas_species": "H2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 9.97872440578663e-05, "dissolved_gas_out_kg_h": 9.259990150698874e-05, "dissolved_gas_in": 9.97872440578663e-05, "dissolved_gas_out": 9.259990150698874e-05, "water_removed_kg_h": 107.01753467455598, "drain_temp_k": 277.15, "drain_pressure_bar": 0.65, "dissolved_gas_ppm": 0.8652778424450558, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 197.5669367914699}, "SOEC_H2_Cyclone_1": {"component_id": "SOEC_H2_Cyclone_1", "initialized": true, "d50_microns": 3.6165574161222964, "pressure_drop_mbar": 0.7292051234894298, "pressure_drop_pa": 72.92051234894298, "active_tubes": 30, "axial_velocity_ms": 21.917382528647035, "tangential_velocity_ms": 21.917382528647032, "separation_efficiency": 0.99, "element_diameter_mm": 50.0, "vane_angle_deg": 45.0, "gas_species": "H2", "outlet_o2_ppm_mol": 197.5722907637713, "dissolved_gas_in_kg_h": 5.7147480532879845e-08, "dissolved_gas_out_kg_h": 5.6512520237848854e-08, "dissolved_gas_in": 5.7147480532879845e-08, "dissolved_gas_out": 5.6512520237848854e-08, "water_removed_kg_h": 0.06538299523059402, "drain_temp_k": 277.15, "drain_pressure_bar": 0.6492707948765105, "dissolved_gas_ppm": 0.8643305501459424}, "SOEC_H2_Compressor_S1": {"component_id": "SOEC_H2_Compressor_S1", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 4.946659603171898, "actual_mass_transferred_kg": 4.946659603171898, "outlet_o2_ppm_mol": 197.5722907637713, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.98480179125022, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 242.22772173660115, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 0.6492707948765105, "outlet_pressure_bar": 1.8857831151567033, "target_outlet_pressure_bar": 200.0, "inlet_temperature_c": 4.0, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_H2_Intercooler_1": {"component_id": "SOEC_H2_Intercooler_1", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 107.55916118482162, "dc_duty_kw": 107.55916118482116, "heat_rejected_kw": 107.55916118482116, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 34.89296147207517, "glycol_hot_c": 41.05935394757819, "glycol_cold_c": 34.87779295994477, "tqc_effectiveness": 0.999848477021664, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 197.5722907637713}, "SOEC_H2_Compressor_S2": {"component_id": "SOEC_H2_Compressor_S2", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 4.946659603171898, "actual_mass_transferred_kg": 4.946659603171898, "outlet_o2_ppm_mol": 197.5722907637713, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.9860323000408, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 237.28106213342926, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 1.8357831151567032, "outlet_pressure_bar": 3.6651494361914043, "target_outlet_pressure_bar": 200.0, "inlet_temperature_c": 34.89296147207517, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_H2_Intercooler_2": {"component_id": "SOEC_H2_Intercooler_2", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 107.56044635011823, "dc_duty_kw": 107.56044635011801, "heat_rejected_kw": 107.56044635011801, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 34.892996038481726, "glycol_hot_c": 41.05946219281901, "glycol_cold_c": 34.877827345111086, "tqc_effectiveness": 0.999848477021664, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 197.5722907637713}, "SOEC_H2_Cyclone_2": {"component_id": "SOEC_H2_Cyclone_2", "initialized": true, "d50_microns": 3.6153768706513705, "pressure_drop_mbar": 3.6493294079465204, "pressure_drop_pa": 364.93294079465204, "active_tubes": 6, "axial_velocity_ms": 21.937242630513236, "tangential_velocity_ms": 21.937242630513232, "separation_efficiency": 0.99, "element_diameter_mm": 50.0, "vane_angle_deg": 45.0, "gas_species": "H2", "outlet_o2_ppm_mol": 197.57234430495978, "dissolved_gas_in_kg_h": 3.808778010870284e-09, "dissolved_gas_out_kg_h": 3.766883879664132e-09, "dissolved_gas_in": 3.808778010870284e-09, "dissolved_gas_out": 3.766883879664132e-09, "water_removed_kg_h": 0.0006538331540646238, "drain_temp_k": 308.0429960384817, "drain_pressure_bar": 3.6115001067834576, "dissolved_gas_ppm": 5.7612310667437026}, "SOEC_H2_Compressor_S3": {"component_id": "SOEC_H2_Compressor_S3", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 4.946648706015444, "actual_mass_transferred_kg": 4.946648706015444, "outlet_o2_ppm_mol": 197.57234430495978, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.96376778112023, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 227.36325120159566, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 3.6115001067834576, "outlet_pressure_bar": 7.20748093978913, "target_outlet_pressure_bar": 200.0, "inlet_temperature_c": 34.892996038481726, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_H2_Intercooler_3": {"component_id": "SOEC_H2_Intercooler_3", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 107.53717524774002, "dc_duty_kw": 107.53717524774028, "heat_rejected_kw": 107.53717524774028, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 34.89237010691164, "glycol_hot_c": 41.057502144498926, "glycol_cold_c": 34.87720471646787, "tqc_effectiveness": 0.9998484772582913, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 197.57234430495978}, "SOEC_H2_Cyclone_3": {"component_id": "SOEC_H2_Cyclone_3", "initialized": true, "d50_microns": 4.074118809665991, "pressure_drop_mbar": 4.311895613591752, "pressure_drop_pa": 431.18956135917523, "active_tubes": 4, "axial_velocity_ms": 17.280088056147736, "tangential_velocity_ms": 17.280088056147733, "separation_efficiency": 0.99, "element_diameter_mm": 50.0, "vane_angle_deg": 45.0, "gas_species": "H2", "outlet_o2_ppm_mol": 198.4475917041735, "dissolved_gas_in_kg_h": 0.0001232765047259475, "dissolved_gas_out_kg_h": 0.00012196475875242653, "dissolved_gas_in": 0.0001232765047259475, "dissolved_gas_out": 0.00012196475875242653, "water_removed_kg_h": 10.641244917817588, "drain_temp_k": 308.0423701069116, "drain_pressure_bar": 7.153169044175539, "dissolved_gas_ppm": 11.461512228537286}, "SOEC_H2_Compressor_S4": {"component_id": "SOEC_H2_Compressor_S4", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 4.769296656797797, "actual_mass_transferred_kg": 4.769296656797797, "outlet_o2_ppm_mol": 198.4475917041735, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.96060818021715, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 209.99691063731962, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 7.153169044175539, "outlet_pressure_bar": 14.156578737700661, "target_outlet_pressure_bar": 200.0, "inlet_temperature_c": 34.89237010691164, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_H2_Intercooler_4": {"component_id": "SOEC_H2_Intercooler_4", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 106.9972422995594, "dc_duty_kw": 106.99724229955889, "heat_rejected_kw": 106.99724229955889, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 34.87721857811215, "glycol_hot_c": 41.012025370306446, "glycol_cold_c": 34.86275857148121, "tqc_effectiveness": 0.999855541285977, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 198.4475917041735}, "SOEC_H2_Cyclone_4": {"component_id": "SOEC_H2_Cyclone_4", "initialized": true, "d50_microns": 3.9722333591520766, "pressure_drop_mbar": 9.076774270232178, "pressure_drop_pa": 907.6774270232179, "active_tubes": 2, "axial_velocity_ms": 18.18776156836694, "tangential_velocity_ms": 18.187761568366938, "separation_efficiency": 0.99, "element_diameter_mm": 50.0, "vane_angle_deg": 45.0, "gas_species": "H2", "outlet_o2_ppm_mol": 199.20957372405056, "dissolved_gas_in_kg_h": 0.00021057109719639788, "dissolved_gas_out_kg_h": 0.00020832317058018014, "dissolved_gas_in": 0.00021057109719639788, "dissolved_gas_out": 0.00020832317058018014, "water_removed_kg_h": 9.188130390897157, "drain_temp_k": 308.0272185781121, "drain_pressure_bar": 14.097501963430428, "dissolved_gas_ppm": 22.673075121634056}, "SOEC_H2_Compressor_S5": {"component_id": "SOEC_H2_Compressor_S5", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 4.616164622335688, "actual_mass_transferred_kg": 4.616164622335688, "outlet_o2_ppm_mol": 199.20957372405056, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.9587795352606, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 194.24709534953814, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 14.097501963430428, "outlet_pressure_bar": 27.690714405313386, "target_outlet_pressure_bar": 200.0, "inlet_temperature_c": 34.87721857811215, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_H2_Intercooler_5": {"component_id": "SOEC_H2_Intercooler_5", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 106.53434617201825, "dc_duty_kw": 106.534346172018, "heat_rejected_kw": 106.534346172018, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 34.86424864876011, "glycol_hot_c": 40.973037153829466, "glycol_cold_c": 34.85037358072498, "tqc_effectiveness": 0.9998613995707671, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 199.20957372405056}, "SOEC_H2_Cyclone_5": {"component_id": "SOEC_H2_Cyclone_5", "initialized": true, "d50_microns": 3.8859424652544856, "pressure_drop_mbar": 18.988555304643143, "pressure_drop_pa": 1898.8555304643141, "active_tubes": 1, "axial_velocity_ms": 19.024342025405716, "tangential_velocity_ms": 19.024342025405712, "separation_efficiency": 0.99, "element_diameter_mm": 50.0, "vane_angle_deg": 45.0, "gas_species": "H2", "outlet_o2_ppm_mol": 199.59738117216858, "dissolved_gas_in_kg_h": 0.0002091680685653628, "dissolved_gas_out_kg_h": 0.00020693006187007246, "dissolved_gas_in": 0.0002091680685653628, "dissolved_gas_out": 0.00020693006187007246, "water_removed_kg_h": 4.64942287923332, "drain_temp_k": 308.0142486487601, "drain_pressure_bar": 27.621725850008744, "dissolved_gas_ppm": 44.50661237856574}, "SOEC_H2_Compressor_S6": {"component_id": "SOEC_H2_Compressor_S6", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 4.538677689849497, "actual_mass_transferred_kg": 4.538677689849497, "outlet_o2_ppm_mol": 199.59738117216858, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 91.61555488961403, "outlet_temperature_isentropic_c": 31.97708501155688, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 182.01300506549353, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 27.621725850008744, "outlet_pressure_bar": 41.0, "target_outlet_pressure_bar": 41.0, "inlet_temperature_c": 34.86424864876011, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_H2_Intercooler_6": {"component_id": "SOEC_H2_Intercooler_6", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 61.55130912780238, "dc_duty_kw": 61.55130912780244, "heat_rejected_kw": 61.55130912780244, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 33.65469996757582, "glycol_hot_c": 37.18426407553886, "glycol_cold_c": 33.64683251646977, "tqc_effectiveness": 0.9998642811022229, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 199.59738117216858}, "SOEC_H2_Deoxo_1": {"component_id": "SOEC_H2_Deoxo_1", "initialized": true, "conversion_o2_percent": 99.99999997810703, "conversion_percent": 99.99999997810703, "peak_temperature_c": 35.61653102519307, "t_peak_total_c": 35.61653102519307, "pressure_drop_mbar": 247.35228448481502, "inlet_temp_c": 33.65469996757582, "inlet_pressure_bar": 40.95, "mass_flow_kg_h": 272.32066139096986, "outlet_o2_ppm_mol": 4.370652665365242e-08, "delta_t_ad_k": 1.6378120391872024, "delta_t_real_k": 1.9618310576172462, "t_zone_outlets_c": [35.61653102519307], "o2_in_kg_h": 0.8467287966030771, "o2_out_slip_kg_h": 1.8537415208142905e-10, "o2_consumed_kg_h": 0.8467287964177029, "h2_consumed_kg_h": 0.10668782834863057, "h2o_generated_kg_h": 0.9533637042165575}, "SOEC_H2_Chiller_2": {"component_id": "SOEC_H2_Chiller_2", "initialized": true, "cooling_load_kw": 33.620129934190075, "sensible_heat_kw": 31.24164518514104, "latent_heat_kw": 2.3784847490490364, "outlet_temp_k": 277.15, "outlet_pressure_bar": 40.50264771551519, "heat_rejected_kw": 42.02516241773759, "electrical_power_kw": 8.405032483547519, "timestep_energy_kwh": 0.14008387472579198, "cooling_water_flow_kg_h": 3619.3919785611324, "cop": 4.0, "pressure_drop_bar": 0.2, "outlet_o2_ppm_mol": 4.370652665365242e-08}, "SOEC_H2_Coalescer_2": {"component_id": "SOEC_H2_Coalescer_2", "initialized": true, "d_shell_m": 0.3, "l_elem_m": 1.0, "gas_type": "H2", "total_liquid_removed_kg": 3.1044194161048737, "total_drain_removed_kg": 3.1046050110638266, "step_gas_dissolved_kg_h": 0.00028187703723821787, "delta_p_bar": 0.49891202427113085, "power_loss_w": 1042.7452214933235, "outlet_flow_kg_h": 267.1445471273244, "drain_flow_kg_h": 5.176114263645419, "dissolved_gas_in_kg_h": 0.0002882672503217083, "dissolved_gas_out_kg_h": 0.00028187703723821787, "dissolved_gas_in": 0.0002882672503217083, "dissolved_gas_out": 0.00028187703723821787, "water_removed_kg_h": 5.176114263645419, "drain_temp_k": 277.15, "drain_pressure_bar": 40.00373569124406, "dissolved_gas_ppm": 54.45726714689994, "outlet_o2_ppm_mol": 4.380143613913507e-08}, "SOEC_H2_ElectricBoiler_PSA": {"component_id": "SOEC_H2_ElectricBoiler_PSA", "initialized": true, "power_input_w": 38598.33941524493, "power_input_kw": 38.59833941524493, "outlet_temp_c": 39.75766767566938, "outlet_temp_k": 312.90766767566936, "vapor_fraction": 0.0, "phase": "gas", "total_energy_kwh": 23.882242599512544, "target_temp_c": 40.0}, "SOEC_H2_PSA_1": {"component_id": "SOEC_H2_PSA_1", "initialized": true, "product_flow_kg_h": 239.9135365072234, "tail_gas_flow_kg_h": 27.231010620101017, "cycle_position": 0.0, "power_consumption_kw": 84.86311071215734, "outlet_o2_ppm_mol": 9.943295853020183e-10, "h2_in_kg_h": 266.5572675893311, "h2_product_kg_h": 239.901540830398, "h2_tail_loss_kg_h": 26.6557267589331, "h2_recovery_actual": 0.9}, "SOEC_O2_Drycooler_1": {"component_id": "SOEC_O2_Drycooler_1", "initialized": true, "fluid_type": "O2", "tqc_duty_kw": 52.937015025078786, "dc_duty_kw": 52.937015025078665, "heat_rejected_kw": 52.937015025078665, "fan_power_kw": 2.416326530612245, "outlet_temp_c": 54.3388727829697, "glycol_hot_c": 69.51643700969572, "glycol_cold_c": 54.304651082948965, "tqc_effectiveness": 0.9996497100383988, "dc_effectiveness": 0.405469899042263, "outlet_o2_ppm_mol": 996000.0}, "SOEC_O2_compressor_1": {"component_id": "SOEC_O2_compressor_1", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 8.333333333333334, "actual_mass_transferred_kg": 8.333333333333334, "outlet_o2_ppm_mol": 996000.0, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.91207350569044, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 476.83243807871446, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 0.95, "outlet_pressure_bar": 1.617529296875, "target_outlet_pressure_bar": 2.0, "inlet_temperature_c": 54.3388727829697, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_O2_Drycooler_2": {"component_id": "SOEC_O2_Drycooler_2", "initialized": true, "fluid_type": "O2", "tqc_duty_kw": 45.39881651193961, "dc_duty_kw": 45.398816511939394, "heat_rejected_kw": 45.398816511939394, "fan_power_kw": 2.416326530612245, "outlet_temp_c": 51.15783098229366, "glycol_hot_c": 64.17411936011172, "glycol_cold_c": 51.12848243139348, "tqc_effectiveness": 0.9996497100383988, "dc_effectiveness": 0.405469899042263, "outlet_o2_ppm_mol": 996000.0}, "SOEC_O2_compressor_2": {"component_id": "SOEC_O2_compressor_2", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 8.333333333333334, "actual_mass_transferred_kg": 8.333333333333334, "outlet_o2_ppm_mol": 996000.0, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.9803641676029, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 468.49910474538115, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 1.567529296875, "outlet_pressure_bar": 2.735709023475647, "target_outlet_pressure_bar": 5.0, "inlet_temperature_c": 51.15783098229366, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_O2_Drycooler_3": {"component_id": "SOEC_O2_Drycooler_3", "initialized": true, "fluid_type": "O2", "tqc_duty_kw": 45.42894237690441, "dc_duty_kw": 45.4289423769016, "heat_rejected_kw": 45.4289423769016, "fan_power_kw": 2.416326530612245, "outlet_temp_c": 51.170543785698044, "glycol_hot_c": 64.19546954607671, "glycol_cold_c": 51.141175759610746, "tqc_effectiveness": 0.9996497100383988, "dc_effectiveness": 0.405469899042263, "outlet_o2_ppm_mol": 996000.0}, "SOEC_O2_compressor_3": {"component_id": "SOEC_O2_compressor_3", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 8.333333333333334, "actual_mass_transferred_kg": 8.333333333333334, "outlet_o2_ppm_mol": 996000.0, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.93789213543278, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 460.16577141204783, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 2.685709023475647, "outlet_pressure_bar": 4.685710462369025, "target_outlet_pressure_bar": 10.0, "inlet_temperature_c": 51.170543785698044, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "SOEC_O2_Drycooler_4": {"component_id": "SOEC_O2_Drycooler_4", "initialized": true, "fluid_type": "O2", "tqc_duty_kw": 45.41020618853266, "dc_duty_kw": 45.41020618851374, "heat_rejected_kw": 45.41020618851374, "fan_power_kw": 2.416326530612245, "outlet_temp_c": 51.16263730799278, "glycol_hot_c": 64.1821912184052, "glycol_cold_c": 51.13328139411965, "tqc_effectiveness": 0.9996497100383988, "dc_effectiveness": 0.405469899042263, "outlet_o2_ppm_mol": 996000.0}, "SOEC_O2_compressor_4": {"component_id": "SOEC_O2_compressor_4", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 8.333333333333334, "actual_mass_transferred_kg": 8.333333333333334, "outlet_o2_ppm_mol": 996000.0, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 134.90142172841064, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 451.8324380787145, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 4.635710462369024, "outlet_pressure_bar": 8.087099849412153, "target_outlet_pressure_bar": 15.0, "inlet_temperature_c": 51.16263730799278, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "Drain_Mixer": {"component_id": "Drain_Mixer", "initialized": true, "outlet_mass_kg_h": 533.7027203435458, "outlet_temp_k": 300.0420709467169, "total_mass_kg": {"SOEC_H2_KOD_1": 349.60563322947155, "SOEC_H2_KOD_2": 85.47842398461444, "SOEC_H2_Cyclone_1": 0.05336117451197499, "SOEC_H2_Cyclone_2": 0.024499246709267234, "SOEC_H2_Cyclone_3": 7.4731304779553644, "SOEC_H2_Cyclone_4": 6.211361952080613, "SOEC_H2_Cyclone_5": 3.001893379545491, "SOEC_H2_Coalescer_2": 3.1046050110638266, "PEM_O2_KOD_1": 0.0, "PEM_O2_KOD_2": 0.0, "PEM_O2_Coalescer_1": 0.0}, "history_length": 60, "outlet_mass_flow_kg_h": 533.7027203435458, "outlet_temperature_c": 26.8920709467169, "outlet_temperature_k": 300.0420709467169, "outlet_pressure_kpa": 64.92707948765106, "dissolved_gas_ppm": 2.719963730488904}, "Makeup_Mixer_1": {"component_id": "Makeup_Mixer_1", "initialized": true, "target_flow_kg_h": 3600.0, "makeup_flow_kg_h": 3066.297279656454}, "Feed_Pump": {"component_id": "Feed_Pump", "initialized": true, "pump_id": "Feed_Pump", "power_fluid_kw": 0.5448671669910787, "power_shaft_kw": 0.5735443863063987, "work_isentropic_kj_kg": 0.435893733592863, "work_real_kj_kg": 0.5448671669910787, "calculated_temperature_c": 21.0603834717856, "flow_rate_kg_s": 1.0, "cumulative_energy_kwh": 0.5590160418997319, "cumulative_water_kg": 3540.0, "specific_energy_kwh_per_kg": 0.00015791413612986776, "eta_is": 0.8, "eta_m": 0.95, "overall_efficiency": 0.76}, "SOEC_Steam_Generator": {"component_id": "SOEC_Steam_Generator", "initialized": true, "power_input_w": 2713911.6685442813, "power_input_kw": 2713.9116685442814, "outlet_temp_c": 151.83072288121105, "outlet_temp_k": 424.980722881211, "vapor_fraction": 0.9999999999999998, "phase": "mixed", "total_energy_kwh": 2579.7141866915686, "target_temp_c": 152.0}, "PEM_Electrolyzer": {"component_id": "PEM_Electrolyzer", "initialized": true, "h2_production_kg_h": 0.0, "o2_production_kg_h": 0.0, "h2_output_kg": 0.0, "o2_output_kg": 0.0, "water_consumption_kg": 0.0, "power_consumption_mw": 0.0, "heat_output_kw": 0.0, "system_efficiency_percent": 0.0, "cell_voltage_v": 0.0, "state": "OFF", "cumulative_h2_kg": 0.0, "cumulative_o2_kg": 0.0, "cumulative_energy_kwh": 0.0, "o2_impurity_ppm_mol": 0.0}, "PEM_H2_KOD_1": {"component_id": "PEM_H2_KOD_1", "initialized": true, "rho_g": 0.0, "v_max": 0.0, "v_real": 0.0, "separation_status": "NO_FLOW", "power_consumption_w": 0.0, "dissolved_gas_kg_h": 0.0, "total_drain_removed_kg": 0.0, "diameter_m": 0.5, "delta_p_bar": 0.05, "gas_species": "H2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_DryCooler_1": {"component_id": "PEM_H2_DryCooler_1", "initialized": true, "fluid_type": "Unknown", "tqc_duty_kw": 0.0, "dc_duty_kw": 0.0, "heat_rejected_kw": 0.0, "fan_power_kw": 0.0, "outlet_temp_c": 0.0, "glycol_hot_c": 30.0, "glycol_cold_c": 30.0, "tqc_effectiveness": 0.0, "dc_effectiveness": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_Chiller_1": {"component_id": "PEM_H2_Chiller_1", "initialized": true, "cooling_load_kw": 0.0, "sensible_heat_kw": 0.0, "latent_heat_kw": 0.0, "outlet_temp_k": 298.15, "outlet_pressure_bar": 1.01325, "heat_rejected_kw": 0.0, "electrical_power_kw": 0.0, "timestep_energy_kwh": 0.0, "cooling_water_flow_kg_h": 0.0, "cop": 4.0, "pressure_drop_bar": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_KOD_2": {"component_id": "PEM_H2_KOD_2", "initialized": true, "rho_g": 0.0, "v_max": 0.0, "v_real": 0.0, "separation_status": "NO_FLOW", "power_consumption_w": 0.0, "dissolved_gas_kg_h": 0.0, "total_drain_removed_kg": 0.0, "diameter_m": 0.5, "delta_p_bar": 0.05, "gas_species": "H2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_Coalescer_1": {"component_id": "PEM_H2_Coalescer_1", "initialized": true, "d_shell_m": 0.32, "l_elem_m": 1.0, "gas_type": "H2", "total_liquid_removed_kg": 0.0, "total_drain_removed_kg": 0.0, "step_gas_dissolved_kg_h": 0.0, "delta_p_bar": 0.0, "power_loss_w": 0.0, "outlet_flow_kg_h": 0.0, "drain_flow_kg_h": 0.0, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_ElectricBoiler_1": {"component_id": "PEM_H2_ElectricBoiler_1", "initialized": true, "power_input_w": 0.0, "power_input_kw": 0.0, "outlet_temp_c": 25.0, "outlet_temp_k": 298.15, "vapor_fraction": 0.0, "phase": "gas", "total_energy_kwh": 0.0, "target_temp_c": 40.0}, "PEM_H2_Deoxo_1": {"component_id": "PEM_H2_Deoxo_1", "initialized": true, "conversion_o2_percent": 0.0, "conversion_percent": 0.0, "peak_temperature_c": -273.15, "t_peak_total_c": -273.15, "pressure_drop_mbar": 0.0, "inlet_temp_c": 0.0, "inlet_pressure_bar": 0.0, "mass_flow_kg_h": 0.0, "outlet_o2_ppm_mol": 0.0, "delta_t_ad_k": 0.0, "delta_t_real_k": 0.0, "t_zone_outlets_c": [], "o2_in_kg_h": 0.0, "o2_out_slip_kg_h": 0.0, "o2_consumed_kg_h": 0.0, "h2_consumed_kg_h": 0.0, "h2o_generated_kg_h": 0.0}, "PEM_H2_Chiller_2": {"component_id": "PEM_H2_Chiller_2", "initialized": true, "cooling_load_kw": 0.0, "sensible_heat_kw": 0.0, "latent_heat_kw": 0.0, "outlet_temp_k": 298.15, "outlet_pressure_bar": 1.01325, "heat_rejected_kw": 0.0, "electrical_power_kw": 0.0, "timestep_energy_kwh": 0.0, "cooling_water_flow_kg_h": 0.0, "cop": 4.0, "pressure_drop_bar": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_KOD_3": {"component_id": "PEM_H2_KOD_3", "initialized": true, "rho_g": 0.0, "v_max": 0.0, "v_real": 0.0, "separation_status": "NO_FLOW", "power_consumption_w": 0.0, "dissolved_gas_kg_h": 0.0, "total_drain_removed_kg": 0.0, "diameter_m": 0.5, "delta_p_bar": 0.05, "gas_species": "H2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_H2_ElectricBoiler_2": {"component_id": "PEM_H2_ElectricBoiler_2", "initialized": true, "power_input_w": 0.0, "power_input_kw": 0.0, "outlet_temp_c": 25.0, "outlet_temp_k": 298.15, "vapor_fraction": 0.0, "phase": "gas", "total_energy_kwh": 0.0, "target_temp_c": 30.0}, "PEM_H2_PSA_1": {"component_id": "PEM_H2_PSA_1", "initialized": true, "product_flow_kg_h": 0.0, "tail_gas_flow_kg_h": 0.0, "cycle_position": 0.0, "power_consumption_kw": 0.0, "outlet_o2_ppm_mol": 0.0, "h2_in_kg_h": 0.0, "h2_product_kg_h": 0.0, "h2_tail_loss_kg_h": 0.0, "h2_recovery_actual": 0.0}, "PEM_O2_KOD_1": {"component_id": "PEM_O2_KOD_1", "initialized": true, "rho_g": 0.0, "v_max": 0.0, "v_real": 0.0, "separation_status": "NO_FLOW", "power_consumption_w": 0.0, "dissolved_gas_kg_h": 0.0, "total_drain_removed_kg": 0.0, "diameter_m": 0.5, "delta_p_bar": 0.05, "gas_species": "O2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_O2_Drycooler_1": {"component_id": "PEM_O2_Drycooler_1", "initialized": true, "fluid_type": "Unknown", "tqc_duty_kw": 0.0, "dc_duty_kw": 0.0, "heat_rejected_kw": 0.0, "fan_power_kw": 0.0, "outlet_temp_c": 0.0, "glycol_hot_c": 30.0, "glycol_cold_c": 30.0, "tqc_effectiveness": 0.0, "dc_effectiveness": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_O2_Chiller_1": {"component_id": "PEM_O2_Chiller_1", "initialized": true, "cooling_load_kw": 0.0, "sensible_heat_kw": 0.0, "latent_heat_kw": 0.0, "outlet_temp_k": 298.15, "outlet_pressure_bar": 1.01325, "heat_rejected_kw": 0.0, "electrical_power_kw": 0.0, "timestep_energy_kwh": 0.0, "cooling_water_flow_kg_h": 0.0, "cop": 4.0, "pressure_drop_bar": 0.2, "outlet_o2_ppm_mol": 0.0}, "PEM_O2_KOD_2": {"component_id": "PEM_O2_KOD_2", "initialized": true, "rho_g": 0.0, "v_max": 0.0, "v_real": 0.0, "separation_status": "NO_FLOW", "power_consumption_w": 0.0, "dissolved_gas_kg_h": 0.0, "total_drain_removed_kg": 0.0, "diameter_m": 0.5, "delta_p_bar": 0.05, "gas_species": "O2", "separation_efficiency": 0.97, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "m_dot_H2O_liq_accomp_kg_s": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_O2_Coalescer_1": {"component_id": "PEM_O2_Coalescer_1", "initialized": true, "d_shell_m": 0.32, "l_elem_m": 1.0, "gas_type": "H2", "total_liquid_removed_kg": 0.0, "total_drain_removed_kg": 0.0, "step_gas_dissolved_kg_h": 0.0, "delta_p_bar": 0.0, "power_loss_w": 0.0, "outlet_flow_kg_h": 0.0, "drain_flow_kg_h": 0.0, "dissolved_gas_in_kg_h": 0.0, "dissolved_gas_out_kg_h": 0.0, "dissolved_gas_in": 0.0, "dissolved_gas_out": 0.0, "water_removed_kg_h": 0.0, "drain_temp_k": 0.0, "drain_pressure_bar": 0.0, "dissolved_gas_ppm": 0.0, "outlet_o2_ppm_mol": 0.0}, "PEM_O2_Valve": {"component_id": "PEM_O2_Valve", "initialized": true, "inlet_pressure_bar": 0.0, "outlet_pressure_bar": 15.0, "flow_rate_kg_h": 0.0, "delta_T_K": 0.0}, "H2_Production_Mixer": {"component_id": "H2_Production_Mixer", "initialized": true, "temperature_k": 312.9061262088481, "pressure_pa": 3999116.656519099, "total_moles": 0.0, "vapor_fraction": 1.0}, "HP_Compressor_S1": {"component_id": "HP_Compressor_S1", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 3.9985589417870564, "actual_mass_transferred_kg": 3.9985589417870564, "outlet_o2_ppm_mol": 9.943295853020185e-10, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 115.23234468239008, "outlet_temperature_isentropic_c": 39.00837374393694, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 136.4628331802619, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 39.991166565190994, "outlet_pressure_bar": 66.3, "target_outlet_pressure_bar": 66.3, "inlet_temperature_c": 39.756126208848116, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "HP_DryCooler_S1": {"component_id": "HP_DryCooler_S1", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 77.34061374280084, "dc_duty_kw": 77.3406137428012, "heat_rejected_kw": 77.3406137428012, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 34.073059083230135, "glycol_hot_c": 38.51414520809635, "glycol_cold_c": 34.069282349314676, "tqc_effectiveness": 0.999953467330989, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 9.943295853020185e-10}, "HP_Compressor_S2": {"component_id": "HP_Compressor_S2", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 3.9985589417870564, "actual_mass_transferred_kg": 3.9985589417870564, "outlet_o2_ppm_mol": 9.943295853020185e-10, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 108.71536399173999, "outlet_temperature_isentropic_c": 32.11442002903567, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 132.46427423847484, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 66.25, "outlet_pressure_bar": 109.9, "target_outlet_pressure_bar": 109.9, "inlet_temperature_c": 34.073059083230135, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "HP_DryCooler_S2": {"component_id": "HP_DryCooler_S2", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 71.28494766384806, "dc_duty_kw": 71.28494766384797, "heat_rejected_kw": 71.28494766384797, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 33.9107413440442, "glycol_hot_c": 38.00409639595182, "glycol_cold_c": 33.907260323316905, "tqc_effectiveness": 0.999953467330989, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 9.943295853020185e-10}, "HP_Compressor_S3": {"component_id": "HP_Compressor_S3", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 3.9985589417870564, "actual_mass_transferred_kg": 3.9985589417870564, "outlet_o2_ppm_mol": 9.943295853020185e-10, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 109.01732459369532, "outlet_temperature_isentropic_c": 32.005757498250716, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 128.4657152966878, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 109.85, "outlet_pressure_bar": 182.1, "target_outlet_pressure_bar": 182.1, "inlet_temperature_c": 33.9107413440442, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "HP_DryCooler_S3": {"component_id": "HP_DryCooler_S3", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 71.56553351506378, "dc_duty_kw": 71.56553351506042, "heat_rejected_kw": 71.56553351506042, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 33.91826224437483, "glycol_hot_c": 38.027729218212755, "glycol_cold_c": 33.914767521944896, "tqc_effectiveness": 0.999953467330989, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 9.943295853020185e-10}, "HP_Compressor_S4": {"component_id": "HP_Compressor_S4", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 3.9985589417870564, "actual_mass_transferred_kg": 3.9985589417870564, "outlet_o2_ppm_mol": 9.943295853020185e-10, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 110.03902927530322, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 124.46715635490072, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 182.05, "outlet_pressure_bar": 301.8, "target_outlet_pressure_bar": 301.8, "inlet_temperature_c": 33.91826224437483, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "HP_DryCooler_S4": {"component_id": "HP_DryCooler_S4", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 72.5149152420953, "dc_duty_kw": 72.5149152420681, "heat_rejected_kw": 72.5149152420681, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 33.943709733310754, "glycol_hot_c": 38.107692514705434, "glycol_cold_c": 33.940168650218766, "tqc_effectiveness": 0.999953467330989, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 9.943295853020185e-10}, "HP_Compressor_S5": {"component_id": "HP_Compressor_S5", "initialized": true, "mode": 1, "power_kw": 0.0, "transfer_mass_kg": 3.9985589417870564, "actual_mass_transferred_kg": 3.9985589417870564, "outlet_o2_ppm_mol": 9.943295853020185e-10, "compression_work_kwh": 0.0, "energy_consumed_kwh": 0.0, "specific_energy_kwh_kg": 0.0, "outlet_temperature_c": 111.69649834084828, "outlet_temperature_isentropic_c": 25.0, "cumulative_energy_kwh": 0.0, "cumulative_mass_kg": 120.46859741311367, "timestep_energy_kwh": 0.0, "cumulative_specific_kwh_kg": 0.0, "inlet_pressure_bar": 301.75, "outlet_pressure_bar": 500.0, "target_outlet_pressure_bar": 500.0, "inlet_temperature_c": 33.943709733310754, "isentropic_efficiency": 0.65, "mechanical_efficiency": 0.96, "electrical_efficiency": 0.93, "temperature_limited": true, "max_temp_c": 135.0}, "HP_DryCooler_S5": {"component_id": "HP_DryCooler_S5", "initialized": true, "fluid_type": "H2", "tqc_duty_kw": 74.05505778256736, "dc_duty_kw": 74.05505778240307, "heat_rejected_kw": 74.05505778240307, "fan_power_kw": 17.610204081632652, "outlet_temp_c": 33.98499213756895, "glycol_hot_c": 38.2374136490925, "glycol_cold_c": 33.981375845506136, "tqc_effectiveness": 0.999953467330989, "dc_effectiveness": 0.6823401561968886, "outlet_o2_ppm_mol": 9.943295853020185e-10}, "H2_Storage_Tank": {"component_id": "H2_Storage_Tank", "initialized": true, "n_tanks": 10, "masses": [120.46859741311367, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "states": [0, 4, 4, 4, 4, 4, 4, 4, 4, 4], "pressures": [58.23501923566332, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "total_mass_kg": 120.46859741311367, "available_capacity_kg": 9879.531402586887, "total_filled_kg": 120.46859741311367, "total_discharged_kg": 0.0, "overflow_count": 0}}, "metrics": {"total_production_kg": 0.0, "total_demand_kg": 0.0, "total_cost": 0.0, "average_cost_per_kg": 0.0, "demand_fulfillment_rate": 0.0}, "dashboard_data": {"metadata": {"simulation_hours": 1, "start_date": "2025-01-01", "timestep_hours": 1.0}, "timeseries": {"hour": [0.0], "production": {"electrolyzer_kg": [], "atr_kg": [], "total_kg": [0.0]}, "storage": {"lp_level_kg": [], "hp_level_kg": []}, "energy": {"electrolyzer_kwh": [], "compression_kwh": []}, "demand": {"requested_kg": [0.0]}, "price": {"per_mwh": [0.0]}}, "flows": {"sankey": {"nodes": [], "links": []}, "matrix": {}}, "kpis": {"total_production_kg": 0.0, "total_demand_kg": 0.0, "total_cost": 0.0, "average_cost_per_kg": 0.0, "demand_fulfillment_rate": 0.0}}};
+
+        // Initialize Dashboard
+        function initDashboard() {
+            updateKPIs();
+            renderCharts();
+            renderSankey();
+            renderFlowMatrix();
+        }
+
+        function updateKPIs() {
+            const metrics = data.metrics;
+            document.getElementById('kpi-production').textContent = formatNumber(metrics.total_production_kg, ' kg');
+            document.getElementById('kpi-demand').textContent = formatNumber(metrics.total_demand_kg, ' kg');
+            document.getElementById('kpi-cost').textContent = formatCurrency(metrics.total_cost);
+            document.getElementById('kpi-avg-cost').textContent = formatCurrency(metrics.average_cost_per_kg);
+        }
+
+        function renderSankey() {
+            if (!data.dashboard_data.flows || !data.dashboard_data.flows.sankey) return;
+            
+            const sankeyData = data.dashboard_data.flows.sankey;
+            
+            const plotData = [{
+                type: "sankey",
+                orientation: "h",
+                node: {
+                    pad: 15,
+                    thickness: 30,
+                    line: { color: "black", width: 0.5 },
+                    label: sankeyData.nodes.map(n => n.name),
+                    color: sankeyData.nodes.map(n => n.color || "#3498db")
+                },
+                link: {
+                    source: sankeyData.links.map(l => l.source),
+                    target: sankeyData.links.map(l => l.target),
+                    value: sankeyData.links.map(l => l.value),
+                    label: sankeyData.links.map(l => l.label)
+                }
+            }];
+
+            const layout = {
+                font: { size: 10 },
+                margin: { t: 20, l: 20, r: 20, b: 20 }
+            };
+
+            Plotly.newPlot('sankeyChart', plotData, layout);
+        }
+
+        function renderFlowMatrix() {
+            if (!data.dashboard_data.flows || !data.dashboard_data.flows.matrix) return;
+            
+            const matrix = data.dashboard_data.flows.matrix;
+            const container = document.getElementById('flowMatrixContainer');
+            
+            let html = '<table><thead><tr><th>Source \ Dest</th>';
+            
+            // Header row
+            matrix.columns.forEach(col => {
+                html += `<th>${col}</th>`;
+            });
+            html += '</tr></thead><tbody>';
+            
+            // Data rows
+            matrix.rows.forEach((rowName, i) => {
+                html += `<tr><th>${rowName}</th>`;
+                matrix.data[i].forEach(val => {
+                    const bg = val > 0 ? `rgba(46, 204, 113, ${Math.min(val/1000, 0.5)})` : '';
+                    html += `<td style="background:${bg}">${val > 0 ? formatNumber(val) : '-'}</td>`;
+                });
+                html += '</tr>';
+            });
+            
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function renderCharts() {
+            const ts = data.dashboard_data.timeseries;
+            const hours = ts.hour;
+
+            // Production vs Demand
+            new Chart(document.getElementById('productionChart'), {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [
+                        {
+                            label: 'Total Production (kg)',
+                            data: ts.production.total_kg,
+                            borderColor: '#2ecc71',
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Demand (kg)',
+                            data: ts.demand.requested_kg,
+                            borderColor: '#e74c3c',
+                            borderDash: [5, 5],
+                            tension: 0.1
+                        }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+
+            // Storage Levels
+            new Chart(document.getElementById('storageChart'), {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [
+                        {
+                            label: 'LP Storage (kg)',
+                            data: ts.storage.lp_level_kg,
+                            borderColor: '#3498db',
+                            fill: true,
+                            backgroundColor: 'rgba(52, 152, 219, 0.1)'
+                        },
+                        {
+                            label: 'HP Storage (kg)',
+                            data: ts.storage.hp_level_kg,
+                            borderColor: '#9b59b6',
+                            fill: true,
+                            backgroundColor: 'rgba(155, 89, 182, 0.1)'
+                        }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+            
+            // Energy Price
+            new Chart(document.getElementById('priceChart'), {
+                type: 'line',
+                data: {
+                    labels: hours,
+                    datasets: [{
+                        label: 'Energy Price ($/MWh)',
+                        data: ts.price.per_mwh,
+                        borderColor: '#f1c40f',
+                        backgroundColor: 'rgba(241, 196, 15, 0.1)',
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: { responsive: true, maintainAspectRatio: false }
+            });
+        }
+
+        function formatNumber(num, suffix = '') {
+            return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(num) + suffix;
+        }
+
+        function formatCurrency(num) {
+            return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(num);
+        }
+
+        initDashboard();
+    </script>
+</body>
+</html>

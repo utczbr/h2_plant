@@ -14,6 +14,18 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 from h2_plant.core.constants import GasConstants, StandardConditions, ConversionFactors
 
+try:
+    from h2_plant.optimization.numba_ops import calculate_stream_enthalpy_jit, fast_composition_properties
+    JIT_AVAILABLE = True
+except ImportError:
+    calculate_stream_enthalpy_jit = None
+    fast_composition_properties = None
+    JIT_AVAILABLE = False
+
+# Pre-computed constants for Stream class
+SPECIES_INDICES = {'H2': 0, 'O2': 1, 'N2': 2, 'H2O': 3, 'CH4': 4, 'CO2': 5}
+GAS_MW_ARR = np.array([0.002016, 0.032, 0.028014, 0.018015, 0.01604, 0.04401], dtype=np.float64)
+
 @dataclass
 class Stream:
     """
@@ -34,14 +46,74 @@ class Stream:
             for k in self.composition:
                 self.composition[k] /= total_fraction
         
-        # PERFORMANCE: Cache enthalpy calculation (called ~47k times per simulation)
-        self._cached_enthalpy: float = self._compute_specific_enthalpy()
+        # PERFORMANCE: Lazy enthalpy calculation
+        self._cached_enthalpy: Optional[float] = None
+        
+        # PERFORMANCE: Lazy composition array caching
+        # Only streams that need JIT access will compute arrays
+        self._arrays_cached: bool = False
+        self._mass_fracs_arr: Optional[np.ndarray] = None
+        self._mole_fracs_arr: Optional[np.ndarray] = None
+        self._cached_M_mix: float = 0.0
+        self._cached_sum_ylny: float = 0.0
+        
+    def _cache_composition_arrays(self) -> None:
+        """Compute canonical array representations using JIT optimization."""
+        if self._arrays_cached:
+            return
+        
+        # Fast path: Build mass array from composition dict
+        mass_arr = np.array(
+            [self.composition.get(s, 0.0) for s in StandardConditions.CANONICAL_FLUID_ORDER],
+            dtype=np.float64
+        )
+        
+        # Use JIT-compiled function if available (50x faster)
+        if fast_composition_properties is not None:
+            mole_fracs, M_mix, sum_ylny = fast_composition_properties(mass_arr)
+        else:
+            # Fallback to pure Python (slow path)
+            moles_raw = np.where(mass_arr > 0, mass_arr / GAS_MW_ARR, 0.0)
+            total_moles = moles_raw.sum()
+            if total_moles > 1e-12:
+                mole_fracs = moles_raw / total_moles
+                M_mix = np.dot(mole_fracs, GAS_MW_ARR)
+                valid = mole_fracs > 1e-12
+                sum_ylny = np.sum(mole_fracs[valid] * np.log(mole_fracs[valid]))
+            else:
+                mole_fracs = np.zeros(6, dtype=np.float64)
+                M_mix = 0.028
+                sum_ylny = 0.0
+        
+        self._mass_fracs_arr = mass_arr
+        self._mole_fracs_arr = mole_fracs
+        self._cached_M_mix = M_mix
+        self._cached_sum_ylny = sum_ylny
+        self._arrays_cached = True
+        
+    def get_composition_arrays(self) -> Tuple[np.ndarray, np.ndarray, float, float]:
+        """
+        Get canonical array representations for JIT operations.
+        Arrays are computed on first access and cached.
+        """
+        if not self._arrays_cached:
+            self._cache_composition_arrays()
+        return self._mass_fracs_arr, self._mole_fracs_arr, self._cached_M_mix, self._cached_sum_ylny
 
     def _compute_specific_enthalpy(self) -> float:
         """
         Internal method to compute specific enthalpy (J/kg).
-        Called once at construction and cached.
+        Called lazily on first access.
         """
+        # Optimized JIT Path
+        if JIT_AVAILABLE and calculate_stream_enthalpy_jit is not None:
+             try:
+                 mass_fracs, _, _, _ = self.get_composition_arrays()
+                 h2o_liq = self.composition.get('H2O_liq', 0.0)
+                 return calculate_stream_enthalpy_jit(self.temperature_k, mass_fracs, h2o_liq)
+             except Exception:
+                 pass # Fallback to slower pure python method
+
         h_total = 0.0
         t_ref = StandardConditions.TEMPERATURE_K
         
@@ -157,9 +229,11 @@ class Stream:
     @property
     def specific_enthalpy_j_kg(self) -> float:
         """
-        Return cached specific enthalpy (J/kg) relative to reference state (298.15K).
-        Computed once at Stream construction for performance.
+        Return specific enthalpy (J/kg) relative to reference state (298.15K).
+        Computed lazily on first access for performance.
         """
+        if self._cached_enthalpy is None:
+            self._cached_enthalpy = self._compute_specific_enthalpy()
         return self._cached_enthalpy
 
     @property

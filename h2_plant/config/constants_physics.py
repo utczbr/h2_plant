@@ -110,12 +110,23 @@ class PEMConstants:
         return self.output_pressure_bar * 1e5
     
     # === Gas Phase Composition (MOLAR PPM / fractions) ===
-    h2_purity_molar: float = _get_val('pem_system', 'h2_purity_molar', 0.999583)
-    o2_crossover_ppm_molar: float = _get_val('pem_system', 'o2_crossover_ppm_molar', 199.0)
-    h2o_vapor_ppm_molar: float = _get_val('pem_system', 'h2o_vapor_ppm_molar', 218.0)
+    h2_purity_molar: float = _get_val('pem_system', 'h2_purity_molar', 0.994800) # Updated to ~99.48% accounting for sat. water
+    o2_crossover_ppm_molar: float = _get_val('pem_system', 'o2_crossover_ppm_molar', 200.0) # 200 ppm
+    anode_h2_crossover_ppm_molar: float = _get_val('pem_system', 'anode_h2_crossover_ppm_molar', 4000.0) # 4000 ppm
+    
+    # Vapor saturation at 60C/40bar is approx 0.5% (5000 ppm)
+    # We keep this constant for reference, but code should calculate dynamically if possible
+    h2o_vapor_ppm_molar: float = _get_val('pem_system', 'h2o_vapor_ppm_molar', 5000.0) 
     
     # === Entrained Liquid Water ===
-    entrained_water_fraction: float = _get_val('pem_system', 'entrained_water_fraction', 0.15)
+    # Cathode: Liquid water dragged is ~5x the consumed water mass
+    cathode_liquid_water_factor: float = _get_val('pem_system', 'cathode_liquid_water_factor', 5.0)
+    
+    # Anode: Carries the bulk cooling flow. 
+    # Assumed Delta T for cooling loop sizing if not specified dynamically
+    cooling_delta_t_k: float = _get_val('pem_system', 'cooling_delta_t_k', 5.0)
+
+    entrained_water_fraction: float = _get_val('pem_system', 'entrained_water_fraction', 0.15) # Legacy, keeping for compat
     water_reuse_fraction: float = _get_val('pem_system', 'water_reuse_fraction', 0.95)  # 95% reused
     demister_limit_mg_nm3: float = _get_val('pem_system', 'demister_limit_mg_nm3', 20.0)
     

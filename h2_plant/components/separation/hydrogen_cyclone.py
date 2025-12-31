@@ -33,7 +33,15 @@ import logging
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
-from h2_plant.optimization.numba_ops import solve_cyclone_mechanics
+from h2_plant.optimization.numba_ops import solve_cyclone_mechanics, calculate_mixture_density_jit
+
+# Import mixture thermodynamics for rigorous density calculations
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
 
 if TYPE_CHECKING:
     from h2_plant.core.component_registry import ComponentRegistry
@@ -150,7 +158,13 @@ class HydrogenMultiCyclone(Component):
         self._last_dissolved_gas_out_kg_h: float = 0.0
         
         # LUTManager reference (acquired during initialize)
+        # LUTManager reference (acquired during initialize)
         self.lut_manager = None
+        
+        # JIT Stacked LUTs (cached from LUTManager)
+        self._D_luts_stacked: Optional[np.ndarray] = None
+        self._P_grid: Optional[np.ndarray] = None
+        self._T_grid: Optional[np.ndarray] = None
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
@@ -172,6 +186,11 @@ class HydrogenMultiCyclone(Component):
         # Attempt to acquire LUTManager for thermodynamic lookups
         try:
             self.lut_manager = registry.get('lut_manager')
+            if self.lut_manager:
+                # Pre-fetch stacked LUTs for JIT density calculation
+                self._D_luts_stacked = self.lut_manager.stacked_D
+                self._P_grid = self.lut_manager._pressure_grid
+                self._T_grid = self.lut_manager._temperature_grid
         except Exception:
             self.lut_manager = None
             
@@ -566,7 +585,13 @@ class HydrogenMultiCyclone(Component):
 
     def _get_gas_density(self, pressure_pa: float, temperature_k: float) -> float:
         """
-        Get gas density using LUTManager or ideal gas fallback.
+        Get gas density using rigorous mixture thermodynamics.
+        
+        Priority:
+        1. JIT-compiled mixture density (Amagat's Law)
+        2. Python mixture thermodynamics
+        3. Pure component LUT lookup
+        4. Ideal gas fallback
         
         Args:
             pressure_pa: Pressure in Pascals.
@@ -575,6 +600,52 @@ class HydrogenMultiCyclone(Component):
         Returns:
             float: Gas density in kg/m³.
         """
+        # 1. JIT Optimized Path
+        if (self._D_luts_stacked is not None 
+            and self._input_stream is not None
+            and calculate_mixture_density_jit is not None):
+            try:
+                # Use cached composition arrays from inlet stream
+                weights, _, _, _ = self._input_stream.get_composition_arrays()
+                
+                # Check if we need to normalize for gas phase (if liquid present)
+                w_sum = np.sum(weights)
+                if w_sum > 1e-9:
+                    # Create normalized view if needed (avoid modifying cached array)
+                    if abs(w_sum - 1.0) > 1e-4:
+                        weights_gas = weights / w_sum
+                    else:
+                        weights_gas = weights
+                        
+                    rho = calculate_mixture_density_jit(
+                        pressure_pa, 
+                        temperature_k, 
+                        self._P_grid, 
+                        self._T_grid, 
+                        self._D_luts_stacked, 
+                        weights_gas
+                    )
+                    if rho > 0:
+                        return rho
+            except Exception:
+                pass # Fallback
+                
+        # 2. Python Mixture Path (Legacy/Fallback)
+        if (MIX_THERMO_AVAILABLE and mix_thermo is not None 
+            and self._input_stream and self.lut_manager):
+            try:
+                comp_mass = self._input_stream.composition
+                # Only use mixture if more than one species present
+                active_species = [s for s, f in comp_mass.items() 
+                                   if f > 1e-6 and s not in ('H2O_liq',)]
+                if len(active_species) > 1:
+                    return mix_thermo.get_mixture_density(
+                        comp_mass, pressure_pa, temperature_k, self.lut_manager
+                    )
+            except Exception:
+                pass  # Fall through to pure component
+        
+        # Pure component LUT lookup
         if self.lut_manager is not None:
             try:
                 return self.lut_manager.lookup(self.gas_species, 'D', pressure_pa, temperature_k)
@@ -582,7 +653,6 @@ class HydrogenMultiCyclone(Component):
                 pass
                 
         # Ideal gas fallback: ρ = PM / (RT)
-        # H2: M = 2.016 g/mol, O2: M = 32 g/mol
         M_kg_mol = 0.002016 if self.gas_species == 'H2' else 0.032
         R = 8.314  # J/(mol·K)
         return (pressure_pa * M_kg_mol) / (R * temperature_k)

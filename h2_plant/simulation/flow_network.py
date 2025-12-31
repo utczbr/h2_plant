@@ -97,6 +97,21 @@ class FlowNetwork:
             f"and {len(self._indexed_connections)} indexed connections"
         )
         self._validate_connections()
+        
+        # PERFORMANCE: Pre-resolve component objects for O(1) access during simulation
+        # Eliminates ~2M registry.get() dict lookups per 480h simulation
+        self._source_cache: Dict[str, Any] = {}
+        self._target_cache: Dict[str, Any] = {}
+        
+        for conn in self._connections:
+            self._source_cache[conn.source_id] = self.registry.get(conn.source_id)
+            self._target_cache[conn.target_id] = self.registry.get(conn.target_id)
+            
+        for conn in self._indexed_connections:
+            src_id = self._resolve_component_id(conn.source_name, conn.source_index)
+            tgt_id = self._resolve_component_id(conn.target_name, conn.target_index)
+            self._source_cache[src_id] = self.registry.get(src_id)
+            self._target_cache[tgt_id] = self.registry.get(tgt_id)
 
     def execute_flows(self, t: float) -> None:
         """
@@ -138,8 +153,8 @@ class FlowNetwork:
             conn (ConnectionConfig): Connection configuration.
             t (float): Current simulation time.
         """
-        source = self.registry.get(conn.source_id)
-        target = self.registry.get(conn.target_id)
+        source = self._source_cache[conn.source_id]
+        target = self._target_cache[conn.target_id]
 
         output_value = source.get_output(conn.source_port)
 
@@ -208,8 +223,8 @@ class FlowNetwork:
         source_id = self._resolve_component_id(conn.source_name, conn.source_index)
         target_id = self._resolve_component_id(conn.target_name, conn.target_index)
 
-        source = self.registry.get(source_id)
-        target = self.registry.get(target_id)
+        source = self._source_cache[source_id]
+        target = self._target_cache[target_id]
 
         output_value = source.get_output(conn.source_port)
 

@@ -102,6 +102,10 @@ class StandardConditions:
     TEMPERATURE_C: Final[float] = 25.0
     PRESSURE_PA: Final[float] = 101325.0
     PRESSURE_BAR: Final[float] = 1.01325
+    
+    # Canonical order for array-based mixture thermodynamics (JIT)
+    # MUST match the stacking order in LUTManager and Stream arrays
+    CANONICAL_FLUID_ORDER: Final[tuple[str, ...]] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O')
 
 class ConversionFactors:
     """

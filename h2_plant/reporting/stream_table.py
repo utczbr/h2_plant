@@ -60,52 +60,46 @@ def _format_species_dual(mole_frac: float, mass_kg_h: float = 0.0, precision: in
 
 def _get_topology_section(comp_id: str, comp_type: str) -> int:
     """
-    Determine the topology section index (1-6) for sorting.
+    Determine the topology section index (1-7) for sorting.
     
-    Section 1: Components upstream of the SOEC (Feed -> SOEC).
-    Section 2: Components upstream of the PEM (Feed -> PEM).
-    Section 3: SOEC H2 Output Train (Cathode side).
-    Section 4: SOEC O2 Output Train (Anode side).
-    Section 5: PEM H2 Output Train.
-    Section 6: PEM O2 Output Train.
+    Section 1: Feed & Upstream (SOEC)
+    Section 2: Feed & Upstream (PEM)
+    Section 3: SOEC H2 Output Train (Cathode)
+    Section 4: SOEC O2 Output Train (Anode)
+    Section 5: PEM H2 Output Train (Cathode)
+    Section 6: PEM O2 Output Train (Anode)
+    Section 7: Storage & Distribution
     """
     cid = comp_id.upper()
     ctype = comp_type.upper()
     
-    # Storage & Distribution (Tanks + High Pressure Train)
-    if any(k in cid for k in ["STORAGE", "TANK", "GRID", "CONSUMER"]) or "HP_" in cid:
-        return 7
-    if any(k in ctype for k in ["TANK", "STORAGE"]):
-        return 7
+    # 1. Storage & Distribution (High Priority)
+    if "HP_" in cid: return 7
+    if any(k in cid for k in ["STORAGE", "TANK", "GRID", "CONSUMER"]): return 7
+    if any(k in ctype for k in ["TANK", "STORAGE"]): return 7
     
-    # Electrolyzers are the boundary lines
-    if "SOEC" in cid:
-        return 3 # Start of H2 Train (or section 1 end, but put in 3 for visibility)
-    if "PEM" in cid:
-        return 5
+    # 2. Specific Train Prefixes (Explicit O2/H2 Paths)
+    # Check O2 first to distinguish from generic SOEC/PEM
+    if "PEM_O2_" in cid: return 6
+    if "SOEC_O2_" in cid: return 4
+    if "O2_" in cid: 
+        return 6 if "PEM" in cid else 4
 
-    # O2 Trains (Anode)
-    if "O2_" in cid or ("O2" in cid and "COMPRESSOR" in cid):
-        # Determine if SOEC or PEM O2
-        # Heuristic: If we had a PEM named 'PEM_1', associated O2 might be 'PEM_O2_...'
-        # For now, default O2 components to SOEC Anode (Section 4) unless marked PEM
-        if "PEM" in cid:
-            return 6
-        return 4
+    if "PEM_H2_" in cid: return 5
+    if "SOEC_H2_" in cid: return 3
 
-    # Upstream / Feed
-    if any(x in cid for x in ["FEED", "PUMP", "SOURCE", "WATER", "STEAM"]):
-        # Heuristic: Steam/Boiler is usually SOEC upstream
-        if "KAOWOOL" in cid or "PEM" in cid:
-            return 2
+    # 3. Upstream / Feed / Recirculation
+    # Matches Feed_Pump, Makeup_Mixer, Drain_Mixer, Steam_Generator
+    upstream_keywords = ["FEED", "PUMP", "SOURCE", "WATER", "STEAM", "MAKEUP", "DRAIN", "MIXER"]
+    if any(x in cid for x in upstream_keywords):
+        if "PEM" in cid: return 2
         return 1
 
-    # H2 Trains (Cathode) - Default for Compressors, KODs, Chillers not marked O2
-    # Determine if PEM or SOEC H2
-    if "PEM" in cid:
-        return 5
-    
-    # Default to SOEC H2 Train (Section 3) for standard compressors/intercoolers
+    # 4. Core Units & Fallbacks (Generic)
+    if "PEM" in cid: return 5
+    if "SOEC" in cid: return 3
+
+    # Default to Section 1 if nothing matches (or 3 if it looks like main process)
     return 3
 
 def _get_phase_abbrev(stream) -> str:
@@ -165,13 +159,17 @@ def print_stream_summary_table(
         
         # Get component output stream (try common ports)
         stream = None
-        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out']:
+        # PRIORITY: Process gas/fluid ports first, then drains/waste.
+        # Added 'liquid_drain' and 'drain' to ensure KODs/Sep are shown even if gas flow is 0.
+        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out', 'liquid_drain', 'drain']:
             try:
                 s = comp.get_output(port)
                 if s and s.mass_flow_kg_h > 1e-6:
                     stream = s
                     break
             except: pass
+            
+
             
         if not stream: continue # Skip components with no flow
         

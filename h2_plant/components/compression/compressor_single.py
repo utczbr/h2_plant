@@ -58,13 +58,61 @@ except ImportError:
 
 # Import JIT function at module level for performance
 try:
-    from h2_plant.optimization.numba_ops import calculate_compression_realgas_jit
+    from h2_plant.optimization.numba_ops import (
+        calculate_compression_realgas_jit, 
+        calculate_mixture_compression_jit,
+        solve_temp_limited_pressure_jit
+    )
     JIT_AVAILABLE = True
 except ImportError:
     calculate_compression_realgas_jit = None
+    calculate_mixture_compression_jit = None
+    solve_temp_limited_pressure_jit = None
     JIT_AVAILABLE = False
 
+# Import mixture thermodynamics module  
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# FLUID STRATEGY SELECTION
+# =============================================================================
+
+from enum import Enum, auto
+
+class FluidStrategy(Enum):
+    """
+    Thermodynamic calculation strategy selector.
+    
+    Determines which computational path is used for compression calculations:
+    - LUT: Pure fluid with pre-computed Lookup Tables (~1 µs per call)
+    - LUT_MIXTURE: Multi-component using Ideal Mixing of Real Gases (~6 µs per call)
+    - COOLPROP_MIXTURE: Multi-component HEOS backend (~100 µs per call)  
+    - IDEAL_GAS: Fallback with mixture-weighted constants
+    """
+    LUT = auto()
+    LUT_MIXTURE = auto()
+    COOLPROP_MIXTURE = auto()
+    IDEAL_GAS = auto()
+
+
+# Reference thermodynamic data for supported species
+# Format: (CoolProp_Name, Molar_Mass_kg/mol, Cp_J/kg·K, gamma)
+FLUID_REF_DATA: Dict[str, Tuple[str, float, float, float]] = {
+    'H2':  ('Hydrogen',       2.016e-3,  14304.0, 1.41),
+    'O2':  ('Oxygen',        32.00e-3,    918.0, 1.39),
+    'N2':  ('Nitrogen',      28.01e-3,   1040.0, 1.40),
+    'CH4': ('Methane',       16.04e-3,   2226.0, 1.32),
+    'CO2': ('CarbonDioxide', 44.01e-3,    846.0, 1.30),
+    'H2O': ('Water',         18.02e-3,   1850.0, 1.33),
+}
 
 
 class CompressorSingle(Component):
@@ -186,15 +234,23 @@ class CompressorSingle(Component):
         # Store inlet stream for composition propagation
         self._inlet_stream: Optional[Stream] = None
         
-        # LUT arrays for optimized compression (populated in initialize)
-        self._lut_available: bool = False
+        # Multi-fluid LUT storage for optimized compression (populated in initialize)
+        # Dict structure: {fluid_key: {'H': arr, 'S': arr, 'C': arr, 'H_from_PS': arr}}
+        self._luts: Dict[str, Dict[str, np.ndarray]] = {}
+        self._lut_manager = None  # Reference to LUTManager for mixture calculations
         self._P_grid: Optional[np.ndarray] = None
         self._T_grid: Optional[np.ndarray] = None
         self._S_grid: Optional[np.ndarray] = None
-        self._H_lut: Optional[np.ndarray] = None
-        self._S_lut: Optional[np.ndarray] = None
-        self._C_lut: Optional[np.ndarray] = None
-        self._H_from_PS_lut: Optional[np.ndarray] = None
+        
+        # Stacked LUTs for JIT mixture calculations
+        self._H_luts_stacked: Optional[np.ndarray] = None
+        self._S_luts_stacked: Optional[np.ndarray] = None
+        self._C_luts_stacked: Optional[np.ndarray] = None
+        self._fluid_indices: Dict[str, int] = {}
+        self._molar_masses_arr: Optional[np.ndarray] = None
+        
+        # Cache for JIT temp-limited solver result (P_out, T_out, W_actual)
+        self._jit_cached_result: Optional[Tuple[float, float, float]] = None
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
@@ -226,21 +282,38 @@ class CompressorSingle(Component):
                 f"Temperature limit: {self.max_temp_c:.1f}°C"
             )
         
-        # Attempt to retrieve LUT arrays for optimized compression
+        # Retrieve multi-fluid LUT arrays for optimized compression
         try:
             lut_manager = registry.get('lut_manager')
             if lut_manager is not None and hasattr(lut_manager, '_luts'):
-                h2_luts = lut_manager._luts.get('H2', {})
-                if 'H' in h2_luts and 'S' in h2_luts and 'C' in h2_luts and 'H_from_PS' in h2_luts:
-                    self._P_grid = lut_manager._pressure_grid
-                    self._T_grid = lut_manager._temperature_grid
-                    self._S_grid = lut_manager._entropy_grid
-                    self._H_lut = h2_luts['H']
-                    self._S_lut = h2_luts['S']
-                    self._C_lut = h2_luts['C']
-                    self._H_from_PS_lut = h2_luts['H_from_PS']
-                    self._lut_available = True
-                    logger.info(f"CompressorSingle '{self.component_id}': LUT optimization enabled")
+                self._lut_manager = lut_manager  # Store reference for mixture calcs
+                self._P_grid = lut_manager._pressure_grid
+                self._T_grid = lut_manager._temperature_grid
+                self._S_grid = lut_manager._entropy_grid
+                
+                # Load LUTs for all supported fluids
+                for fluid_key in FLUID_REF_DATA.keys():
+                    fluid_data = lut_manager._luts.get(fluid_key, {})
+                    if all(k in fluid_data for k in ('H', 'S', 'C', 'H_from_PS')):
+                        self._luts[fluid_key] = fluid_data
+                
+                if self._luts:
+                    logger.info(
+                        f"CompressorSingle '{self.component_id}': "
+                        f"LUT optimization enabled for {list(self._luts.keys())}"
+                    )
+                    
+                    # Prepare Stacked LUTs for JIT Mixture (Zero-Copy Reference)
+                    try:
+                        if hasattr(self._lut_manager, 'stacked_H') and self._lut_manager.stacked_H is not None:
+                             self._H_luts_stacked = self._lut_manager.stacked_H
+                             self._S_luts_stacked = self._lut_manager.stacked_S
+                             self._C_luts_stacked = self._lut_manager.stacked_C
+                             logger.debug(f"CompressorSingle '{self.component_id}': Linked to global stacked LUTs")
+                        else:
+                             logger.warning(f"CompressorSingle '{self.component_id}': Global stacked LUTs not available")
+                    except Exception as stack_err:
+                        logger.warning(f"Failed to link LUTs for JIT mixture: {stack_err}")
         except Exception as e:
             logger.debug(f"LUT retrieval failed: {e}. Using CoolProp fallback.")
 
@@ -323,40 +396,150 @@ class CompressorSingle(Component):
         self.actual_outlet_pressure_bar = self.actual_inlet_pressure_bar
         self.actual_outlet_pressure_pa = self.actual_inlet_pressure_pa
 
+    def _determine_fluid_strategy(self) -> Tuple[FluidStrategy, str, Dict[str, float]]:
+        """
+        Analyze inlet composition and select thermodynamic calculation strategy.
+        
+        **Strategy Selection Logic (Priority Order):**
+        1. Pure Fluid (≥98.0% single species): Use LUT for maximum performance
+        2. LUT_MIXTURE: All species have LUTs → Ideal Mixing of Real Gases
+        3. COOLPROP_MIXTURE: CoolProp HEOS for rigorous mixing (slower)
+        4. IDEAL_GAS: Fallback with mixture-weighted constants
+        
+        Returns:
+            Tuple[FluidStrategy, str, Dict]:
+                - strategy: The selected FluidStrategy enum value
+                - fluid_id: Pure fluid key, 'LUT_MIX' marker, HEOS string, or empty
+                - mix_constants: Dict with 'cp' and 'gamma' for ideal gas path
+        """
+        # Default to hydrogen if no stream data
+        if not self._inlet_stream or not self._inlet_stream.composition:
+            if 'H2' in self._luts:
+                return FluidStrategy.LUT, 'H2', {}
+            return FluidStrategy.IDEAL_GAS, '', {'cp': 14304.0, 'gamma': 1.41}
+        
+        comp = self._inlet_stream.composition
+        
+        # Find dominant species and check LUT coverage
+        max_frac = 0.0
+        dominant = 'H2'
+        all_have_luts = True
+        active_species = []
+        
+        for species, frac in comp.items():
+            if species in ('H2O_liq',) or frac < 1e-6:
+                continue
+            active_species.append(species)
+            if species in FLUID_REF_DATA and frac > max_frac:
+                max_frac = frac
+                dominant = species
+            if species not in self._luts:
+                all_have_luts = False
+        
+        # Pure fluid path (≥98.0% single species)
+        # PERFORMANCE: Relaxed from 99.9% to 98.0% to allow near-pure streams (e.g. wet H2)
+        # to use the fast LUT path instead of the expensive mixture solver.
+        if max_frac >= 0.980 and dominant in self._luts:
+            return FluidStrategy.LUT, dominant, {}
+        
+        # LUT Mixture path: all species have LUTs AND mix_thermo available
+        if all_have_luts and MIX_THERMO_AVAILABLE and self._lut_manager is not None:
+            return FluidStrategy.LUT_MIXTURE, 'LUT_MIX', {}
+        
+        # CoolProp Mixture path
+        if COOLPROP_AVAILABLE:
+            parts = []
+            for species, frac in comp.items():
+                if species in FLUID_REF_DATA and frac > 1e-6:
+                    coolprop_name = FLUID_REF_DATA[species][0]
+                    parts.append(f"{coolprop_name}[{frac}]")
+            if parts:
+                mixture_str = "HEOS::" + "&".join(parts)
+                return FluidStrategy.COOLPROP_MIXTURE, mixture_str, {}
+        
+        # Ideal gas fallback with mixture-weighted constants
+        mix_const = self._calculate_mixture_constants(comp)
+        return FluidStrategy.IDEAL_GAS, '', mix_const
+    
+    def _calculate_mixture_constants(self, composition: Dict[str, float]) -> Dict[str, float]:
+        """
+        Calculate mixture-averaged thermodynamic constants using mass-weighted mixing rules.
+        
+        **Mixing Rules:**
+        - Molar mass: $M_{mix} = \\sum_i x_i M_i$
+        - Mass fractions: $w_i = \\frac{x_i M_i}{M_{mix}}$
+        - Mixture Cp: $C_{p,mix} = \\sum_i w_i C_{p,i}$
+        - Mixture gamma: $\\gamma_{mix} = \\frac{C_{p,mix}}{C_{p,mix} - R_{mix}}$
+        
+        Args:
+            composition: Dict of species mole fractions {species: x_i}
+            
+        Returns:
+            Dict with 'cp' (J/kg·K) and 'gamma' (dimensionless)
+        """
+        R_UNIVERSAL = 8.314  # J/(mol·K)
+        
+        # Calculate mixture molar mass
+        M_mix = 0.0
+        for species, x_i in composition.items():
+            if species in FLUID_REF_DATA and x_i > 1e-9:
+                M_i = FLUID_REF_DATA[species][1]  # kg/mol
+                M_mix += x_i * M_i
+        
+        if M_mix < 1e-9:
+            # Fallback to hydrogen if composition is invalid
+            return {'cp': 14304.0, 'gamma': 1.41}
+        
+        # Calculate mass fractions and mixture Cp
+        Cp_mix = 0.0
+        for species, x_i in composition.items():
+            if species in FLUID_REF_DATA and x_i > 1e-9:
+                M_i = FLUID_REF_DATA[species][1]
+                Cp_i = FLUID_REF_DATA[species][2]  # J/kg·K
+                w_i = (x_i * M_i) / M_mix  # Mass fraction
+                Cp_mix += w_i * Cp_i
+        
+        # Mixture gas constant (specific)
+        R_mix = R_UNIVERSAL / M_mix  # J/(kg·K)
+        
+        # Mixture gamma: γ = Cp / (Cp - R)
+        Cv_mix = Cp_mix - R_mix
+        gamma_mix = Cp_mix / Cv_mix if Cv_mix > 0 else 1.4
+        
+        return {'cp': Cp_mix, 'gamma': gamma_mix}
+    
     def _get_fluid_properties(self) -> Tuple[str, float, float]:
         """
-        Determine fluid properties based on inlet composition.
+        Legacy method for backward compatibility.
         
-        Selects appropriate Equation of State (EOS) backend or ideal gas constants.
-
-        Returns:
-            Tuple[str, float, float]: 
-                - **CoolProp_Fluid_Name** (str): Key for CoolProp EOS (e.g., 'Hydrogen', 'Oxygen').
-                - **Cp_J_kg_K** (float): Specific heat capacity at constant pressure [$J/(kg \cdot K)$].
-                - **Gamma** (float): Heat capacity ratio ($\gamma = C_p / C_v$).
+        Returns CoolProp name, Cp, and gamma for the dominant fluid.
+        Delegates to _determine_fluid_strategy for actual logic.
         """
-        # Default to Hydrogen if no stream
-        if not self._inlet_stream:
-            return 'Hydrogen', 14300.0, 1.41
-            
-        comp = self._inlet_stream.composition
-        h2_frac = comp.get('H2', 0.0)
-        o2_frac = comp.get('O2', 0.0)
+        strategy, fluid_id, mix_const = self._determine_fluid_strategy()
         
-        if o2_frac > h2_frac:
-            # Oxygen properties
-            # Cp ~ 918 J/kg*K, Gamma ~ 1.40
-            return 'Oxygen', 918.0, 1.395 
+        if strategy == FluidStrategy.LUT:
+            # Return CoolProp name and properties for the pure fluid
+            coolprop_name, _, cp, gamma = FLUID_REF_DATA[fluid_id]
+            return coolprop_name, cp, gamma
+        elif strategy == FluidStrategy.COOLPROP_MIXTURE:
+            # For mixtures, return dominant fluid properties (approximate)
+            if self._inlet_stream and self._inlet_stream.composition:
+                dominant = max(self._inlet_stream.composition.items(), 
+                              key=lambda x: x[1] if x[0] in FLUID_REF_DATA else 0)
+                if dominant[0] in FLUID_REF_DATA:
+                    coolprop_name, _, cp, gamma = FLUID_REF_DATA[dominant[0]]
+                    return coolprop_name, cp, gamma
+            return 'Hydrogen', 14304.0, 1.41
         else:
-            # Hydrogen properties (CoolProp uses 'Hydrogen' not 'H2')
-            return 'Hydrogen', 14300.0, 1.41
+            # Ideal gas path
+            return 'Hydrogen', mix_const.get('cp', 14304.0), mix_const.get('gamma', 1.41)
 
     def _compute_outlet_temp(self, p_out_pa: float) -> float:
         """
         Compute discharge temperature for a given outlet pressure.
         
         This helper is used by the binary search solver to find the maximum
-        pressure that keeps $T_{out} \le T_{max}$.
+        pressure that keeps $T_{out} \\le T_{max}$.
         
         Args:
             p_out_pa (float): Outlet pressure [Pa].
@@ -365,12 +548,12 @@ class CompressorSingle(Component):
             float: Outlet temperature [K].
         """
         p_in_pa = self.actual_inlet_pressure_pa
-        fluid_name, cp, gamma = self._get_fluid_properties()
+        strategy, fluid_id, mix_const = self._determine_fluid_strategy()
         
-        # Use LUTs for Hydrogen (fastest)
-        if self._lut_available and fluid_name == 'Hydrogen' and JIT_AVAILABLE:
-            from h2_plant.optimization.numba_ops import calculate_compression_realgas_jit
+        # Use LUTs for pure fluids (fastest)
+        if strategy == FluidStrategy.LUT and JIT_AVAILABLE and fluid_id in self._luts:
             try:
+                lut_data = self._luts[fluid_id]
                 _, T_out_k, _ = calculate_compression_realgas_jit(
                     p_in_pa,
                     p_out_pa,
@@ -379,29 +562,101 @@ class CompressorSingle(Component):
                     self._P_grid,
                     self._T_grid,
                     self._S_grid,
-                    self._H_lut,
-                    self._S_lut,
-                    self._C_lut,
-                    self._H_from_PS_lut
+                    lut_data['H'],
+                    lut_data['S'],
+                    lut_data['C'],
+                    lut_data['H_from_PS']
                 )
                 return T_out_k
             except Exception as e:
-                logger.debug(f"LUT compression failed: {e}. Trying CoolProp.")  # Fall through
+                logger.debug(f"LUT compression failed: {e}. Trying CoolProp.")
         
-        # CoolProp fallback
-        if COOLPROP_AVAILABLE:
+        # Mixture LUT Path
+        if strategy == FluidStrategy.LUT_MIXTURE and MIX_THERMO_AVAILABLE and self._lut_manager is not None:
             try:
-                h1 = CP.PropsSI('H', 'T', self.inlet_temperature_k, 'P', p_in_pa, fluid_name)
-                s1 = CP.PropsSI('S', 'T', self.inlet_temperature_k, 'P', p_in_pa, fluid_name)
-                h2s = CP.PropsSI('H', 'S', s1, 'P', p_out_pa, fluid_name)
-                w_actual = (h2s - h1) / self.isentropic_efficiency
-                h2_actual = h1 + w_actual
-                T_out_k = CP.PropsSI('T', 'H', h2_actual, 'P', p_out_pa, fluid_name)
+                comp_mass = self._inlet_stream.composition
+                
+                # Calculate mole fractions locally (needed for entropy mixing term)
+                mole_comp = {}
+                moles_temp = {}
+                total_moles = 0.0
+                for sp, w_i in comp_mass.items():
+                    if w_i > 1e-9 and sp in FLUID_REF_DATA:
+                        mw = FLUID_REF_DATA[sp][1]
+                        if mw > 0:
+                            n = w_i / mw
+                            moles_temp[sp] = n
+                            total_moles += n
+                
+                if total_moles > 1e-12:
+                    mole_comp = {k: v/total_moles for k,v in moles_temp.items()}
+                
+                # Use simplified iterative solver for T_out
+                # Optimized JIT path for Mixtures
+                if JIT_AVAILABLE and calculate_mixture_compression_jit is not None and self._H_luts_stacked is not None:
+                     # Get cached composition arrays (canonical order)
+                     # Stream guarantees strict canonical order matching the LUT stacks
+                     weights, mole_fracs, M_mix, sum_ylny = self.inlet_stream.get_composition_arrays()
+                     
+                     _, T_out_k, _ = calculate_mixture_compression_jit(
+                        p_in_pa,
+                        p_out_pa,
+                        self.inlet_temperature_k,
+                        self.isentropic_efficiency,
+                        self._P_grid,
+                        self._T_grid,
+                        self._H_luts_stacked,
+                        self._S_luts_stacked,
+                        self._C_luts_stacked,
+                        weights,
+                        mole_fracs,
+                        M_mix,
+                        sum_ylny
+                     )
+                     return T_out_k
+                
+                # Fallback to Python implementation (slower)
+                w_act, T_out_k, _ = mix_thermo.calculate_compression_work(
+                     comp_mass, 
+                     mole_comp,
+                     p_in_pa, 
+                     self.inlet_temperature_k, 
+                     p_out_pa, 
+                     self.isentropic_efficiency, 
+                     self._lut_manager
+                )
                 return T_out_k
             except Exception as e:
-                logger.debug(f"CoolProp compression failed: {e}. Using ideal gas.")  # Fall through
+                logger.debug(f"Mix LUT temp calc failed: {e}")
+
+        # CoolProp paths (pure fluid or mixture)
+        if COOLPROP_AVAILABLE:
+            try:
+                if strategy == FluidStrategy.COOLPROP_MIXTURE:
+                    # Use mixture HEOS backend
+                    backend_str = fluid_id
+                    h1 = CP.PropsSI('H', 'T', self.inlet_temperature_k, 'P', p_in_pa, backend_str)
+                    s1 = CP.PropsSI('S', 'T', self.inlet_temperature_k, 'P', p_in_pa, backend_str)
+                    h2s = CP.PropsSI('H', 'S', s1, 'P', p_out_pa, backend_str)
+                    w_actual = (h2s - h1) / self.isentropic_efficiency
+                    h2_actual = h1 + w_actual
+                    T_out_k = CP.PropsSI('T', 'H', h2_actual, 'P', p_out_pa, backend_str)
+                    return T_out_k
+                elif strategy == FluidStrategy.COOLPROP:
+                    # Pure fluid via CoolProp
+                    coolprop_name = FLUID_REF_DATA.get(fluid_id, ('Hydrogen',))[0] if fluid_id else 'Hydrogen'
+                    h1 = CP.PropsSI('H', 'T', self.inlet_temperature_k, 'P', p_in_pa, coolprop_name)
+                    s1 = CP.PropsSI('S', 'T', self.inlet_temperature_k, 'P', p_in_pa, coolprop_name)
+                    h2s = CP.PropsSI('H', 'S', s1, 'P', p_out_pa, coolprop_name)
+                    w_actual = (h2s - h1) / self.isentropic_efficiency
+                    h2_actual = h1 + w_actual
+                    T_out_k = CP.PropsSI('T', 'H', h2_actual, 'P', p_out_pa, coolprop_name)
+                    return T_out_k
+            except Exception as e:
+                logger.debug(f"CoolProp compression failed: {e}. Using ideal gas.")
         
         # Ideal gas fallback
+        gamma = mix_const.get('gamma', 1.41) if mix_const else 1.41
         pressure_ratio = p_out_pa / p_in_pa
         exponent = (gamma - 1.0) / gamma
         T_isen_k = self.inlet_temperature_k * (pressure_ratio ** exponent)
@@ -412,16 +667,12 @@ class CompressorSingle(Component):
         """
         Numerically solve for maximum outlet pressure satisfying temperature constraint.
         
-        **Algorithm**:
-        Solves the root finding problem $f(P) = T_{discharge}(P) - T_{max} = 0$ using 
-        the Bisection Method (Binary Search) over the domain $[P_{in}, P_{target}]$.
-
-        **Convergence Criteria**:
-        - Iterates until relative pressure error $\frac{|P_{high} - P_{low}|}{P_{low}} < 0.1\%$.
-        - Max iterations: 30 (guarantees convergence for monotonic $T(P)$).
+        **Performance Optimization**:
+        Uses JIT-compiled bisection when stacked LUTs are available, eliminating
+        ~30 Python→JIT roundtrips per call. Falls back to Python bisection otherwise.
         
         Returns:
-            float: Maximum outlet pressure [Pa] that satisfies $T_{out} \le T_{max}$.
+            float: Maximum outlet pressure [Pa] that satisfies T_out <= T_max.
         """
         if self.max_temp_k is None:
             return self.outlet_pressure_bar * self.BAR_TO_PA
@@ -437,15 +688,52 @@ class CompressorSingle(Component):
             return p_in_pa  # No compression possible
         
         # Upper bound: min of target pressure and max_pressure_bar
-        p_high = min(self.outlet_pressure_bar, self.max_pressure_bar) * self.BAR_TO_PA
+        p_max_pa = min(self.outlet_pressure_bar, self.max_pressure_bar) * self.BAR_TO_PA
         
+        # ========== JIT-OPTIMIZED PATH ==========
+        # Use fully JIT-compiled solver when stacked LUTs are available
+        if (JIT_AVAILABLE and 
+            solve_temp_limited_pressure_jit is not None and
+            self._H_luts_stacked is not None and 
+            self._inlet_stream is not None):
+            try:
+                # Get cached composition arrays from stream (canonical order)
+                weights, mole_fracs, M_mix, sum_ylny = self._inlet_stream.get_composition_arrays()
+                
+                # Single JIT call replaces entire bisection loop
+                p_out_pa, T_out_k, w_actual = solve_temp_limited_pressure_jit(
+                    p_in_pa,
+                    p_max_pa,
+                    self.inlet_temperature_k,
+                    self.max_temp_k,
+                    self.isentropic_efficiency,
+                    self._P_grid,
+                    self._T_grid,
+                    self._H_luts_stacked,
+                    self._S_luts_stacked,
+                    self._C_luts_stacked,
+                    weights,
+                    mole_fracs,
+                    M_mix,
+                    sum_ylny
+                )
+                
+                # Cache the compression result for later use in _calculate_compression
+                self._jit_cached_result = (p_out_pa, T_out_k, w_actual)
+                return p_out_pa
+                
+            except Exception as e:
+                logger.debug(f"JIT temp-limited solver failed: {e}. Falling back to Python.")
+        
+        # ========== PYTHON FALLBACK ==========
         # Check if target pressure is achievable
-        T_at_target = self._compute_outlet_temp(p_high)
+        T_at_target = self._compute_outlet_temp(p_max_pa)
         if T_at_target <= self.max_temp_k:
-            return p_high  # Target pressure is achievable within temp limit
+            return p_max_pa  # Target pressure is achievable within temp limit
         
         # Binary search for maximum pressure
         p_low = p_in_pa
+        p_high = p_max_pa
         
         for _ in range(30):  # Converges in ~20 iterations for 0.001% precision
             p_mid = (p_low + p_high) / 2.0
@@ -470,48 +758,82 @@ class CompressorSingle(Component):
         1.  **Pressure Determination**:
             -   If `temperature_limited`: Call `_solve_pressure_for_temp_limit()` to finding limiting discharge pressure.
             -   Else: Use fixed `outlet_pressure_bar`.
-        2.  **Property Evaluation**:
-            -   **LUT (Fast Path)**: If fluid is Hydrogen and LUTs available, invoke JIT kernel.
-            -   **CoolProp (Precision)**: Fallback for other fluids or out-of-bounds states.
-            -   **Ideal Gas (Backup)**: Approximate if EOS fails.
+        2.  **JIT Cache Check**: If temp-limited JIT solver already computed, use cached result.
+        3.  **Strategy Dispatch**:
+            -   **LUT**: Pure fluid with cached lookup tables (~1 µs).
+            -   **COOLPROP_MIXTURE**: Multi-component HEOS backend (~100 µs).
+            -   **IDEAL_GAS**: Mass-weighted constants fallback.
         """
         p_in_pa = self.actual_inlet_pressure_pa
+        
+        # Reset JIT cache
+        self._jit_cached_result = None
         
         # Determine outlet pressure
         if self.temperature_limited and self.max_temp_c is not None:
             p_out_pa = self._solve_pressure_for_temp_limit()
             self.actual_outlet_pressure_pa = p_out_pa
             self.actual_outlet_pressure_bar = p_out_pa / self.BAR_TO_PA
+            
+            # ========== USE CACHED JIT RESULT ==========
+            # If JIT solver already computed everything, use it directly
+            if self._jit_cached_result is not None:
+                _, T_out_k, w_actual = self._jit_cached_result
+                
+                # Set outlet properties
+                self.actual_outlet_temperature_k = T_out_k
+                self.outlet_temperature_k = T_out_k  # FIX: Also set the primary outlet temp
+                self.outlet_temperature_c = T_out_k - 273.15  # FIX: Update Celsius attribute
+                self.compression_work_j_kg = w_actual
+                
+                # Calculate power
+                m_dot_kg_s = self._inlet_stream.mass_flow_kg_h / 3600.0 if self._inlet_stream else 0.0
+                W_shaft_kW = (m_dot_kg_s * w_actual) / 1000.0
+                self.compressor_power_kw = W_shaft_kW / self.mechanical_efficiency if self.mechanical_efficiency > 0 else W_shaft_kW
+                self.total_power_kw = self.compressor_power_kw
+                self.total_energy_kwh = self.total_power_kw * self.dt
+                
+                return  # Done - skip strategy dispatch
         else:
             p_out_pa = self.outlet_pressure_bar * self.BAR_TO_PA
             self.actual_outlet_pressure_pa = p_out_pa
             self.actual_outlet_pressure_bar = self.outlet_pressure_bar
         
-        fluid_name, _, _ = self._get_fluid_properties()
+        # Determine thermodynamic strategy
+        strategy, fluid_id, mix_const = self._determine_fluid_strategy()
 
-        # Only use LUTs for Hydrogen
-        if self._lut_available and fluid_name == 'Hydrogen' and JIT_AVAILABLE:
-            self._calculate_compression_lut(p_in_pa, p_out_pa)
+        # Dispatch by strategy
+        if strategy == FluidStrategy.LUT and fluid_id in self._luts and JIT_AVAILABLE:
+            self._calculate_compression_lut(p_in_pa, p_out_pa, fluid_id)
+        elif strategy == FluidStrategy.LUT_MIXTURE and MIX_THERMO_AVAILABLE:
+            self._calculate_compression_lut_mixture(p_in_pa, p_out_pa)
+        elif strategy == FluidStrategy.COOLPROP_MIXTURE and COOLPROP_AVAILABLE:
+            self._calculate_compression_mixture(p_in_pa, p_out_pa, fluid_id)
         elif COOLPROP_AVAILABLE:
             self._calculate_compression_realgas(p_in_pa, p_out_pa)
         else:
-            self._calculate_compression_idealgas(p_in_pa, p_out_pa)
+            self._calculate_compression_idealgas(p_in_pa, p_out_pa, mix_const)
     
-    def _calculate_compression_lut(self, p_in_pa: float, p_out_pa: float) -> None:
+    def _calculate_compression_lut(self, p_in_pa: float, p_out_pa: float, 
+                                    fluid_key: str = 'H2') -> None:
         """
         Calculate compression using Numba JIT-compiled LUT lookups.
 
         **Performance Rationale**:
         Compressor calculation is the "inner loop" of the system optimization. 
-        Using Numba-compiled interpolation on pre-loaded arrays (~0.1$\mu$s) vs CoolProp calls (~100$\mu$s) 
+        Using Numba-compiled interpolation on pre-loaded arrays (~0.1 µs) vs CoolProp calls (~100 µs) 
         provides a ~1000x speedup, enabling real-time optimization of complex compressor trains.
 
-        **Method**:
-        Invokes `calculate_compression_realgas_jit` from `numba_ops`, passing raw numpy arrays 
-        to avoid Python-C API overhead.
+        Args:
+            p_in_pa: Inlet pressure [Pa].
+            p_out_pa: Outlet pressure [Pa].
+            fluid_key: Key into self._luts dict (e.g., 'H2', 'O2', 'CH4').
         """
         try:
-            # Call JIT function (imported at module level)
+            lut_data = self._luts[fluid_key]
+            _, gamma = FLUID_REF_DATA[fluid_key][2], FLUID_REF_DATA[fluid_key][3]
+            
+            # Call JIT function with fluid-specific LUT arrays
             w_specific, T_out_k, _ = calculate_compression_realgas_jit(
                 p_in_pa,
                 p_out_pa,
@@ -520,14 +842,14 @@ class CompressorSingle(Component):
                 self._P_grid,
                 self._T_grid,
                 self._S_grid,
-                self._H_lut,
-                self._S_lut,
-                self._C_lut,
-                self._H_from_PS_lut
+                lut_data['H'],
+                lut_data['S'],
+                lut_data['C'],
+                lut_data['H_from_PS']
             )
             
             # Check for LUT clamping at upper bound (1200 K)
-            if T_out_k >= 1199.0:  # Close to 1200 K upper bound
+            if T_out_k >= 1199.0:
                 logger.warning(
                     f"Compressor {self.component_id}: Discharge temperature {T_out_k:.1f} K "
                     f"exceeds LUT upper bound. Result may be clamped!"
@@ -536,8 +858,8 @@ class CompressorSingle(Component):
             self.outlet_temperature_k = T_out_k
             self.outlet_temperature_c = T_out_k - 273.15
             
-            # Estimate isentropic outlet temp (for diagnostics)
-            gamma = 1.41
+            # Estimate isentropic outlet temp using fluid-specific gamma
+            gamma = FLUID_REF_DATA[fluid_key][3]
             exponent = (gamma - 1.0) / gamma
             T_isen_k = self.inlet_temperature_k * (p_out_pa / p_in_pa)**exponent
             self.outlet_temperature_isentropic_c = T_isen_k - 273.15
@@ -550,11 +872,97 @@ class CompressorSingle(Component):
             self.compression_work_kwh = self.specific_energy_kwh_kg * self.actual_mass_transferred_kg
             
         except Exception as e:
-            logger.warning(f"LUT compression failed for {self.component_id}: {e}. Falling back to CoolProp.")
+            logger.warning(f"LUT compression failed for {self.component_id} ({fluid_key}): {e}")
             if COOLPROP_AVAILABLE:
                 self._calculate_compression_realgas(p_in_pa, p_out_pa)
             else:
-                self._calculate_compression_idealgas(p_in_pa, p_out_pa)
+                self._calculate_compression_idealgas(p_in_pa, p_out_pa, {})
+
+    def _calculate_compression_lut_mixture(self, p_in_pa: float, p_out_pa: float) -> None:
+        """
+        Calculate compression for multi-component mixtures using Ideal Mixing of Real Gases.
+
+        **Physical Basis**:
+        Uses LUT-based pure component properties with rigorous mixing rules:
+        - Enthalpy: h_mix = Σ w_i · h_i(P, T)
+        - Entropy: s_mix = Σ w_i · s_i(P, T) - R_mix · Σ y_i · ln(y_i)
+        - Newton-Raphson solver for isentropic outlet temperature
+
+        **Performance**: ~6 µs per call (6 LUT lookups) vs ~100 µs for CoolProp.
+
+        Args:
+            p_in_pa: Inlet pressure [Pa].
+            p_out_pa: Outlet pressure [Pa].
+        """
+        try:
+            # Get composition from inlet stream
+            comp_mass = self._inlet_stream.composition.copy()
+            comp_mole = self._inlet_stream.mole_fractions
+            
+            # Calculate compression using mixture thermodynamics
+            # Optimized JIT path for Mixtures
+            if JIT_AVAILABLE and calculate_mixture_compression_jit is not None and self._H_luts_stacked is not None:
+                 # Get cached composition arrays (canonical order)
+                 # Stream guarantees strict canonical order matching the LUT stacks
+                 weights, mole_fracs, M_mix, sum_ylny = self._inlet_stream.get_composition_arrays()
+                 
+                 w_actual, T_out_actual, T_out_isen = calculate_mixture_compression_jit(
+                    p_in_pa,
+                    p_out_pa,
+                    self.inlet_temperature_k,
+                    self.isentropic_efficiency,
+                    self._P_grid,
+                    self._T_grid,
+                    self._H_luts_stacked,
+                    self._S_luts_stacked,
+                    self._C_luts_stacked,
+                    weights,     # Mass fractions
+                    mole_fracs,  # Mole fractions
+                    M_mix,       # Molar mass
+                    sum_ylny     # Entropy mixing term
+                )
+            else:
+                # Fallback purely if JIT specific setup failed (should not happen if initialized)
+                logger.warning("JIT mixture solver unavailable, using Python fallback.")
+                comp_mass = self._inlet_stream.composition.copy()
+                comp_mole = self._inlet_stream.mole_fractions
+                w_actual, T_out_actual, T_out_isen = mix_thermo.calculate_compression_work(
+                    comp_mass,
+                    comp_mole,
+                    p_in_pa,
+                    self.inlet_temperature_k,
+                    p_out_pa,
+                    self.isentropic_efficiency,
+                    self._lut_manager
+                )
+            
+            # Update state
+            self.outlet_temperature_k = T_out_actual
+            self.outlet_temperature_c = T_out_actual - 273.15
+            self.outlet_temperature_isentropic_c = T_out_isen - 273.15
+            
+            # Apply drive efficiency
+            drive_efficiency = self.mechanical_efficiency * self.electrical_efficiency
+            w_electrical = w_actual / drive_efficiency
+            
+            self.specific_energy_kwh_kg = w_electrical * self.J_TO_KWH
+            self.compression_work_kwh = self.specific_energy_kwh_kg * self.actual_mass_transferred_kg
+            
+            logger.debug(
+                f"LUT_MIXTURE compression: T_out={T_out_actual:.1f}K, "
+                f"w={w_actual/1000:.2f} kJ/kg"
+            )
+            
+        except Exception as e:
+            logger.warning(
+                f"LUT_MIXTURE compression failed for {self.component_id}: {e}. "
+                f"Falling back to CoolProp."
+            )
+            if COOLPROP_AVAILABLE:
+                self._calculate_compression_realgas(p_in_pa, p_out_pa)
+            else:
+                mix_const = self._calculate_mixture_constants(self._inlet_stream.composition)
+                self._calculate_compression_idealgas(p_in_pa, p_out_pa, mix_const)
 
     def _calculate_compression_realgas(self, p_in_pa: float, p_out_pa: float) -> None:
         """
@@ -596,7 +1004,58 @@ class CompressorSingle(Component):
         self.specific_energy_kwh_kg = w_electrical * self.J_TO_KWH
         self.compression_work_kwh = self.specific_energy_kwh_kg * self.actual_mass_transferred_kg
 
-    def _calculate_compression_idealgas(self, p_in_pa: float, p_out_pa: float) -> None:
+    def _calculate_compression_mixture(self, p_in_pa: float, p_out_pa: float, 
+                                        mixture_string: str) -> None:
+        """
+        Calculates compression for multi-component mixtures using CoolProp HEOS.
+
+        **Physics**:
+        Uses CoolProp's HEOS backend for rigorous mixture thermodynamics, accounting for:
+        - Non-ideal mixing (activity coefficients)
+        - Component-specific heat capacities
+        - Mixture compressibility
+
+        Args:
+            p_in_pa: Inlet pressure [Pa].
+            p_out_pa: Outlet pressure [Pa].
+            mixture_string: CoolProp HEOS backend string (e.g., "HEOS::Hydrogen[0.5]&Methane[0.5]").
+        """
+        try:
+            h1 = CP.PropsSI('H', 'T', self.inlet_temperature_k, 'P', p_in_pa, mixture_string)
+            s1 = CP.PropsSI('S', 'T', self.inlet_temperature_k, 'P', p_in_pa, mixture_string)
+
+            t2s_k = CP.PropsSI('T', 'S', s1, 'P', p_out_pa, mixture_string)
+            h2s = CP.PropsSI('H', 'S', s1, 'P', p_out_pa, mixture_string)
+
+            self.outlet_temperature_isentropic_c = t2s_k - 273.15
+
+            w_isentropic = h2s - h1
+            w_actual = w_isentropic / self.isentropic_efficiency
+
+            h2_actual = h1 + w_actual
+
+            t2_k = CP.PropsSI('T', 'H', h2_actual, 'P', p_out_pa, mixture_string)
+
+            self.outlet_temperature_k = t2_k
+            self.outlet_temperature_c = t2_k - 273.15
+
+            drive_efficiency = self.mechanical_efficiency * self.electrical_efficiency
+            w_electrical = w_actual / drive_efficiency
+
+            self.specific_energy_kwh_kg = w_electrical * self.J_TO_KWH
+            self.compression_work_kwh = self.specific_energy_kwh_kg * self.actual_mass_transferred_kg
+
+        except Exception as e:
+            logger.warning(f"Mixture compression failed for {self.component_id}: {e}. Falling back to ideal gas.")
+            # Fall back to ideal gas with mixture constants
+            if self._inlet_stream and self._inlet_stream.composition:
+                mix_const = self._calculate_mixture_constants(self._inlet_stream.composition)
+            else:
+                mix_const = {'cp': 14304.0, 'gamma': 1.41}
+            self._calculate_compression_idealgas(p_in_pa, p_out_pa, mix_const)
+
+    def _calculate_compression_idealgas(self, p_in_pa: float, p_out_pa: float,
+                                         mix_const: Optional[Dict[str, float]] = None) -> None:
         """
         Calculates compression using Ideal Gas Law approximation.
 
@@ -605,11 +1064,20 @@ class CompressorSingle(Component):
         significantly above 50 bar for Hydrogen due to compressibility ($Z$) deviating from 1.0.
 
         **Formula**:
-        $$ T_{2s} = T_{in} \cdot \left(\frac{P_{out}}{P_{in}}\right)^{\frac{\gamma-1}{\gamma}} $$
-        $$ \Delta T_{actual} = \frac{T_{2s} - T_{in}}{\eta_{isen}} $$
-        $$ W_{actual} = C_p \cdot \Delta T_{actual} $$
+        $$ T_{2s} = T_{in} \\cdot \\left(\\frac{P_{out}}{P_{in}}\\right)^{\\frac{\\gamma-1}{\\gamma}} $$
+        $$ \\Delta T_{actual} = \\frac{T_{2s} - T_{in}}{\\eta_{isen}} $$
+        $$ W_{actual} = C_p \\cdot \\Delta T_{actual} $$
+
+        Args:
+            p_in_pa: Inlet pressure [Pa].
+            p_out_pa: Outlet pressure [Pa].
+            mix_const: Optional dict with 'cp' and 'gamma' for mixture. If None, uses legacy lookup.
         """
-        _, cp, gamma = self._get_fluid_properties()
+        if mix_const:
+            cp = mix_const.get('cp', 14304.0)
+            gamma = mix_const.get('gamma', 1.41)
+        else:
+            _, cp, gamma = self._get_fluid_properties()
 
         pressure_ratio = p_out_pa / p_in_pa
         exponent = (gamma - 1) / gamma

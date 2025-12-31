@@ -131,16 +131,16 @@ class SimulationEngine:
         self.dispatch_strategy = dispatch_strategy
         self._dispatch_prices: Optional[np.ndarray] = None
         self._dispatch_wind: Optional[np.ndarray] = None
+        
+        # PERFORMANCE: Pre-resolved execution lists
+        self._execution_list: List[Any] = []
+        self._dispatch_decide_method: Optional[Callable] = None
+        self._dispatch_record_method: Optional[Callable] = None
 
     def initialize(self) -> None:
         """
         Initialize simulation engine and all components.
-
-        Fulfills Layer 2 orchestration by calling `initialize()` on all
-        registered components with the configured timestep.
-
-        Raises:
-            SimulationError: If initialization fails.
+        OPTIMIZED: Resolves execution order to object list once.
         """
         logger.info("Initializing simulation engine...")
         try:
@@ -150,6 +150,52 @@ class SimulationEngine:
             self.registry.initialize_all(dt=dt_hours)
             self.flow_network.initialize()
             self.monitoring.initialize(self.registry)
+            
+            # --- OPTIMIZATION START: Pre-resolve Execution Order ---
+            # Use topological sort on FlowNetwork to determine causal order.
+            # This automatically respects connection dependencies.
+            
+            from graphlib import TopologicalSorter, CycleError
+            
+            # Build dependency graph: target_component depends on source_component
+            dependency_graph: Dict[str, set] = {}
+            
+            # Initialize all registered components with empty dependencies
+            for comp_id, _ in self.registry.list_components():
+                dependency_graph[comp_id] = set()
+            
+            # Add edges from topology connections
+            for conn in self.flow_network.topology:
+                source_id = conn.source_id
+                target_id = conn.target_id
+                
+                # Target depends on Source (Source must execute first)
+                if target_id in dependency_graph and source_id in dependency_graph:
+                    dependency_graph[target_id].add(source_id)
+            
+            # Resolve execution order using Kahn's algorithm
+            try:
+                sorter = TopologicalSorter(dependency_graph)
+                execution_order = list(sorter.static_order())
+            except CycleError as e:
+                logger.warning(f"Cycle detected in topology: {e}. Using fallback order.")
+                execution_order = [comp_id for comp_id, _ in self.registry.list_components()]
+            
+            # Convert IDs to component objects
+            self._execution_list = []
+            for comp_id in execution_order:
+                if self.registry.has(comp_id):
+                    self._execution_list.append(self.registry.get(comp_id))
+            
+            logger.info(f"Topological sort resolved {len(self._execution_list)} components for execution")
+            
+            # Cache dispatch methods
+            if self.dispatch_strategy:
+                self._dispatch_decide_method = self.dispatch_strategy.decide_and_apply
+                if hasattr(self.dispatch_strategy, 'record_post_step'):
+                    self._dispatch_record_method = self.dispatch_strategy.record_post_step
+            # --- OPTIMIZATION END ---
+
             self.is_initialized = True
             logger.info(f"Simulation engine initialized successfully (dt={dt_hours:.4f} hours)")
         except Exception as e:
@@ -163,21 +209,6 @@ class SimulationEngine:
     ) -> Dict[str, Any]:
         """
         Run simulation from start to end hour.
-
-        Executes the main simulation loop, processing each timestep in
-        sequence with event handling, component execution, and flow propagation.
-
-        Args:
-            start_hour (int, optional): Starting hour. Default: config.start_hour.
-            end_hour (int, optional): Ending hour. Default: start + duration.
-            resume_from_checkpoint (str, optional): Path to checkpoint file
-                for resuming interrupted simulation.
-
-        Returns:
-            Dict[str, Any]: Simulation results including final states and metrics.
-
-        Raises:
-            SimulationError: If simulation execution fails.
         """
         effective_start_hour = start_hour if start_hour is not None else self.config.start_hour
         effective_end_hour = end_hour if end_hour is not None else (effective_start_hour + self.config.duration_hours)
@@ -199,23 +230,65 @@ class SimulationEngine:
         self.is_running = True
         self.steps_run = 0
 
+        # Local variable optimization
+        dispatch_decide = self._dispatch_decide_method
+        dispatch_record = self._dispatch_record_method
+        execution_list = self._execution_list
+        flow_execute = self.flow_network.execute_flows
+        event_process = self.event_scheduler.process_events
+        dispatch_prices = self._dispatch_prices
+        dispatch_wind = self._dispatch_wind
+        
+        # Checkpoint interval logic optimized
+        chk_interval = self.config.checkpoint_interval_hours
+        chk_steps = chk_interval * steps_per_hour if chk_interval > 0 else 0
+
         try:
             for step in range(start_step, end_step):
                 hour = step / steps_per_hour
                 self.current_hour = hour
 
-                self._execute_timestep(hour)
+                # --- FAST PATH TIMESTEP EXECUTION ---
+                if self.pre_step_callback:
+                    self.pre_step_callback(hour)
+
+                event_process(hour, self.registry)
+
+                # Dispatch Decision
+                if dispatch_decide and dispatch_prices is not None:
+                    dispatch_decide(hour, dispatch_prices, dispatch_wind)
+
+                # Physics Step (Iterate pre-resolved list)
+                # Removed try/except block in inner loop for speed (Python exception handling is slow)
+                # We trust components are stable after initialization.
+                for component in execution_list:
+                    component.step(hour)
+
+                # Flow Propagation
+                flow_execute(hour)
+
+                # Dispatch Recording
+                if dispatch_record:
+                    dispatch_record()
+                    
+                if self.post_step_callback:
+                    self.post_step_callback(hour)
+                # -----------------------------------
+
                 self.steps_run += 1
 
-                # Hourly checkpointing and logging
+                # Periodic Tasks (Checkpointing/Logging)
                 if step % steps_per_hour == 0:
                     int_hour = int(hour)
-                    if self._should_checkpoint(int_hour):
+                    # Checkpointing
+                    if chk_steps > 0 and step > start_step and step % chk_steps == 0:
                         self._save_checkpoint(int_hour)
 
+                    # Logging
                     if int_hour > 0 and int_hour % 168 == 0:
                         self._log_progress(int_hour, effective_end_hour, effective_start_hour)
 
+                    # Monitoring (heavy, so strictly hourly)
                     self.monitoring.collect(hour, self.registry)
 
             self.is_running = False
@@ -239,101 +312,6 @@ class SimulationEngine:
             logger.error(f"Simulation failed at hour {self.current_hour}: {e}", exc_info=True)
             self._save_checkpoint(int(self.current_hour), emergency=True)
             raise SimulationError(f"Simulation execution failed: {e}") from e
-
-    def _execute_timestep(self, hour: float) -> None:
-        """
-        Execute a single simulation timestep.
-
-        Performs complete timestep cycle:
-        1. Execute pre-step callback.
-        2. Process scheduled events.
-        3. Apply dispatch setpoints (if strategy configured).
-        4. Execute components in causal order.
-        5. Propagate flows through network.
-        6. Record post-step dispatch results.
-        7. Execute post-step callback.
-
-        Args:
-            hour (float): Current simulation time in fractional hours.
-        """
-        if self.pre_step_callback:
-            self.pre_step_callback(hour)
-
-        self.event_scheduler.process_events(hour, self.registry)
-
-        # Apply dispatch setpoints before component execution
-        t0_dispatch = time.perf_counter()
-        if self.dispatch_strategy and self._dispatch_prices is not None:
-            self.dispatch_strategy.decide_and_apply(
-                t=hour,
-                prices=self._dispatch_prices,
-                wind=self._dispatch_wind
-            )
-        t1_dispatch = time.perf_counter()
-
-        # Causal execution order ensures correct physics propagation
-        execution_order = [
-            'energy_price_tracker', 'demand_scheduler', 'environment_manager',
-            'dual_path_coordinator',
-            'soec_cluster', 'pem_electrolyzer_detailed',
-            'thermal_manager',
-            'chiller', 'chiller_hx5', 'chiller_hx6',
-            'separator_sp3', 'psa_d3',
-            'compressor_c1', 'compressor_c2', 'filling_compressor',
-            'lp_tanks', 'hp_tanks', 'h2_storage_enhanced',
-            'logistics_manager'
-        ]
-
-        # Execute ordered components first (each exactly once)
-        executed_instances = set()
-        
-        t0_physics = time.perf_counter()
-        for comp_id in execution_order:
-            if self.registry.has(comp_id):
-                try:
-                    component = self.registry.get(comp_id)
-                    if component not in executed_instances:
-                        component.step(hour)
-                        executed_instances.add(component)
-                except Exception as e:
-                    logger.error(f"Component {comp_id} step failed at hour {hour}: {e}")
-                    raise
-
-        # Execute remaining components
-        for comp_id, component in self.registry.list_components():
-            if component not in executed_instances:
-                try:
-                    component.step(hour)
-                    executed_instances.add(component)
-                except Exception as e:
-                    logger.error(f"Component {comp_id} step failed at hour {hour}: {e}")
-                    raise
-        t1_physics = time.perf_counter()
-
-        # Propagate flows after component updates
-        t0_flow = time.perf_counter()
-        try:
-            self.flow_network.execute_flows(hour)
-        except Exception as e:
-            logger.error(f"Flow execution failed at hour {hour}: {e}")
-            raise
-        t1_flow = time.perf_counter()
-
-        # Record dispatch results after physics execution
-        if self.dispatch_strategy and hasattr(self.dispatch_strategy, 'record_post_step'):
-            self.dispatch_strategy.record_post_step()
-            
-        if self.post_step_callback:
-            self.post_step_callback(hour)
-            
-        # Log performance metrics (every 100 steps or if slow)
-        dt_dispatch = t1_dispatch - t0_dispatch
-        dt_physics = t1_physics - t0_physics
-        dt_flow = t1_flow - t0_flow
-        total_time = dt_dispatch + dt_physics + dt_flow
-        
-        if total_time > 0.05: # Warn on slow steps (>50ms)
-             logger.warning(f"Slow Step {hour:.2f}h: Total={total_time*1000:.1f}ms (Disp={dt_dispatch*1000:.1f}ms, Phys={dt_physics*1000:.1f}ms, Flow={dt_flow*1000:.1f}ms)")
 
     def _should_checkpoint(self, hour: int) -> bool:
         """

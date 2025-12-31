@@ -224,7 +224,8 @@ class PSA(Component):
         self,
         flow_m3_s: float,
         temperature_k: float,
-        pressure_pa: float
+        pressure_pa: float,
+        density_kg_m3: float = None
     ) -> float:
         """
         Calculate pressure drop using Ergun equation.
@@ -233,6 +234,7 @@ class PSA(Component):
             flow_m3_s (float): Volumetric flow rate (m³/s).
             temperature_k (float): Gas temperature (K).
             pressure_pa (float): Gas pressure (Pa).
+            density_kg_m3 (float, optional): Gas density (kg/m³). If None, calculated for pure H2 (Ideal).
             
         Returns:
             float: Pressure drop (Pa).
@@ -252,9 +254,14 @@ class PSA(Component):
         # Fluid properties (Approximate for H2 dominance)
         # Viscosity H2 at 300K ~ 9e-6 Pa.s
         mu = 9.0e-6 
-        # Density (Ideal Gas)
-        R_spec = 4124.0 # J/kgK for H2
-        rho = pressure_pa / (R_spec * temperature_k)
+        
+        # Density 
+        if density_kg_m3 is not None:
+            rho = density_kg_m3
+        else:
+            # Fallback: Density (Ideal Gas H2)
+            R_spec = 4124.0 # J/kgK for H2
+            rho = pressure_pa / (R_spec * temperature_k)
         
         # Ergun Equation
         # Term 1 (Viscous/Laminar): 150 * (1-eps)^2 * mu * u / (eps^3 * dp^2)
@@ -327,7 +334,7 @@ class PSA(Component):
         
         # 1. Pressure Drop (Ergun)
         flow_m3_s = (inlet_flow_kg_h / 3600.0) / rho_in if rho_in > 0 else 0.0
-        delta_p_pa = self._calculate_delta_p_ergun(flow_m3_s, T_in, P_in)
+        delta_p_pa = self._calculate_delta_p_ergun(flow_m3_s, T_in, P_in, density_kg_m3=rho_in)
         P_out_pa = max(101325.0, P_in - delta_p_pa)
 
         # 2. Separation Logic (Species-Specific Recovery)

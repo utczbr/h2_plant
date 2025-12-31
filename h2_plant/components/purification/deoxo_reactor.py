@@ -40,6 +40,14 @@ from h2_plant.core.stream import Stream
 from h2_plant.core.constants import DeoxoConstants, GasConstants
 from h2_plant.optimization import numba_ops
 
+# Import mixture thermodynamics for rigorous Cp calculation
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -197,8 +205,51 @@ class DeoxoReactor(Component):
         # Convert mass flow to molar flow
         molar_flow_total = (stream.mass_flow_kg_h / 3600.0) / mw_mix
         
+        # 3. Calculate rigorous mixture Cp using LUT-derived enthalpy
+        # Cp = dH/dT ≈ (H(T+1) - H(T)) / 1K
+        cp_mix_j_mol_k = DeoxoConstants.CP_MIX_AVG_J_MOL_K  # Default
+        lut_manager = None
+        if hasattr(self, 'registry') and self.registry is not None:
+            try:
+                lut_manager = self.registry.get('lut_manager')
+            except Exception:
+                pass
+        
+        # PERFORMANCE: Skip mix_thermo for near-pure H2 streams (>98%)
+        dominant_frac = max(comp.values()) if comp else 0
+        use_mix_thermo = (dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None and lut_manager is not None)
+        
+        if use_mix_thermo:
+            try:
+                T_in = stream.temperature_k
+                P_in = stream.pressure_pa
+                
+                # Optimized JIT Path
+                if numba_ops.JIT_AVAILABLE and hasattr(lut_manager, 'stacked_C') and lut_manager.stacked_C is not None:
+                    weights, _, M_mix, _ = stream.get_composition_arrays()
+                    cp_mix_j_mol_k = numba_ops.get_mix_cp_jit(
+                        P_in,
+                        T_in,
+                        lut_manager._pressure_grid,
+                        lut_manager._temperature_grid,
+                        lut_manager.stacked_C,
+                        weights,
+                        M_mix
+                    )
+                else:
+                    # Fallback to finite difference
+                    h_t1 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in, lut_manager)
+                    h_t2 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in + 1.0, lut_manager)
+                    
+                    # Cp in J/(kg·K), convert to J/(mol·K)
+                    cp_mix_j_kg_k = h_t2 - h_t1
+                    if mw_mix > 0 and cp_mix_j_kg_k > 100:  # Sanity check
+                        cp_mix_j_mol_k = cp_mix_j_kg_k * mw_mix
+            except Exception:
+                pass  # Use default constant Cp
+        
         # Adiabatic ΔT Check (pre-zone sanity/safety)
-        delta_t_ad = abs(DeoxoConstants.DELTA_H_RXN_J_MOL_O2) * y_o2_in / DeoxoConstants.CP_MIX_AVG_J_MOL_K
+        delta_t_ad = abs(DeoxoConstants.DELTA_H_RXN_J_MOL_O2) * y_o2_in / cp_mix_j_mol_k
         self.last_delta_t_ad_k = delta_t_ad
         
         if delta_t_ad > DeoxoConstants.DELTA_T_AD_MAX_K:
@@ -247,7 +298,7 @@ class DeoxoReactor(Component):
                 DeoxoConstants.DELTA_H_RXN_J_MOL_O2,
                 DeoxoConstants.T_JACKET_K,
                 DeoxoConstants.AREA_REACTOR_M2,
-                DeoxoConstants.CP_MIX_AVG_J_MOL_K,
+                cp_mix_j_mol_k,  # Rigorous LUT-derived Cp (or fallback constant)
                 DeoxoConstants.MAX_ALLOWED_O2_OUT_MOLE_FRAC
             )
             

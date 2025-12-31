@@ -130,6 +130,24 @@ class LUTManager(Component):
         self._saturation_lut: Dict[str, npt.NDArray] = {}
         self._saturation_temp_grid: Optional[npt.NDArray] = None
 
+        # Stacked LUTs for Vectorized JIT Operations
+        # Shape: (N_fluids, N_P, N_T) or (N_fluids, N_P, N_S)
+        self.stacked_H: Optional[npt.NDArray] = None
+        self.stacked_S: Optional[npt.NDArray] = None
+        self.stacked_C: Optional[npt.NDArray] = None
+        self.stacked_D: Optional[npt.NDArray] = None
+        self.stacked_Z: Optional[npt.NDArray] = None
+        self.stacked_H_from_PS: Optional[npt.NDArray] = None
+
+        # Stacked LUTs for Vectorized JIT Operations
+        # Shape: (N_fluids, N_P, N_T) or (N_fluids, N_P, N_S)
+        self.stacked_H: Optional[npt.NDArray] = None
+        self.stacked_S: Optional[npt.NDArray] = None
+        self.stacked_C: Optional[npt.NDArray] = None
+        self.stacked_D: Optional[npt.NDArray] = None
+        self.stacked_Z: Optional[npt.NDArray] = None
+        self.stacked_H_from_PS: Optional[npt.NDArray] = None
+
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"LUTManager initialized with cache dir: {self.config.cache_dir}")
@@ -197,7 +215,51 @@ class LUTManager(Component):
         # Generate 1D saturation LUT for water (T → P_sat)
         self._generate_saturation_lut()
 
+        # Validate and stack LUTs for JIT
+        self._stack_luts()
+
         logger.info("LUT Manager initialization complete")
+
+    def _stack_luts(self) -> None:
+        """
+        Create 3D stacked arrays for vectorized JIT access.
+        
+        Converts the dictionary-of-dictionaries structure into contiguous
+        NumPy arrays ordered by self.config.fluids.
+        """
+        if not self._luts or not self._pressure_grid is not None:
+             return
+
+        fluids = self.config.fluids
+        n_fluids = len(fluids)
+        n_p = len(self._pressure_grid)
+        n_t = len(self._temperature_grid)
+        
+        # Initialize arrays
+        self.stacked_H = np.zeros((n_fluids, n_p, n_t), dtype=np.float64)
+        self.stacked_S = np.zeros((n_fluids, n_p, n_t), dtype=np.float64)
+        self.stacked_C = np.zeros((n_fluids, n_p, n_t), dtype=np.float64)
+        self.stacked_D = np.zeros((n_fluids, n_p, n_t), dtype=np.float64)
+        self.stacked_Z = np.zeros((n_fluids, n_p, n_t), dtype=np.float64)
+        
+        if self._entropy_grid is not None:
+            n_s = len(self._entropy_grid)
+            self.stacked_H_from_PS = np.zeros((n_fluids, n_p, n_s), dtype=np.float64)
+        
+        for i, fluid in enumerate(fluids):
+            if fluid in self._luts:
+                data = self._luts[fluid]
+                # Default to ideal gas properties or zeros if missing? 
+                # Assuming complete LUTs for supported fluids.
+                if 'H' in data: self.stacked_H[i] = data['H']
+                if 'S' in data: self.stacked_S[i] = data['S']
+                if 'C' in data: self.stacked_C[i] = data['C']
+                if 'D' in data: self.stacked_D[i] = data['D']
+                if 'Z' in data: self.stacked_Z[i] = data['Z']
+                if 'H_from_PS' in data and self.stacked_H_from_PS is not None:
+                    self.stacked_H_from_PS[i] = data['H_from_PS']
+        
+        logger.info(f"Stacked LUTs prepared for {n_fluids} fluids (vectorized backend ready)")
 
     def step(self, t: float) -> None:
         """
@@ -373,7 +435,7 @@ class LUTManager(Component):
         temperature: float
     ) -> float:
         """
-        Perform 2D bilinear interpolation on LUT.
+        Perform 2D bilinear interpolation on LUT using JIT-compiled kernels.
 
         Bilinear interpolation formula:
         f = (1-wp)(1-wt)f₀₀ + wp(1-wt)f₁₀ + (1-wp)wt·f₀₁ + wp·wt·f₁₁
@@ -386,31 +448,12 @@ class LUTManager(Component):
         Returns:
             float: Interpolated property value.
         """
-        p_idx = np.searchsorted(self._pressure_grid, pressure)
-        t_idx = np.searchsorted(self._temperature_grid, temperature)
-
-        p_idx = np.clip(p_idx, 1, len(self._pressure_grid) - 1)
-        t_idx = np.clip(t_idx, 1, len(self._temperature_grid) - 1)
-
-        p0, p1 = self._pressure_grid[p_idx - 1], self._pressure_grid[p_idx]
-        t0, t1 = self._temperature_grid[t_idx - 1], self._temperature_grid[t_idx]
-
-        q00 = lut[p_idx - 1, t_idx - 1]
-        q01 = lut[p_idx - 1, t_idx]
-        q10 = lut[p_idx, t_idx - 1]
-        q11 = lut[p_idx, t_idx]
-
-        wp = (pressure - p0) / (p1 - p0) if p1 != p0 else 0.0
-        wt = (temperature - t0) / (t1 - t0) if t1 != t0 else 0.0
-
-        value = (
-            q00 * (1 - wp) * (1 - wt) +
-            q10 * wp * (1 - wt) +
-            q01 * (1 - wp) * wt +
-            q11 * wp * wt
+        from h2_plant.optimization.numba_ops import get_interp_weights_jit, interp_from_weights_jit
+        
+        ix, iy, wx, wy = get_interp_weights_jit(
+            self._pressure_grid, self._temperature_grid, pressure, temperature
         )
-
-        return value
+        return interp_from_weights_jit(lut, ix, iy, wx, wy)
 
     def _generate_lut(self, fluid: str) -> Dict[PropertyType, npt.NDArray]:
         """

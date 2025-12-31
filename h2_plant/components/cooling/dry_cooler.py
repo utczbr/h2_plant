@@ -48,6 +48,14 @@ from h2_plant.core.constants import (
     DryCoolerIndirectConstants as DCC
 )
 from h2_plant.optimization import numba_ops
+
+# Import mixture thermodynamics for rigorous Cp calculations
+try:
+    from h2_plant.optimization import mixture_thermodynamics as mix_thermo
+    MIX_THERMO_AVAILABLE = True
+except ImportError:
+    mix_thermo = None
+    MIX_THERMO_AVAILABLE = False
 from h2_plant.optimization.coolprop_lut import CoolPropLUT
 import math
 
@@ -214,21 +222,59 @@ class DryCooler(Component):
         # Gas stream properties
         m_dot_gas = self.inlet_stream.mass_flow_kg_h / 3600.0
 
-        # Compute mixture heat capacity using mass-weighted average
+        # PERFORMANCE: Only use rigorous mix_thermo for true multi-species streams
+        # For near-pure streams (>98% single species), fallback is faster and equally accurate
+        comp = self.inlet_stream.composition
+        dominant_frac = max(comp.values()) if comp else 0
+        use_mix_thermo = (dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None)
         cp_gas_mix = 0.0
-        for sp, y in self.inlet_stream.composition.items():
-            if sp == 'H2O':
-                cp_sp = 1860.0  # Water vapor Cp (J/kg·K)
-            elif sp == 'H2':
-                cp_sp = GasConstants.CP_H2_AVG
-            elif sp == 'O2':
-                cp_sp = GasConstants.CP_O2_AVG
-            else:
-                cp_sp = 1000.0  # Conservative default
-            cp_gas_mix += y * cp_sp
+        
+        if use_mix_thermo:
+            try:
+                lut_manager = None
+                if hasattr(self, 'registry') and self.registry is not None:
+                    lut_manager = self.registry.get('lut_manager')
+
+                if (lut_manager is not None and 
+                    lut_manager.stacked_C is not None and 
+                    lut_manager._pressure_grid is not None):
+                    
+                    # optimized JIT path
+                    mass_fracs_arr, _, _, _ = self.inlet_stream.get_composition_arrays()
+                    cp_gas_mix = numba_ops.get_mix_cp_jit(
+                        self.inlet_stream.pressure_pa,
+                        self.inlet_stream.temperature_k,
+                        mass_fracs_arr,
+                        lut_manager.stacked_C,
+                        lut_manager._pressure_grid,
+                        lut_manager._temperature_grid
+                    )
+                elif lut_manager is not None:
+                     # Python fallback (slow but robust if JIT not ready)
+                     P_in = self.inlet_stream.pressure_pa
+                     T_in = self.inlet_stream.temperature_k
+                     h_t1 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in, lut_manager)
+                     h_t2 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in - 1.0, lut_manager)
+                     cp_gas_mix = h_t1 - h_t2
+            except Exception as e:
+                # logger.warning(f"DryCooler mixture thermodynamics error: {e}")
+                pass
+
+        # Fallback: Mass-weighted average of constant Cp (FAST)
+        if cp_gas_mix <= 0:
+            for sp, y in comp.items():
+                if sp == 'H2O':
+                    cp_sp = 1860.0  # Water vapor Cp (J/kg·K)
+                elif sp == 'H2':
+                    cp_sp = GasConstants.CP_H2_AVG
+                elif sp == 'O2':
+                    cp_sp = GasConstants.CP_O2_AVG
+                else:
+                    cp_sp = 1000.0  # Conservative default
+                cp_gas_mix += y * cp_sp
 
         # Enhancement for wet streams with entrained liquid
-        h2o_liq_frac = self.inlet_stream.composition.get('H2O_liq', 0.0)
+        h2o_liq_frac = comp.get('H2O_liq', 0.0)
         if h2o_liq_frac > 0:
             # Liquid water thermal mass included implicitly via higher effective Cp
             pass

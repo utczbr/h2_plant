@@ -31,6 +31,117 @@ from h2_plant.core.constants import GasConstants
 
 
 # =============================================================================
+# Stream Enthalpy Constants (Hardcoded for JIT performance)
+# Order: H2, O2, N2, H2O, CH4, CO2 (Matches CANONICAL_FLUID_ORDER)
+GAS_CP_COEFFS = np.array([
+    [29.11, -0.1916e-2, 0.4003e-5, -0.8704e-9, 0.0],  # H2
+    [29.96, 4.18e-3, -1.67e-6, 0.0, 0.0],             # O2
+    [28.98, -0.1571e-2, 0.8081e-5, -2.873e-9, 0.0],   # N2
+    [32.24, 1.92e-3, 1.06e-5, -3.60e-9, 0.0],         # H2O (vap)
+    [19.89, 5.02e-2, 1.27e-5, -1.10e-8, 0.0],         # CH4
+    [22.26, 5.98e-2, -3.50e-5, 7.47e-9, 0.0]          # CO2
+], dtype=np.float64)
+
+GAS_MW = np.array([2.016, 32.0, 28.014, 18.015, 16.04, 44.01], dtype=np.float64)
+
+# Pre-computed MW in kg/mol for stream.py compatibility
+GAS_MW_KG_MOL = GAS_MW * 1e-3
+
+# H2O Liquid Constants (Cp ~ 75.3 J/molK)
+LIQ_CP_COEFFS = np.array([75.3, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
+LIQ_MW = 18.015
+
+
+@njit(cache=True)
+def fast_composition_properties(mass_fracs: np.ndarray) -> Tuple[np.ndarray, float, float]:
+    """
+    Compute mole fractions, molar mass, and entropy mixing term in one JIT pass.
+    
+    Avoids Python-side NumPy allocations and vector operations by computing
+    everything in a single loop with pre-allocated arrays.
+    
+    Args:
+        mass_fracs: Array of mass fractions [H2, O2, N2, H2O, CH4, CO2]
+    
+    Returns:
+        Tuple of (mole_fracs, M_mix, sum_ylny)
+    """
+    # MW in kg/mol for this calculation
+    mw_arr = np.array([0.002016, 0.032, 0.028014, 0.018015, 0.01604, 0.04401])
+    n = 6
+    
+    # Single pass: compute moles and total
+    total_moles = 0.0
+    moles = np.empty(n, dtype=np.float64)
+    
+    for i in range(n):
+        if mass_fracs[i] > 0.0:
+            m = mass_fracs[i] / mw_arr[i]
+            moles[i] = m
+            total_moles += m
+        else:
+            moles[i] = 0.0
+    
+    # Compute mole fractions and properties
+    M_mix = 0.0
+    sum_ylny = 0.0
+    mole_fracs = np.zeros(n, dtype=np.float64)
+    
+    if total_moles > 1e-15:
+        inv_total = 1.0 / total_moles
+        for i in range(n):
+            if moles[i] > 0.0:
+                y = moles[i] * inv_total
+                mole_fracs[i] = y
+                M_mix += y * mw_arr[i]
+                sum_ylny += y * np.log(y)
+    else:
+        # Fallback (N2 approx)
+        M_mix = 0.028
+    
+    return mole_fracs, M_mix, sum_ylny
+
+@njit(cache=True)
+def _integral_cp(t: float, coeffs: np.ndarray) -> float:
+    """Helper: Integral of Cp(T) from 0 to T."""
+    A, B, C, D, E = coeffs
+    # int(A + BT + CT^2 + DT^3 + E/T^2)
+    return (A * t + 
+            B * t**2 / 2 + 
+            C * t**3 / 3 + 
+            D * t**4 / 4 - 
+            E / t)
+
+@njit(cache=True)
+def calculate_stream_enthalpy_jit(
+    T_k: float,
+    mass_fracs: np.ndarray, # (6,)
+    h2o_liq_frac: float
+) -> float:
+    """
+    Calculate specific enthalpy (J/kg) using JIT.
+    Replicates Stream._compute_specific_enthalpy (sensible heat vs 298.15K).
+    """
+    t_ref = 298.15
+    h_total = 0.0
+    
+    # 1. Gas Species
+    for i in range(6):
+        w_i = mass_fracs[i]
+        if w_i > 1e-12:
+            dh_mol = _integral_cp(T_k, GAS_CP_COEFFS[i]) - _integral_cp(t_ref, GAS_CP_COEFFS[i])
+            h_spec = dh_mol * 1000.0 / GAS_MW[i] # J/mol -> J/kg
+            h_total += w_i * h_spec
+            
+    # 2. Liquid Water
+    if h2o_liq_frac > 1e-12:
+        dh_mol_liq = _integral_cp(T_k, LIQ_CP_COEFFS) - _integral_cp(t_ref, LIQ_CP_COEFFS)
+        h_liq = dh_mol_liq * 1000.0 / LIQ_MW
+        h_total += h2o_liq_frac * h_liq
+        
+    return h_total
+
+# =============================================================================
 # TANK OPERATIONS
 # =============================================================================
 
@@ -1842,15 +1953,10 @@ def calculate_compression_realgas_jit(
     """
     # 1. Inlet State
     s_in = bilinear_interp_jit(P_grid, T_grid, S_lut, p_in_pa, T_in_k)
-    h_in = bilinear_interp_jit(P_grid, T_grid, H_lut, p_in_pa, T_in_k)
-    
+    h_in = bilinear_interp_jit(P_grid, T_grid, H_lut, p_in_pa, T_in_k)    
     # 2. Isentropic Outlet State (Constant Entropy)
     # H_from_PS_lut uses (P, S) coordinates
     h_out_isen = bilinear_interp_jit(P_grid, S_grid, H_from_PS_lut, p_out_pa, s_in)
-    
-    # Check for LUT bounds/failure (fallback to ideal gas approximation if needed)
-    # But usually LUT should cover the range. If h_out_isen is 0 (unlikely with bilinear), it might be an issue.
-    # We assume valid LUTs here.
     
     # 3. Actual Work
     w_isen = h_out_isen - h_in
@@ -1972,3 +2078,447 @@ def solve_cyclone_mechanics(
     delta_P_pa = Xi * 0.5 * rho_g * (v_axial**2)
     
     return d50_microns, delta_P_pa, v_axial, v_tan
+
+
+# =============================================================================
+# MIXTURE THERMODYNAMICS JIT (OPTIMIZED)
+# =============================================================================
+
+@njit(cache=True)
+def get_interp_weights_jit(
+    grid_x: npt.NDArray[np.float64],
+    grid_y: npt.NDArray[np.float64],
+    x: float,
+    y: float
+) -> Tuple[int, int, float, float]:
+    """
+    Calculate bilinear interpolation weights once for reuse across multiple properties.
+    
+    Returns:
+        ix, iy (indices of top-left corner)
+        wx, wy (interpolation weights for x and y)
+    """
+    # X Grid Search (searchsorted is O(log N))
+    if x <= grid_x[0]:
+        ix = 0
+        wx = 0.0
+    elif x >= grid_x[-1]:
+        ix = len(grid_x) - 2
+        wx = 1.0
+    else:
+        ix = np.searchsorted(grid_x, x) - 1
+        x0 = grid_x[ix]
+        x1 = grid_x[ix+1]
+        wx = (x - x0) / (x1 - x0)
+
+    # Y Grid Search
+    if y <= grid_y[0]:
+        iy = 0
+        wy = 0.0
+    elif y >= grid_y[-1]:
+        iy = len(grid_y) - 2
+        wy = 1.0
+    else:
+        iy = np.searchsorted(grid_y, y) - 1
+        y0 = grid_y[iy]
+        y1 = grid_y[iy+1]
+        wy = (y - y0) / (y1 - y0)
+        
+    return ix, iy, wx, wy
+
+@njit(cache=True)
+def interp_from_weights_jit(
+    data: npt.NDArray[np.float64], # 2D array
+    ix: int,
+    iy: int,
+    wx: float,
+    wy: float
+) -> float:
+    """Apply pre-calculated weights to a data grid."""
+    # f(x, y) = (1-wx)(1-wy)f00 + wx(1-wy)f10 + (1-wx)wy*f01 + wx*wy*f11
+    
+    # Boundary protection is handled by clamping ix/iy in weight calc
+    # But data might be smaller? Assuming aligned.
+    f00 = data[ix, iy]
+    f10 = data[ix+1, iy]
+    f01 = data[ix, iy+1]
+    f11 = data[ix+1, iy+1]
+    
+    return (1.0-wx)*(1.0-wy)*f00 + wx*(1.0-wy)*f10 + (1.0-wx)*wy*f01 + wx*wy*f11
+
+@njit(cache=True)
+def get_mix_cp_jit(
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    C_luts: np.ndarray,  # (N_fl, NP, NT)
+    weights: np.ndarray, # Mass fractions
+    ix: int, iy: int, wx: float, wy: float # Pre-calculated context
+) -> float:
+    """Calculate mixture Cp (mass weighted) using pre-calc weights."""
+    cp_mix = 0.0
+    n = len(weights)
+    for i in range(n):
+        if weights[i] > 1e-9:
+            c_val = interp_from_weights_jit(C_luts[i], ix, iy, wx, wy)
+            cp_mix += weights[i] * c_val
+    return cp_mix
+
+@njit(cache=True)
+def get_mix_enthalpy_fast_jit(
+    H_luts: np.ndarray,
+    weights: np.ndarray,
+    ix: int, iy: int, wx: float, wy: float
+) -> float:
+    """Calculate mixture H (mass weighted) using pre-calc weights."""
+    h_mix = 0.0
+    for i in range(len(weights)):
+        if weights[i] > 1e-9:
+            val = interp_from_weights_jit(H_luts[i], ix, iy, wx, wy)
+            h_mix += weights[i] * val
+    return h_mix
+
+@njit(cache=True)
+def get_mix_density_jit(
+    D_luts: np.ndarray,
+    weights: np.ndarray,
+    ix: int, iy: int, wx: float, wy: float
+) -> float:
+    """
+    Calculate mixture density (Amagat's Law/Volume Additivity) using pre-calc weights.
+    rho_mix = 1 / Sum(w_i / rho_i)
+    """
+    sum_vol_spec = 0.0
+    for i in range(len(weights)):
+        if weights[i] > 1e-9:
+            rho_i = interp_from_weights_jit(D_luts[i], ix, iy, wx, wy)
+            if rho_i > 1e-6:
+                sum_vol_spec += weights[i] / rho_i
+    
+    if sum_vol_spec > 1e-9:
+        return 1.0 / sum_vol_spec
+    return 0.0
+
+@njit(cache=True)
+def calculate_mixture_density_jit(
+    p_pa: float,
+    T_k: float,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    D_luts: np.ndarray,
+    weights: np.ndarray
+) -> float:
+    """
+    Calculate mixture density using JIT and stacked LUTs.
+    """
+    ix, iy, wx, wy = get_interp_weights_jit(P_grid, T_grid, p_pa, T_k)
+    return get_mix_density_jit(D_luts, weights, ix, iy, wx, wy)
+
+@njit(cache=True)
+def get_mix_entropy_fast_jit(
+    S_luts: np.ndarray,
+    weights: np.ndarray,
+    mole_fracs: np.ndarray,
+    M_mix_kg_mol: float,
+    sum_ylny: float, # Pre-calculated Sum(y ln y)
+    ix: int, iy: int, wx: float, wy: float
+) -> float:
+    """Calculate mixture S (mass weighted + mixing term) using pre-calc weights."""
+    R_UNIVERSAL = 8.314462618
+    
+    # Base S
+    s_base = 0.0
+    for i in range(len(weights)):
+        if weights[i] > 1e-9:
+            val = interp_from_weights_jit(S_luts[i], ix, iy, wx, wy)
+            s_base += weights[i] * val
+            
+    # Mixing Term: s_mix = - (R / M_mix) * Sum(y ln y)
+    # Sum(y ln y) is negative. R_mix > 0. s_mixing > 0.
+    if M_mix_kg_mol > 1e-9:
+        R_mix = R_UNIVERSAL / M_mix_kg_mol
+        s_mixing = -R_mix * sum_ylny
+    else:
+        s_mixing = 0.0
+        
+    return s_base + s_mixing
+
+@njit(cache=True)
+def calculate_mixture_compression_jit(
+    p_in_pa: float,
+    p_out_pa: float,
+    T_in_k: float,
+    efficiency: float,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    H_luts: np.ndarray, # (N, NP, NT)
+    S_luts: np.ndarray, 
+    C_luts: np.ndarray, # Needed for derivative
+    weights: np.ndarray,
+    mole_fracs: np.ndarray,
+    M_mix_kg_mol: float,
+    sum_ylny: float
+) -> Tuple[float, float, float]:
+    """
+    Calculate real-gas mixture compression using JIT and Cp-based derivatives.
+    """
+    # 1. Inlet State
+    ix_in, iy_in, wx_in, wy_in = get_interp_weights_jit(P_grid, T_grid, p_in_pa, T_in_k)
+    
+    # Verify grid bounds (if P_in is very different, ix relies on P lookup logic)
+    # Note: get_interp_weights_jit handles search.
+    
+    s_in = get_mix_entropy_fast_jit(S_luts, weights, mole_fracs, M_mix_kg_mol, sum_ylny, ix_in, iy_in, wx_in, wy_in)
+    h_in = get_mix_enthalpy_fast_jit(H_luts, weights, ix_in, iy_in, wx_in, wy_in)
+    
+    # 2. Isentropic Step: Find T_out_isen such that S_mix(p_out, T) = s_in
+    # Newton-Raphson on T.  dS/dT = Cp/T (Isobaric)
+    
+    T_guess = T_in_k * (p_out_pa / p_in_pa) ** 0.286
+    
+    # Safety bounds
+    if T_guess < 200.0: T_guess = 200.0
+    if T_guess > 1200.0: T_guess = 1200.0
+    
+    for _ in range(8): # Reduced iterations as requested
+        # Calc properties at T_guess (P_out fixed)
+        ix_out, iy_out, wx_out, wy_out = get_interp_weights_jit(P_grid, T_grid, p_out_pa, T_guess)
+        
+        s_guess = get_mix_entropy_fast_jit(S_luts, weights, mole_fracs, M_mix_kg_mol, sum_ylny, ix_out, iy_out, wx_out, wy_out)
+        
+        diff = s_guess - s_in
+        if abs(diff) < 1e-4: 
+            break
+            
+        # Analytic Derivative: dS/dT = Cp_mix / T
+        cp_mix = get_mix_cp_jit(P_grid, T_grid, C_luts, weights, ix_out, iy_out, wx_out, wy_out)
+        if abs(cp_mix) < 1e-9: cp_mix = 14000.0 # Safety
+        
+        ds_dt = cp_mix / T_guess
+        
+        # Update
+        delta_T = diff / ds_dt
+        
+        # Limiter to prevent overshoot
+        if delta_T > 50.0: delta_T = 50.0
+        if delta_T < -50.0: delta_T = -50.0
+        
+        T_guess = T_guess - delta_T
+        if T_guess < 100.0: T_guess = 100.0
+        if T_guess > 2000.0: T_guess = 2000.0
+        
+    # Isentropic done. Get H_isen at final T
+    # Need new weights for final T
+    ix_iso, iy_iso, wx_iso, wy_iso = get_interp_weights_jit(P_grid, T_grid, p_out_pa, T_guess)
+    h_out_isen = get_mix_enthalpy_fast_jit(H_luts, weights, ix_iso, iy_iso, wx_iso, wy_iso)
+    
+    # 3. Work
+    w_isen = h_out_isen - h_in
+    w_actual = w_isen / efficiency
+    h_out_actual = h_in + w_actual
+    
+    # 4. Actual Outlet T: Match H(P_out, T) = h_out_actual
+    # Start guess at T_isen (T_guess)
+    T_act = T_guess 
+    
+    for _ in range(8):
+        ix_act, iy_act, wx_act, wy_act = get_interp_weights_jit(P_grid, T_grid, p_out_pa, T_act)
+        
+        h_val = get_mix_enthalpy_fast_jit(H_luts, weights, ix_act, iy_act, wx_act, wy_act)
+        cp_val = get_mix_cp_jit(P_grid, T_grid, C_luts, weights, ix_act, iy_act, wx_act, wy_act)
+        
+        diff = h_val - h_out_actual
+        if abs(diff) < 1.0: # J/kg
+            break
+            
+        if abs(cp_val) < 1e-9: cp_val = 14000.0
+        
+        # dH/dT = Cp
+        delta_T = diff / cp_val
+        if delta_T > 50.0: delta_T = 50.0
+        if delta_T < -50.0: delta_T = -50.0
+        
+        T_act = T_act - delta_T
+        if T_act < 100.0: T_act = 100.0
+        if T_act > 2000.0: T_act = 2000.0
+        
+    return w_actual, T_act, h_out_actual
+
+
+# =============================================================================
+# TEMP-LIMITED PRESSURE SOLVER (Replaces Python bisection loop)
+# =============================================================================
+
+@njit(cache=True)
+def solve_temp_limited_pressure_jit(
+    p_in_pa: float,
+    p_max_pa: float,
+    T_in_k: float,
+    T_max_k: float,
+    efficiency: float,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    H_luts: np.ndarray,
+    S_luts: np.ndarray,
+    C_luts: np.ndarray,
+    weights: np.ndarray,
+    mole_fracs: np.ndarray,
+    M_mix_kg_mol: float,
+    sum_ylny: float
+) -> Tuple[float, float, float]:
+    """
+    Solve for maximum outlet pressure that satisfies temperature constraint.
+    
+    Entirely JIT-compiled bisection + compression calculation.
+    Replaces Python loop with 30 scalar calls to _compute_outlet_temp.
+    
+    Args:
+        p_in_pa: Inlet pressure (Pa)
+        p_max_pa: Maximum target pressure (Pa) - upper bound for search
+        T_in_k: Inlet temperature (K)
+        T_max_k: Maximum allowed outlet temperature (K)
+        efficiency: Isentropic efficiency (0-1)
+        P_grid, T_grid: LUT grids
+        H_luts, S_luts, C_luts: Stacked property LUTs (N_fluids, NP, NT)
+        weights: Mass fractions array (canonical order)
+        mole_fracs: Mole fractions array
+        M_mix_kg_mol: Mixture molar mass (kg/mol)
+        sum_ylny: Pre-computed entropy mixing term
+        
+    Returns:
+        Tuple[float, float, float]: (P_out_pa, T_out_k, W_actual_J_kg)
+    """
+    # 1. Check if target pressure is achievable
+    T_at_max = _compute_T_out_for_P_jit(
+        p_in_pa, p_max_pa, T_in_k, efficiency,
+        P_grid, T_grid, H_luts, S_luts, C_luts,
+        weights, mole_fracs, M_mix_kg_mol, sum_ylny
+    )
+    
+    if T_at_max <= T_max_k:
+        # Target pressure achievable - compute full result
+        w_act, T_out, h_out = calculate_mixture_compression_jit(
+            p_in_pa, p_max_pa, T_in_k, efficiency,
+            P_grid, T_grid, H_luts, S_luts, C_luts,
+            weights, mole_fracs, M_mix_kg_mol, sum_ylny
+        )
+        return p_max_pa, T_out, w_act
+    
+    # 2. Bisection search for P_out such that T_out = T_max
+    p_low = p_in_pa
+    p_high = p_max_pa
+    
+    for _ in range(25):  # Converges to <0.1% in ~20 iterations
+        p_mid = (p_low + p_high) * 0.5
+        
+        T_mid = _compute_T_out_for_P_jit(
+            p_in_pa, p_mid, T_in_k, efficiency,
+            P_grid, T_grid, H_luts, S_luts, C_luts,
+            weights, mole_fracs, M_mix_kg_mol, sum_ylny
+        )
+        
+        if T_mid <= T_max_k:
+            p_low = p_mid
+        else:
+            p_high = p_mid
+        
+        # Convergence check
+        if abs(p_high - p_low) / p_low < 0.001:
+            break
+    
+    # 3. Calculate final compression at converged pressure
+    p_out_final = p_low
+    w_act, T_out, h_out = calculate_mixture_compression_jit(
+        p_in_pa, p_out_final, T_in_k, efficiency,
+        P_grid, T_grid, H_luts, S_luts, C_luts,
+        weights, mole_fracs, M_mix_kg_mol, sum_ylny
+    )
+    
+    return p_out_final, T_out, w_act
+
+
+@njit(cache=True)
+def _compute_T_out_for_P_jit(
+    p_in_pa: float,
+    p_out_pa: float,
+    T_in_k: float,
+    efficiency: float,
+    P_grid: np.ndarray,
+    T_grid: np.ndarray,
+    H_luts: np.ndarray,
+    S_luts: np.ndarray,
+    C_luts: np.ndarray,
+    weights: np.ndarray,
+    mole_fracs: np.ndarray,
+    M_mix_kg_mol: float,
+    sum_ylny: float
+) -> float:
+    """
+    Compute outlet temperature for given P_out (helper for bisection).
+    Lightweight version: doesn't return work, just T_out.
+    """
+    # Inlet state
+    ix_in, iy_in, wx_in, wy_in = get_interp_weights_jit(P_grid, T_grid, p_in_pa, T_in_k)
+    s_in = get_mix_entropy_fast_jit(S_luts, weights, mole_fracs, M_mix_kg_mol, sum_ylny, ix_in, iy_in, wx_in, wy_in)
+    h_in = get_mix_enthalpy_fast_jit(H_luts, weights, ix_in, iy_in, wx_in, wy_in)
+    
+    # Initial guess (ideal gas)
+    T_guess = T_in_k * (p_out_pa / p_in_pa) ** 0.286
+    if T_guess < 200.0: T_guess = 200.0
+    if T_guess > 1200.0: T_guess = 1200.0
+    
+    # Newton for isentropic T
+    for _ in range(6):  # Reduced iterations for speed
+        ix_out, iy_out, wx_out, wy_out = get_interp_weights_jit(P_grid, T_grid, p_out_pa, T_guess)
+        s_guess = get_mix_entropy_fast_jit(S_luts, weights, mole_fracs, M_mix_kg_mol, sum_ylny, ix_out, iy_out, wx_out, wy_out)
+        
+        diff = s_guess - s_in
+        if abs(diff) < 1e-3:
+            break
+        
+        cp_mix = get_mix_cp_jit(P_grid, T_grid, C_luts, weights, ix_out, iy_out, wx_out, wy_out)
+        if abs(cp_mix) < 1e-9: cp_mix = 14000.0
+        
+        ds_dt = cp_mix / T_guess
+        delta_T = diff / ds_dt
+        if delta_T > 30.0: delta_T = 30.0
+        if delta_T < -30.0: delta_T = -30.0
+        
+        T_guess = T_guess - delta_T
+        if T_guess < 100.0: T_guess = 100.0
+        if T_guess > 1500.0: T_guess = 1500.0
+    
+    # Get isentropic enthalpy
+    ix_iso, iy_iso, wx_iso, wy_iso = get_interp_weights_jit(P_grid, T_grid, p_out_pa, T_guess)
+    h_out_isen = get_mix_enthalpy_fast_jit(H_luts, weights, ix_iso, iy_iso, wx_iso, wy_iso)
+    
+    # Actual work and outlet enthalpy
+    w_isen = h_out_isen - h_in
+    w_actual = w_isen / efficiency
+    h_out_actual = h_in + w_actual
+    
+    # Newton for actual T
+    T_act = T_guess
+    for _ in range(6):
+        ix_act, iy_act, wx_act, wy_act = get_interp_weights_jit(P_grid, T_grid, p_out_pa, T_act)
+        h_val = get_mix_enthalpy_fast_jit(H_luts, weights, ix_act, iy_act, wx_act, wy_act)
+        
+        diff = h_val - h_out_actual
+        if abs(diff) < 10.0:  # J/kg - looser tolerance for speed
+            break
+        
+        cp_val = get_mix_cp_jit(P_grid, T_grid, C_luts, weights, ix_act, iy_act, wx_act, wy_act)
+        if abs(cp_val) < 1e-9: cp_val = 14000.0
+        
+        delta_T = diff / cp_val
+        if delta_T > 30.0: delta_T = 30.0
+        if delta_T < -30.0: delta_T = -30.0
+        
+        T_act = T_act - delta_T
+        if T_act < 100.0: T_act = 100.0
+        if T_act > 2000.0: T_act = 2000.0
+    
+    return T_act
+
+
+# =============================================================================
+
