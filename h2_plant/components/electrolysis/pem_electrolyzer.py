@@ -596,7 +596,7 @@ class DetailedPEMElectrolyzer(Component):
         self._snapshot_h2_gas_kg_s = self.m_H2_kg_s  # H2 gas production (not limited by water)
         self._snapshot_h2_liq_kg_s = actual_drag_kg / dt_seconds  # Cathode liquid drag
         self._snapshot_o2_gas_kg_s = self.m_O2_kg_s  # O2 gas production (not limited by water)
-        self._snapshot_o2_liq_kg_s = actual_recirc_kg / dt_seconds  # Anode cooling water
+        self._snapshot_o2_liq_kg_s = actual_recirc_kg / dt_seconds  # Anode cooling water (Restored to fix loop starvation)
         
         # Store recirc flow for state reporting
         self.recirc_flow_kg_s = (actual_drag_kg + actual_recirc_kg) / dt_seconds

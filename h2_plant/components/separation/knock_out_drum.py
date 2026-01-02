@@ -509,7 +509,7 @@ class KnockOutDrum(Component):
                 if lut_manager is not None:
                     Z = lut_manager.lookup(self.gas_species, 'Z', P_out, T_in)
             except Exception:
-                pass
+                pass 
         if Z == 1.0:  # Fallback to CoolPropLUT if LUTManager unavailable
             try:
                 Z = CoolPropLUT.PropsSI('Z', 'T', T_in, 'P', P_out, self.gas_species)
@@ -647,40 +647,40 @@ class KnockOutDrum(Component):
         n_H2O_vap_mol_s = n_vap_mol_s * y_H2O
         m_H2O_vap = n_H2O_vap_mol_s * mw_h2o * 3600.0  # kg/h
 
-        gas_comp = {}
         if m_gas_out_total > 0:
-            # Non-condensables (H2, O2, N2) pass through with same MASS FLOW (not moles).
-            # Their mass fraction increases as water is removed.
+            # Non-condensables (H2, O2, N2) mass balance
             # m_species_out = m_species_in (conservation)
-            # x_species_out = m_species_in / m_total_out
             
-            # Calculate mass of each non-H2O species from inlet
+            # Calculate mass of each species from inlet
+            species_masses = {}
             for species, mass_frac in composition.items():
-                if species == 'H2O' or species == 'H2O_liq':
-                    continue  # Water handled separately
-                # Mass of this species = inlet_mass_frac × inlet_total_mass
-                m_species_kg_h = mass_frac * m_dot_in_kg_h
-                # New mass fraction = species_mass / outlet_total_mass
-                gas_comp[species] = m_species_kg_h / m_gas_out_total
+                species_masses[species] = mass_frac * m_dot_in_kg_h
             
-            # Add vapor-phase water (equilibrium amount)
-            # m_H2O_vap was calculated from flash equilibrium
-            gas_comp['H2O'] = m_H2O_vap / m_gas_out_total
+            # Update Water Vapor Mass (from Flash Equilibrium)
+            species_masses['H2O'] = m_H2O_vap
             
-            # Add liquid carryover (mist)
-            liq_carryover_frac = m_liq_carryover_kg_h / m_gas_out_total
+            # Update Liquid Water Mass in Gas Stream (Carryover Mist)
+            # The rest of the liquid water was removed to drain
+            species_masses['H2O_liq'] = m_liq_carryover_kg_h
             
-            # Composition cleanup: remove negligible H2O_liq to avoid floating-point dust
-            if liq_carryover_frac >= 1e-9:
-                gas_comp['H2O_liq'] = liq_carryover_frac
+            # Reconstruct composition fractions
+            gas_comp = {}
+            total_mass_check = sum(species_masses.values())
             
-            # Normalize to ensure sum = 1.0 (floating point safety)
+            # Sanity check: Total mass should match m_gas_out_total
+            # Difference is due to removed liquid (which we excluded from the gas stream's new masses)
+            # Actually, m_gas_out_total = m_dot_in - m_liq_removed.
+            # And species_masses['H2O_liq'] is now REDUCED to carryover.
+            # So sum(species_masses) should roughly equal m_gas_out_total.
+            
+            if m_gas_out_total > 1e-9:
+                for s, m in species_masses.items():
+                    gas_comp[s] = m / m_gas_out_total
+            
+            # Normalize to ensure exactly 1.0
             total_comp = sum(gas_comp.values())
             if total_comp > 0:
                 gas_comp = {s: f / total_comp for s, f in gas_comp.items()}
-            
-            # Validate normalization
-            assert abs(sum(gas_comp.values()) - 1.0) < 1e-6, "Gas composition not normalized"
         else:
             gas_comp = {self.gas_species: 1.0}
 
@@ -739,7 +739,9 @@ class KnockOutDrum(Component):
 
         # Mass balance debug logging
         mass_balance_error = m_dot_in_kg_h - m_gas_out_corrected - m_drain_total
-        if abs(mass_balance_error) > 1e-3:
+        
+        # DEBUG: Trace KOD operation if flow is significant
+        if m_dot_in_kg_h > 1.0 and abs(mass_balance_error) > 1e-3:
             logger.debug(
                 f"KOD Mass Bal: in={m_dot_in_kg_h:.3f}, "
                 f"out={m_gas_out_corrected:.3f}+{m_drain_total:.3f}, "

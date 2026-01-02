@@ -58,6 +58,8 @@ try:
 except ImportError:
     CoolPropLUT = None
 
+from h2_plant.optimization.numba_ops import calculate_water_psat_jit
+
 
 class WaterPumpThermodynamic(Component):
     """
@@ -202,7 +204,30 @@ class WaterPumpThermodynamic(Component):
 
         Uses CoolProp for enthalpy/entropy at inlet, isentropic compression
         to outlet pressure, then applies efficiency to find real outlet.
+        
+        Also performs rigorous NPSH (Net Positive Suction Head) check using
+        JIT-compiled saturation pressure calculation.
         """
+        P1_Pa = self.inlet_stream.pressure_pa
+        T1_K = self.inlet_stream.temperature_k
+        
+        # === RIGOROUS NPSH CHECK ===
+        # Calculate saturation pressure at inlet temperature
+        P_sat_pa = calculate_water_psat_jit(T1_K)
+        
+        # NPSH Available = Inlet Pressure - Saturation Pressure
+        # (ignoring velocity head for conservative static check)
+        NPSH_available_pa = P1_Pa - P_sat_pa
+        
+        # Warn if NPSH is critically low (< 0.3 bar margin recommended for standard pumps)
+        # 0.3 bar = 30,000 Pa (~3 meters head)
+        if NPSH_available_pa < 30000.0:
+            logger.warning(
+                f"Pump '{self.component_id}': Low Suction Pressure! "
+                f"NPSH_avail={NPSH_available_pa/1e5:.3f} bar (Risk of Cavitation). "
+                f"P_in={P1_Pa/1e5:.2f} bar, P_sat={P_sat_pa/1e5:.2f} bar @ {T1_K-273.15:.1f}C"
+            )
+
         if not COOLPROP_AVAILABLE:
             self._calculate_forward_simplified()
             return
@@ -211,7 +236,7 @@ class WaterPumpThermodynamic(Component):
         T1_K = self.inlet_stream.temperature_k
         P2_Pa = self.target_pressure_pa
         m_dot = self.inlet_stream.mass_flow_kg_h / 3600.0
-        fluido = 'Water'
+        fluido = 'H2O'
 
         try:
             # Inlet properties (kJ/kg)
@@ -323,7 +348,7 @@ class WaterPumpThermodynamic(Component):
         T2_K = self.outlet_stream.temperature_k
         P1_Pa = self.target_pressure_pa
         m_dot = self.outlet_stream.mass_flow_kg_h / 3600.0
-        fluido = 'Water'
+        fluido = 'H2O'
 
         try:
             h2 = 0.0

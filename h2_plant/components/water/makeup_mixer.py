@@ -17,6 +17,7 @@ import numpy as np
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
+from h2_plant.optimization.numba_ops import solve_water_T_from_H_jit
 
 class MakeupMixer(Component):
     """
@@ -52,6 +53,7 @@ class MakeupMixer(Component):
         # Inputs
         self.drain_stream: Optional[Stream] = None
         self._water_consumed_kg_h: float = 0.0  # From electrolyzers
+        self._lut_manager = None
         
         # Outputs
         self.outlet_stream: Optional[Stream] = None
@@ -66,6 +68,8 @@ class MakeupMixer(Component):
             registry (ComponentRegistry): Central service registry.
         """
         super().initialize(dt, registry)
+        if registry.has('lut_manager'):
+            self._lut_manager = registry.get('lut_manager')
 
     def step(self, t: float) -> None:
         """
@@ -105,17 +109,44 @@ class MakeupMixer(Component):
              self.outlet_stream = Stream(0.0)
              return
 
-        # 3. Mix Streams (Mass-Weighted Temperature/Enthalpy)
+        # 3. Mix Streams (Rigorous Enthalpy Balance)
         # Fix: Only account for mass that actually enters the outlet (discard overflow energy)
         used_drain_flow = total_flow - self.makeup_flow_kg_h
         
-        weighted_T_sum = (used_drain_flow * drain_temp) + (self.makeup_flow_kg_h * self.makeup_temp_k)
-        T_mix = weighted_T_sum / total_flow
+        # Calculate Enthalpies (J/kg)
+        # Reference state logic: To mix correctly, we need absolute H or consistent delta H.
+        # LUT Manager gives absolute H (ref 298.15K usually).
         
-        # Pressure equalization (lowest of the inputs, usually atmospheric for drain)
+        H_drain = 0.0
+        H_makeup = 0.0
+        
+        if self._lut_manager:
+            try:
+                # Get H for drain
+                H_drain = self._lut_manager.lookup('H2O', 'H', self.drain_stream.pressure_pa, drain_temp)
+                # Get H for makeup
+                H_makeup = self._lut_manager.lookup('H2O', 'H', self.makeup_pressure_pa, self.makeup_temp_k)
+            except:
+                # Fallback: Cp * (T - T_ref), T_ref = 273.15K (IAPWS-95)
+                H_drain = 4184.0 * (drain_temp - 273.15)
+                H_makeup = 4184.0 * (self.makeup_temp_k - 273.15)
+        else:
+             # Fallback: Cp * (T - T_ref), T_ref = 273.15K (IAPWS-95)
+             H_drain = 4184.0 * (drain_temp - 273.15)
+             H_makeup = 4184.0 * (self.makeup_temp_k - 273.15)
+             
+        # Mix Enthalpy
+        # H_mix = (m1*H1 + m2*H2) / m_total
+        H_mix = ((used_drain_flow * H_drain) + (self.makeup_flow_kg_h * H_makeup)) / total_flow
+        
+        # Pressure Determination (Tank Model)
+        # The MakeupMixer acts as an atmospheric head tank / buffer.
+        # Outlet pressure is determined by the tank's static pressure (makeup_pressure),
+        # effectively breaking any vacuum from upstream condensate lines.
         P_mix = self.makeup_pressure_pa
-        if self.drain_stream:
-             P_mix = min(P_mix, self.drain_stream.pressure_pa)
+        
+        # Resolve Temperature from H_mix using JIT Solver
+        T_mix = solve_water_T_from_H_jit(H_mix, P_mix, drain_temp)
 
         self.outlet_stream = Stream(
             mass_flow_kg_h=total_flow,

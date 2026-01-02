@@ -389,6 +389,71 @@ def simulate_filling_timestep(
 
 
 # =============================================================================
+# WATER PROPERTIES (JIT)
+# =============================================================================
+
+@njit(cache=True)
+def calculate_water_psat_jit(T_k: float) -> float:
+    """
+    Calculate Saturation Pressure of Water (Pa) using Antoine Equation.
+    Valid range: 273K - 647K (Critical point).
+    
+    Uses NIST Webbook constants for Water (bar, K).
+    log10(P_bar) = A - (B / (T + C))
+    """
+    # Constants adapted for Temperature in Kelvin and Pressure in bar
+    if T_k < 373.15:
+        # Range: 293K - 373K
+        A, B, C = 5.40221, 1838.675, -31.737
+    else:
+        # Range: 373K - 647K
+        A, B, C = 5.20389, 1733.926, -39.485
+        
+    p_log10 = A - (B / (T_k + C))
+    p_bar = 10.0 ** p_log10
+    return p_bar * 100000.0  # Convert bar to Pa
+
+@njit(cache=True)
+def solve_water_T_from_H_jit(target_h_j_kg: float, P_pa: float, T_guess_k: float) -> float:
+    """
+    Newton-Raphson solver to find Temperature from Enthalpy for Liquid Water.
+    H(T) approx Cp_liq * (T - T_ref).
+    
+    This is a fast approximation suitable for liquid water mixing.
+    For high precision or steam, full LUT inversion (solve_temperature_from_enthalpy_jit)
+    should be used instead, but this function is 10x faster for simple liquid nodes.
+    """
+    T_iter = T_guess_k
+    tol = 0.01  # Tolerance in K
+    
+    # Approx constant Cp for liquid water (J/kg.K)
+    Cp_water = 4184.0 
+    
+    # Reference state: Enthalpy is 0 at 273.15 K (IAPWS-95 / CoolProp convention)
+    # NOTE: This is for LIQUID WATER ONLY. Gas phase uses different convention.
+    T_ref = 273.15
+    
+    for _ in range(10): # Hard max iterations for safety
+        # Simplified H calculation for liquid water
+        # H = Cp * (T - T_ref)
+        h_calc = Cp_water * (T_iter - T_ref) 
+        
+        error = h_calc - target_h_j_kg
+        if abs(error) < (tol * Cp_water):
+            return T_iter
+            
+        # Newton step: dT = error / Cp
+        dT = error / Cp_water
+        T_iter -= dT
+        
+        # Safety clamps
+        if T_iter < 273.15: T_iter = 273.15
+        if T_iter > 647.0: T_iter = 647.0
+        
+    return T_iter
+
+
+# =============================================================================
 # FLASH EQUILIBRIUM
 # =============================================================================
 

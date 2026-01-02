@@ -26,6 +26,7 @@ import numpy as np
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
+from h2_plant.optimization.numba_ops import solve_water_T_from_H_jit
 
 if TYPE_CHECKING:
     from h2_plant.core.component_registry import ComponentRegistry
@@ -83,6 +84,8 @@ class DrainRecorderMixer(Component):
         
         # Running totals for summary
         self._total_mass_kg: Dict[str, float] = {}
+        
+        self._lut_manager = None
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
@@ -109,6 +112,9 @@ class DrainRecorderMixer(Component):
         
         self._history['time_h'] = np.zeros(self._history_capacity, dtype=np.float32)
         self._history_index = 0
+        
+        if registry.has('lut_manager'):
+            self._lut_manager = registry.get('lut_manager')
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         """
@@ -185,8 +191,23 @@ class DrainRecorderMixer(Component):
             # Accumulate for mixing
             total_mass_kg_h += mass_kg_h
             if stream and mass_kg_h > 0:
-                weighted_temp_sum += mass_kg_h * stream.temperature_k
-                min_pressure = min(min_pressure, stream.pressure_pa)
+                # RIGOROUS: Enthalpy Accumulation
+                h_in = 0.0
+                t_in = stream.temperature_k
+                p_in = stream.pressure_pa
+                
+                if self._lut_manager:
+                    try:
+                         h_in = self._lut_manager.lookup('H2O', 'H', p_in, t_in)
+                    except:
+                         # Fallback: Cp * (T - T_ref), T_ref = 273.15K (IAPWS-95)
+                         h_in = 4184.0 * (t_in - 273.15)
+                else:
+                    # Fallback: Cp * (T - T_ref), T_ref = 273.15K (IAPWS-95)
+                    h_in = 4184.0 * (t_in - 273.15)
+                    
+                weighted_temp_sum += mass_kg_h * h_in # Reusing variable name for H sum
+                min_pressure = min(min_pressure, p_in)
             
             # Update running totals (kg)
             self._total_mass_kg[source_id] = self._total_mass_kg.get(source_id, 0.0) + (mass_kg_h * self.dt)
@@ -198,8 +219,13 @@ class DrainRecorderMixer(Component):
         
         # Calculate mixed outlet properties
         if total_mass_kg_h > 0:
-            mixed_temp_k = weighted_temp_sum / total_mass_kg_h
+            avg_enthalpy = weighted_temp_sum / total_mass_kg_h
             outlet_pressure = min_pressure if min_pressure < float('inf') else 101325.0
+            
+            # Resolve T from H
+            # Use linear T mix guess for solver
+            t_guess_mix = (avg_enthalpy / 4184.0) + 298.15 
+            mixed_temp_k = solve_water_T_from_H_jit(avg_enthalpy, outlet_pressure, t_guess_mix)
             
             # Weighted Composition Mixing
             mixed_comp = {}

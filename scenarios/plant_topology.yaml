@@ -616,20 +616,16 @@ nodes:
       source_ids: ["PEM_H2_KOD_1", "PEM_H2_KOD_2", "PEM_H2_KOD_3", "PEM_H2_Coalescer_1", "PEM_O2_KOD_1", "PEM_O2_KOD_2", "PEM_O2_Coalescer_1"]
     connections:
       - source_port: "outlet"
-        target_name: "PEM_O2_Valve"
+        target_name: "PEM_Water_Return_Valve"
         target_port: "inlet"
         resource_type: "stream"
-      - source_port: "drain"
-        target_name: "PEM_Drain_Mixer"
-        target_port: "PEM_O2_Coalescer_1"
-        resource_type: "stream"
 
-  - id: "PEM_O2_Valve"
+  - id: "PEM_Water_Return_Valve"
     type: "Valve"
     params:
-      component_id: "PEM_O2_Valve"
+      component_id: "PEM_Water_Return_Valve"
       P_out_pa: 100000.0 # 1 bar
-      fluid: "water"
+      fluid: "H2O"
     connections: 
       - source_port: "outlet"
         target_name: "PEM_Makeup_Mixer"
@@ -651,7 +647,7 @@ nodes:
     params:
       pump_id: "PEM_Water_Pump"
       capacity_kg_h: 4000.0
-      target_pressure_pa: 100000.0  # 1 bar (PEM operating pressure)
+      target_pressure_pa: 4000000.0  # 40 bar (PEM operating pressure)
     connections:
       - source_port: "water_out"
         target_name: "PEM_Electrolyzer"
@@ -888,12 +884,25 @@ nodes:
       component_id: "PEM_O2_Coalescer_1"
     connections:
       - source_port: "outlet"
-        target_name: "PEM_O2_Valve"
-        target_port: "inlet"
+        target_name: "PEM_O2_ElectricBoiler"
+        target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "drain"
         target_name: "PEM_Drain_Mixer"
         target_port: "PEM_O2_Coalescer_1"
+        resource_type: "stream"
+
+
+  - id: "PEM_O2_ElectricBoiler"
+    type: "ElectricBoiler"
+    params:
+      max_power_kw: 25.0
+      target_temp_c: 20.0 
+      process_step: 230
+    connections:
+      - source_port: "fluid_out"
+        target_name: "PEM_O2_Valve"
+        target_port: "inlet"
         resource_type: "stream"
 
   - id: "PEM_O2_Valve"

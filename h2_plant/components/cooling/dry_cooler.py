@@ -335,6 +335,20 @@ class DryCooler(Component):
         # Gas-side pressure drop through TQC internals
         P_out = self.inlet_stream.pressure_pa - (DCC.DP_LIQ_TQC_BAR * 1e5)
 
+        # ================================================================
+        # Min Approach Temperature Constraint (Energy-Conserving)
+        # ================================================================
+        # Industrial Dry Coolers have min 5-10°C approach. If theoretical 
+        # T_out violates this, we must back-calculate the achievable Q.
+        MIN_APPROACH_K = 5.0
+        T_out_limit_k = T_air_in_k + MIN_APPROACH_K
+        
+        if T_gas_out_k < T_out_limit_k:
+            # Clamp T_out and recalculate Q to conserve energy
+            T_gas_out_k = T_out_limit_k
+            Q_tqc_real = C_hot_gas * (T_gas_in_k - T_gas_out_k)
+            self.tqc_duty_kw = Q_tqc_real / 1000.0
+
         # Prepare output stream
         self.outlet_temp_c = T_gas_out_k - 273.15
 

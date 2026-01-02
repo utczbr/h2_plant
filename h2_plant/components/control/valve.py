@@ -269,22 +269,40 @@ class ThrottlingValve(Component):
             float: Solution temperature [K].
         """
         T_guess = self.inlet_stream.temperature_k
-        T_low = T_guess - 50.0
+        
+        # Determine LUT safe boundaries to avoid nuisance warnings
+        T_min_lut = 273.15  # Default fallback
+        if hasattr(self.lut_mgr, 'config'):
+            T_min_lut = self.lut_mgr.config.temperature_min
+
+        # Initial bracket attempts to stay within LUT validity
+        T_low_raw = T_guess - 50.0
+        T_low = max(T_low_raw, T_min_lut)  # Clamp to LUT min
         T_high = T_guess + 50.0
 
         # Verify bracketing
         h_low = self.lut_mgr.lookup(self.fluid, 'H', P_target_pa, T_low)
         h_high = self.lut_mgr.lookup(self.fluid, 'H', P_target_pa, T_high)
 
-        # Expand bounds if target not bracketed
-        if not (h_low < h_target < h_high):
-            T_low = 20.0
-            T_high = 1000.0
-            h_low = self.lut_mgr.lookup(self.fluid, 'H', P_target_pa, T_low)
-            h_high = self.lut_mgr.lookup(self.fluid, 'H', P_target_pa, T_high)
+        # Robustness Logic:
+        # If the target is NOT bracketed by the clamped range, we must check why.
+        # CASE A: h_target < h_low. 
+        #   This means the required Enthalpy is LOWER than the enthalpy at T_min_lut.
+        #   Therefore, the solution temperature is < T_min_lut (Cryogenic/OOB).
+        #   We MUST expand downwards and accept the LUT warning/fallback.
+        if h_target < h_low:
+             T_low = 20.0 # Deep cryogenic search
+             h_low = self.lut_mgr.lookup(self.fluid, 'H', P_target_pa, T_low)
 
-            if not (h_low < h_target < h_high):
-                return T_guess
+        # CASE B: h_target > h_high.
+        #   Solution is very hot. Expand upwards.
+        elif h_target > h_high:
+             T_high = 1500.0
+             h_high = self.lut_mgr.lookup(self.fluid, 'H', P_target_pa, T_high)
+
+        # Final check if we failed to bracket even after expansion
+        if not (h_low < h_target < h_high):
+            return T_guess
 
         # Bisection loop (20 iterations yields ~1e-6 relative precision)
         for _ in range(20):
