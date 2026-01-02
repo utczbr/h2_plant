@@ -51,6 +51,7 @@ class MakeupMixer(Component):
 
         # Inputs
         self.drain_stream: Optional[Stream] = None
+        self._water_consumed_kg_h: float = 0.0  # From electrolyzers
         
         # Outputs
         self.outlet_stream: Optional[Stream] = None
@@ -91,19 +92,24 @@ class MakeupMixer(Component):
             drain_temp = self.drain_stream.temperature_k
         
         # 2. Calculate Makeup Requirement
+        # Logic: Supply deficiency to meet target.
+        # If Drain > Target, we have excess inventory (makeup=0).
         self.makeup_flow_kg_h = max(0.0, self.target_flow_kg_h - drain_flow)
         
-        total_flow = drain_flow + self.makeup_flow_kg_h
+        # Clamp total output to target flow (Overflow logic)
+        # If drain > target, we discharge excess to avoid loop accumulation.
+        # This ensures Feed Pump never receives > Target.
+        total_flow = min(self.target_flow_kg_h, drain_flow + self.makeup_flow_kg_h)
         
         if total_flow <= 0:
              self.outlet_stream = Stream(0.0)
              return
 
         # 3. Mix Streams (Mass-Weighted Temperature/Enthalpy)
-        # Assuming Constant Cp for liquid water in this narrow range is acceptable approx
-        # T_mix = (m1*T1 + m2*T2) / (m1+m2)
+        # Fix: Only account for mass that actually enters the outlet (discard overflow energy)
+        used_drain_flow = total_flow - self.makeup_flow_kg_h
         
-        weighted_T_sum = (drain_flow * drain_temp) + (self.makeup_flow_kg_h * self.makeup_temp_k)
+        weighted_T_sum = (used_drain_flow * drain_temp) + (self.makeup_flow_kg_h * self.makeup_temp_k)
         T_mix = weighted_T_sum / total_flow
         
         # Pressure equalization (lowest of the inputs, usually atmospheric for drain)
@@ -126,9 +132,11 @@ class MakeupMixer(Component):
         if port_name == 'drain_in' and isinstance(value, Stream):
             self.drain_stream = value
             return value.mass_flow_kg_h
-        # 'makeup_in' is implicit/virtual in this simpler model, 
-        # but could be explicit if connected to a Source. 
-        # For now, it acts as a Source itself for the deficiency.
+        elif port_name == 'consumption_in':
+            # Total water consumed by electrolyzers (kg/h)
+            if isinstance(value, (int, float)):
+                self._water_consumed_kg_h = float(value)
+                return float(value)
         return 0.0
 
     def get_output(self, port_name: str) -> Any:
@@ -139,6 +147,7 @@ class MakeupMixer(Component):
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         return {
             'drain_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
+            'consumption_in': {'type': 'input', 'resource_type': 'signal', 'units': 'kg/h'},
             'water_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'}
         }
 
@@ -146,5 +155,6 @@ class MakeupMixer(Component):
         return {
             **super().get_state(),
             'target_flow_kg_h': self.target_flow_kg_h,
-            'makeup_flow_kg_h': self.makeup_flow_kg_h
+            'makeup_flow_kg_h': self.makeup_flow_kg_h,
+            'water_consumed_kg_h': self._water_consumed_kg_h
         }

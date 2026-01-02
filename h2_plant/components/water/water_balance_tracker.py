@@ -68,11 +68,16 @@ class WaterBalanceTracker(Component):
         self.total_consumption_kg_h = 0.0
         self.total_recovery_kg_h = 0.0
         self.net_demand_kg_h = 0.0
+        self.stoichiometric_consumption_kg_h = 0.0  # Actual water consumed by reaction
 
         # Cumulative tracking (kg)
         self.cumulative_consumption_kg = 0.0
         self.cumulative_recovery_kg = 0.0
         self.cumulative_net_demand_kg = 0.0
+        
+        # Stoichiometric constant: kg H2O per kg H2 (2H2O -> 2H2 + O2)
+        # MW ratio: 2*18.015 / (2*2.016) = 8.936
+        self.STOICH_H2O_PER_H2 = 8.936
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
@@ -126,6 +131,26 @@ class WaterBalanceTracker(Component):
         except Exception:
             pass
 
+        # Calculate stoichiometric water consumed from H2 production
+        total_h2_kg_h = 0.0
+        try:
+            pem = self.get_registry_safe(ComponentID.PEM_ELECTROLYZER_DETAILED)
+            if hasattr(pem, 'm_H2_kg_s'):
+                total_h2_kg_h += pem.m_H2_kg_s * 3600.0
+            elif hasattr(pem, 'last_step_h2_kg'):
+                total_h2_kg_h += pem.last_step_h2_kg / self.dt if self.dt > 0 else 0.0
+        except Exception:
+            pass
+        
+        try:
+            soec = self.get_registry_safe(ComponentID.SOEC_CLUSTER)
+            if hasattr(soec, 'last_step_h2_kg'):
+                total_h2_kg_h += soec.last_step_h2_kg / self.dt if self.dt > 0 else 0.0
+        except Exception:
+            pass
+        
+        self.stoichiometric_consumption_kg_h = total_h2_kg_h * self.STOICH_H2O_PER_H2
+
         # Calculate net demand
         self.net_demand_kg_h = self.total_consumption_kg_h - self.total_recovery_kg_h
 
@@ -153,6 +178,7 @@ class WaterBalanceTracker(Component):
             **super().get_state(),
             "total_consumption_kg_h": self.total_consumption_kg_h,
             "total_recovery_kg_h": self.total_recovery_kg_h,
+            "stoichiometric_consumption_kg_h": self.stoichiometric_consumption_kg_h,
             "net_demand_kg_h": self.net_demand_kg_h,
             "cumulative_consumption_kg": self.cumulative_consumption_kg,
             "cumulative_recovery_kg": self.cumulative_recovery_kg,
@@ -167,6 +193,22 @@ class WaterBalanceTracker(Component):
         Define the physical connection ports for this component.
 
         Returns:
-            Dict[str, Dict[str, str]]: Empty dict (monitoring-only component).
+            Dict[str, Dict[str, str]]: Output port for stoichiometric consumption signal.
         """
-        return {}
+        return {
+            'consumption_out': {'type': 'output', 'resource_type': 'signal', 'units': 'kg/h'}
+        }
+    
+    def get_output(self, port_name: str) -> Any:
+        """
+        Retrieve output at specified port.
+        
+        Args:
+            port_name: Port identifier ('consumption_out').
+            
+        Returns:
+            float: Stoichiometric water consumption rate (kg/h).
+        """
+        if port_name == 'consumption_out':
+            return self.stoichiometric_consumption_kg_h
+        return None

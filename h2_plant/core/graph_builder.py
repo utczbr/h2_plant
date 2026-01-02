@@ -15,6 +15,7 @@ from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer 
 from h2_plant.components.control.valve import ThrottlingValve as Valve
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 from h2_plant.components.water.makeup_mixer import MakeupMixer
+from h2_plant.components.water.water_balance_tracker import WaterBalanceTracker
 from h2_plant.components.thermal.interchanger import Interchanger
 from h2_plant.components.water.water_pump import WaterPumpThermodynamic
 from h2_plant.optimization.lut_manager import LUTManager
@@ -339,7 +340,7 @@ class PlantGraphBuilder:
             return MakeupMixer(
                 component_id=node.id,
                 target_flow_kg_h=float(node.params.get("target_flow_kg_h", 100.0)),
-                makeup_temp_c=float(node.params.get("makeup_temp_c", 20.0)),
+                makeup_temp_c=float(node.params.get("makeup_temp_c", 5.0)),
                 makeup_pressure_bar=float(node.params.get("makeup_pressure_bar", 1.0))
             )
 
@@ -364,6 +365,8 @@ class PlantGraphBuilder:
                  eta_m=eta_m
              )
 
+        elif node.type == "WaterBalanceTracker":
+            return WaterBalanceTracker()
         else:
             logger.warning(f"Unknown component type: {node.type} (ID: {node.id}) -> Instantiating PassiveComponent")
             return PassiveComponent()

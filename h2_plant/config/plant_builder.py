@@ -238,9 +238,12 @@ class PlantBuilder:
             # List all registered components for debugging
             print(f"DEBUG: All registered components: {self.registry._components.keys()}")
         
-        coordinator = SimpleWindCoordinator(environment, electrolyzer, soec)
+        # Get guaranteed_power_mw from pathway (economics) config, default to 10.0 MW
+        guaranteed_power = getattr(self.config.pathway, 'guaranteed_power_mw', 10.0)
+        
+        coordinator = SimpleWindCoordinator(environment, electrolyzer, soec, guaranteed_power_mw=guaranteed_power)
         self.registry.register('wind_coordinator', coordinator, component_type='coordination')
-        logger.debug(f"Registered SimpleWindCoordinator (PEM + {('SOEC' if soec else 'none')})")
+        logger.debug(f"Registered SimpleWindCoordinator (PEM + {('SOEC' if soec else 'none')}, guaranteed={guaranteed_power} MW)")
     
     def _build_storage(self) -> None:
         """Build storage components from configuration."""

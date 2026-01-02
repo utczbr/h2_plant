@@ -157,19 +157,29 @@ def print_stream_summary_table(
         comp = components.get(cid)
         if not comp: continue
         
-        # Get component output stream (try common ports)
-        stream = None
-        # PRIORITY: Process gas/fluid ports first, then drains/waste.
-        # Added 'liquid_drain' and 'drain' to ensure KODs/Sep are shown even if gas flow is 0.
+        # Get component output stream - prioritize by gas species mass (H2 + O2 + CH4)
+        # This ensures gas streams are shown over water-dominated drain streams
+        candidate_streams = []
         for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out', 'liquid_drain', 'drain']:
             try:
                 s = comp.get_output(port)
                 if s and s.mass_flow_kg_h > 1e-6:
-                    stream = s
-                    break
+                    # Calculate gas species mass (H2 + O2 + CH4)
+                    gas_mass_frac = (
+                        s.composition.get('H2', 0.0) + 
+                        s.composition.get('O2', 0.0) + 
+                        s.composition.get('CH4', 0.0)
+                    )
+                    gas_mass_kg_h = s.mass_flow_kg_h * gas_mass_frac
+                    candidate_streams.append((gas_mass_kg_h, s))
             except: pass
-            
-
+        
+        # Select stream with highest gas species mass
+        if candidate_streams:
+            candidate_streams.sort(key=lambda x: x[0], reverse=True)
+            stream = candidate_streams[0][1]
+        else:
+            stream = None
             
         if not stream: continue # Skip components with no flow
         

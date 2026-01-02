@@ -303,16 +303,16 @@ class DryCoolerIndirectConstants:
     # --- Stage 1: TQC (Gas -> Glycol) ---
     # Heat Transfer Areas (m²)
     AREA_H2_TQC_M2: Final[float] = 10.0
-    AREA_O2_TQC_M2: Final[float] = 5.0
+    AREA_O2_TQC_M2: Final[float] = 5.0  
     
     # Design Values
     U_VALUE_TQC_W_M2_K: Final[float] = 1000.0
-    DP_LIQ_TQC_BAR: Final[float] = 0.05  # Legacy: 0.05 bar
+    DP_LIQ_TQC_BAR: Final[float] = 0.05 
     
     # --- Stage 2: DC (Glycol -> Air) ---
     # Heat Transfer Areas (m²)
     AREA_H2_DC_M2: Final[float] = 453.62
-    AREA_O2_DC_M2: Final[float] = 42.95
+    AREA_O2_DC_M2: Final[float] = 42.95  
     
     # Design Values
     U_VALUE_DC_W_M2_K: Final[float] = 35.0
@@ -320,7 +320,7 @@ class DryCoolerIndirectConstants:
     DP_AIR_DESIGN_PA: Final[float] = 500.0
     
     # Air Side Design Parameters
-    T_AIR_DESIGN_C: Final[float] = 32.0         # "Worst case" design temp
+    T_AIR_DESIGN_C: Final[float] = 25.0         
     MDOT_AIR_DESIGN_H2_KG_S: Final[float] = 25.887
     MDOT_AIR_DESIGN_O2_KG_S: Final[float] = 3.552
     

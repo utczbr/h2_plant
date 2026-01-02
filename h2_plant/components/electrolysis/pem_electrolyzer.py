@@ -229,7 +229,22 @@ class DetailedPEMElectrolyzer(Component):
         # ====================================================================
         # Buffer accumulates water from receive_input for mass-balance limiting
         self.water_buffer_kg = 0.0
-        self.available_water_kg_h = float('inf')
+        self.available_water_kg_h = 0.0  # Changed from inf to prevent phantom mass
+        
+        # ====================================================================
+        # SNAPSHOT PRINCIPLE: Output Mass Tracking
+        # ====================================================================
+        # These store the exact mass values calculated in step() AFTER all
+        # balance/clamping is applied. get_output() reads these directly
+        # instead of recalculating, ensuring a single source of truth.
+        
+        # H₂ Stream (Cathode) Snapshot
+        self._snapshot_h2_gas_kg_s = 0.0      # Pure H₂ gas production
+        self._snapshot_h2_liq_kg_s = 0.0      # Cathode water drag (electro-osmotic)
+        
+        # O₂ Stream (Anode) Snapshot
+        self._snapshot_o2_gas_kg_s = 0.0      # Pure O₂ gas production
+        self._snapshot_o2_liq_kg_s = 0.0      # Anode cooling water output
 
         # ====================================================================
         # Degradation Interpolation Tables
@@ -362,7 +377,33 @@ class DetailedPEMElectrolyzer(Component):
             self.o2_output_kg = 0.0
             return
 
+        # === MASS CONSERVATION CHECK ===
+        # If no water input received, electrolyzer cannot operate
+        # This prevents phantom mass creation from "infinite water" assumption
+        if self.water_buffer_kg < 1e-6:
+            self.m_H2_kg_s = 0.0
+            self.m_O2_kg_s = 0.0
+            self.m_H2O_kg_s = 0.0
+            self.P_consumed_W = 0.0
+            self.V_cell = 0.0
+            self.I_total = 0.0
+            self.heat_output_kw = 0.0
+            self.state = "NO_WATER"
+            self.h2_output_kg = 0.0
+            self.o2_output_kg = 0.0
+            self.recirc_flow_kg_s = 0.0
+            # Zero out snapshots
+            self._snapshot_h2_gas_kg_s = 0.0
+            self._snapshot_h2_liq_kg_s = 0.0
+            self._snapshot_o2_gas_kg_s = 0.0
+            self._snapshot_o2_liq_kg_s = 0.0
+            return
+
         self.state = "ON"
+        
+        # === DEBUG TRACE (remove after diagnosis) ===
+        buffer_start = self.water_buffer_kg
+        water_in_rate = self.available_water_kg_h  # Set by receive_input()
 
         try:
             target_power_W = P_setpoint_mw * 1e6
@@ -473,10 +514,16 @@ class DetailedPEMElectrolyzer(Component):
             delta_t_cool = CONST.cooling_delta_t_k
             
             # heat_output_kw is calculated above
+            theoretical_recirc_kg_s = 0.0
             if delta_t_cool > 1e-3:
-                self.recirc_flow_kg_s = self.heat_output_kw / (cp_water_kj_kg_k * delta_t_cool)
-            else:
-                self.recirc_flow_kg_s = 0.0
+                theoretical_recirc_kg_s = self.heat_output_kw / (cp_water_kj_kg_k * delta_t_cool)
+            
+            # Fix: Clamp recirc flow to available water in buffer
+            # buffer holds mass (kg). Flow (kg/s) = Mass / dt_seconds
+            dt_seconds = self.dt * 3600.0
+            max_available_flow_kg_s = self.water_buffer_kg / dt_seconds if dt_seconds > 0 else 0.0
+            
+            self.recirc_flow_kg_s = min(theoretical_recirc_kg_s, max_available_flow_kg_s)
 
         except Exception as e:
             warnings.warn(f"Electrochemical calculation error: {e}")
@@ -486,19 +533,90 @@ class DetailedPEMElectrolyzer(Component):
             self.recirc_flow_kg_s = 0.0
 
         # ====================================================================
-        # Output Integration
+        # INVENTORY-CONSTRAINED FLOW (Mass Balance Compliant)
         # ====================================================================
+        # This implements the correct physics: we can only withdraw what we have.
+        # Priority: Reaction > Drag > Recirculation
+        # CRITICAL FIX: Limit total withdrawal to current step input to prevent
+        # feedback amplification where drain->mixer->pump creates phantom mass.
+        
         dt_seconds = self.dt * 3600.0
+        
+        # 1. Calculate Total Inventory Available (The "Bucket")
+        # buffer_start already captured at beginning of step()
+        water_in_this_step = water_in_rate * self.dt  # kg received this step
+        total_inventory_kg = buffer_start + water_in_this_step
+        
+        # CRITICAL: Maximum withdrawal must be limited to CURRENT STEP INPUT
+        # The buffer exists for startup transients, but in steady-state,
+        # we cannot withdraw more water than we receive this step.
+        # This prevents the drain->mixer->pump feedback from amplifying flow.
+        max_withdrawal_kg = water_in_this_step
+        
+        # 2. Calculate Mass Demands (convert flow rates to mass for this timestep)
+        mass_needed_reaction = self.m_H2O_kg_s * dt_seconds  # Stoichiometric consumption
+        mass_needed_drag = self.m_H2O_kg_s * CONST.cathode_liquid_water_factor * dt_seconds  # Cathode drag
+        mass_needed_recirc = theoretical_recirc_kg_s * dt_seconds  # Anode cooling recirc
+        
+        total_demand_mass = mass_needed_reaction + mass_needed_drag + mass_needed_recirc
+        
+        # 3. Apply Inventory Constraint with Priority
+        # Limit total withdrawal to max_withdrawal_kg (current step input)
+        if max_withdrawal_kg >= total_demand_mass:
+            # SUFFICIENT WATER - Normal Operation
+            actual_reaction_kg = mass_needed_reaction
+            actual_drag_kg = mass_needed_drag
+            actual_recirc_kg = mass_needed_recirc
+        else:
+            # STARVATION - Priority-based allocation
+            # Priority 1: Reaction (electrochemistry demands this)
+            actual_reaction_kg = min(max_withdrawal_kg, mass_needed_reaction)
+            remaining = max_withdrawal_kg - actual_reaction_kg
+            
+            # Priority 2: Drag (coupled to proton transport)
+            actual_drag_kg = min(remaining, mass_needed_drag)
+            remaining -= actual_drag_kg
+            
+            # Priority 3: Recirculation (pump takes whatever is left)
+            actual_recirc_kg = max(0.0, remaining)
+            
+            # Log warning if starvation hits reaction
+            if actual_reaction_kg < mass_needed_reaction * 0.99:
+                warnings.warn(f"PEM Stack Starvation! Needed {mass_needed_reaction:.2f}kg, got {actual_reaction_kg:.2f}kg")
+        
+        # 4. Update Buffer (Conservation of Mass: In - Out = Accumulation)
+        total_withdrawal_kg = actual_reaction_kg + actual_drag_kg + actual_recirc_kg
+        self.water_buffer_kg = max(0.0, total_inventory_kg - total_withdrawal_kg)
+        
+        # Force clear tiny residuals
+        if self.water_buffer_kg < 1e-6:
+            self.water_buffer_kg = 0.0
+        
+        # 5. Convert actual masses back to flow rates for snapshots (kg/s)
+        self._snapshot_h2_gas_kg_s = self.m_H2_kg_s  # H2 gas production (not limited by water)
+        self._snapshot_h2_liq_kg_s = actual_drag_kg / dt_seconds  # Cathode liquid drag
+        self._snapshot_o2_gas_kg_s = self.m_O2_kg_s  # O2 gas production (not limited by water)
+        self._snapshot_o2_liq_kg_s = actual_recirc_kg / dt_seconds  # Anode cooling water
+        
+        # Store recirc flow for state reporting
+        self.recirc_flow_kg_s = (actual_drag_kg + actual_recirc_kg) / dt_seconds
+        
+        # Update output trackers
         self.h2_output_kg = self.m_H2_kg_s * dt_seconds
         self.o2_output_kg = self.m_O2_kg_s * dt_seconds
+        self.water_consumption_kg = actual_reaction_kg
 
-        reaction_water_kg = self.m_H2O_kg_s * dt_seconds
-        self.water_consumption_kg = reaction_water_kg * (1.0 + self.water_excess_factor)
-
-        # Debit water buffer
-        self.water_buffer_kg -= self.water_consumption_kg
-        if self.water_buffer_kg < 0:
-            self.water_buffer_kg = 0.0
+        # === DEBUG TRACE (remove after diagnosis) ===
+        if self.t_op_h < 0.1:  # Only first few steps
+            h2_total = (self._snapshot_h2_gas_kg_s + self._snapshot_h2_liq_kg_s) * 3600
+            o2_total = (self._snapshot_o2_gas_kg_s + self._snapshot_o2_liq_kg_s) * 3600
+            print(f"\n[PEM DEBUG t={self.t_op_h:.3f}h]")
+            print(f"  Inventory: buffer_start={buffer_start:.2f}kg + water_in={water_in_this_step:.2f}kg = {total_inventory_kg:.2f}kg")
+            print(f"  Demand: rxn={mass_needed_reaction:.2f} + drag={mass_needed_drag:.2f} + recirc={mass_needed_recirc:.2f} = {total_demand_mass:.2f}kg")
+            print(f"  Actual: rxn={actual_reaction_kg:.2f} + drag={actual_drag_kg:.2f} + recirc={actual_recirc_kg:.2f} = {total_withdrawal_kg:.2f}kg")
+            print(f"  Buffer final: {self.water_buffer_kg:.2f}kg")
+            print(f"  Snapshot H2: gas={self._snapshot_h2_gas_kg_s*3600:.1f} + liq={self._snapshot_h2_liq_kg_s*3600:.1f} = {h2_total:.1f} kg/h")
+            print(f"  Snapshot O2: gas={self._snapshot_o2_gas_kg_s*3600:.1f} + liq={self._snapshot_o2_liq_kg_s*3600:.1f} = {o2_total:.1f} kg/h")
 
         # Update cumulative counters
         self.cumulative_h2_kg += self.h2_output_kg
@@ -744,54 +862,55 @@ class DetailedPEMElectrolyzer(Component):
             Stream: For gas ports, a Stream object with mass flow, temperature,
                 pressure, and composition. For 'heat_out', returns float in kW.
         """
+        # === STATE GUARD: Prevent phantom mass when not operating ===
+        if self.state in ('OFF', 'NO_WATER'):
+            if port_name == 'h2_out':
+                return Stream(0.0)
+            elif port_name == 'oxygen_out':
+                return Stream(0.0)
+            elif port_name == 'heat_out':
+                return 0.0
+            return None
+
         # Common calculations for saturation
         T_K = 333.15 # 60 C
         P_sat_pa = 19932.0 # ~0.199 bar approximately
         
         if port_name == 'h2_out':
-            # === HYDROGEN STREAM (CATHODE) ===
-            # Molar Composition (Gas Phase)
-            P_total_pa = self.out_pressure_pa # 40 bar
-            y_H2O_sat = P_sat_pa / P_total_pa # ~0.005
+            # === HYDROGEN STREAM (CATHODE) - SNAPSHOT PRINCIPLE ===
+            # Read gas and liquid masses directly from step() snapshot
+            m_h2_gas_kg_s = self._snapshot_h2_gas_kg_s
+            m_h2_liq_kg_s = self._snapshot_h2_liq_kg_s
+            m_total_stream = m_h2_gas_kg_s + m_h2_liq_kg_s
             
+            # Handle zero flow edge case
+            if m_total_stream <= 1e-9:
+                return Stream(
+                    mass_flow_kg_h=0.0,
+                    temperature_k=T_K,
+                    pressure_pa=self.out_pressure_pa,
+                    composition={'H2': 1.0},
+                    phase='gas'
+                )
+            
+            # Gas phase composition (vapor saturation at operating conditions)
+            P_total_pa = self.out_pressure_pa
+            y_H2O_sat = P_sat_pa / P_total_pa  # ~0.5%
             y_O2 = CONST.o2_crossover_ppm_molar / 1e6
             y_H2 = 1.0 - y_H2O_sat - y_O2
             
-            # Normalize just in case
-            total_y = y_H2 + y_O2 + y_H2O_sat
-            y_H2 /= total_y; y_O2 /= total_y; y_H2O_sat /= total_y
-            
-            # Mass Fractions
+            # Mass fractions of gas phase
             MH2, MO2, MH2O = CONST.MH2, CONST.MO2, CONST.MH2O
             MW_mix = y_H2*MH2 + y_O2*MO2 + y_H2O_sat*MH2O
+            x_H2_gas = (y_H2 * MH2) / MW_mix
+            x_O2_gas = (y_O2 * MO2) / MW_mix
+            x_H2O_vap_gas = (y_H2O_sat * MH2O) / MW_mix
             
-            x_H2 = (y_H2 * MH2) / MW_mix
-            x_O2 = (y_O2 * MO2) / MW_mix
-            x_H2O_vap = (y_H2O_sat * MH2O) / MW_mix
-            
-            # Calculate Total Gas Mass Flow based on H2 production
-            # m_H2_kg_s is known pure H2.
-            # m_gas_total = m_H2_kg_s / x_H2
-            if x_H2 > 0:
-                m_gas_kg_s = self.m_H2_kg_s / x_H2
-            else:
-                m_gas_kg_s = 0.0
-                
-            # === LIQUID WATER (ELECTRO-OSMOTIC DRAG) ===
-            # Defined as 5x the consumed water mass reaction
-            m_H2O_liq_kg_s = self.m_H2O_kg_s * CONST.cathode_liquid_water_factor
-            
-            m_total_stream = m_gas_kg_s + m_H2O_liq_kg_s
-            
-            # === GLOBAL MASS FRACTIONS ===
-            # Re-normalize fractions to the Total Stream Mass (Gas + Liquid)
-            if m_total_stream > 0:
-                x_H2_global = (m_gas_kg_s * x_H2) / m_total_stream
-                x_O2_global = (m_gas_kg_s * x_O2) / m_total_stream
-                x_H2O_vap_global = (m_gas_kg_s * x_H2O_vap) / m_total_stream
-                x_H2O_liq_global = m_H2O_liq_kg_s / m_total_stream
-            else:
-                x_H2_global = x_H2; x_O2_global = x_O2; x_H2O_vap_global = x_H2O_vap; x_H2O_liq_global = 0.0
+            # Global mass fractions (gas + liquid combined)
+            x_H2_global = (m_h2_gas_kg_s * x_H2_gas) / m_total_stream
+            x_O2_global = (m_h2_gas_kg_s * x_O2_gas) / m_total_stream
+            x_H2O_vap_global = (m_h2_gas_kg_s * x_H2O_vap_gas) / m_total_stream
+            x_H2O_liq_global = m_h2_liq_kg_s / m_total_stream
 
             return Stream(
                 mass_flow_kg_h=m_total_stream * 3600.0,
@@ -810,69 +929,54 @@ class DetailedPEMElectrolyzer(Component):
             )
 
         elif port_name == 'oxygen_out':
-            # === OXYGEN STREAM (ANODE) ===
-            # High Pressure Output (40 bar now!)
-            P_total_pa = self.out_pressure_pa 
+            # === OXYGEN STREAM (ANODE) - SNAPSHOT PRINCIPLE ===
+            # Read gas and liquid masses directly from step() snapshot
+            m_o2_gas_kg_s = self._snapshot_o2_gas_kg_s
+            m_o2_liq_kg_s = self._snapshot_o2_liq_kg_s
+            m_total_stream = m_o2_gas_kg_s + m_o2_liq_kg_s
             
-            # Molar Composition (Gas Phase)
-            y_H2O_sat = P_sat_pa / P_total_pa
+            # Handle zero flow edge case
+            if m_total_stream <= 1e-9:
+                return Stream(
+                    mass_flow_kg_h=0.0,
+                    temperature_k=T_K,
+                    pressure_pa=self.out_pressure_pa,
+                    composition={'O2': 1.0},
+                    phase='gas'
+                )
+            
+            # Gas phase composition (vapor saturation at operating conditions)
+            P_total_pa = self.out_pressure_pa
+            y_H2O_sat = P_sat_pa / P_total_pa  # ~0.5%
             y_H2_imp = CONST.anode_h2_crossover_ppm_molar / 1e6
             y_O2 = 1.0 - y_H2O_sat - y_H2_imp
             
-             # Normalize
-            total_y = y_O2 + y_H2_imp + y_H2O_sat
-            y_O2 /= total_y; y_H2_imp /= total_y; y_H2O_sat /= total_y
-            
-            # Mass Fractions
+            # Mass fractions of gas phase
             MH2, MO2, MH2O = CONST.MH2, CONST.MO2, CONST.MH2O
             MW_mix = y_O2*MO2 + y_H2_imp*MH2 + y_H2O_sat*MH2O
+            x_O2_gas = (y_O2 * MO2) / MW_mix
+            x_H2_gas = (y_H2_imp * MH2) / MW_mix
+            x_H2O_vap_gas = (y_H2O_sat * MH2O) / MW_mix
             
-            x_O2 = (y_O2 * MO2) / MW_mix
-            x_H2 = (y_H2_imp * MH2) / MW_mix
-            x_H2O_vap = (y_H2O_sat * MH2O) / MW_mix
-            
-            # Total Gas Mass Flow
-            # m_O2_kg_s is known pure O2 produced
-            if x_O2 > 0:
-                m_gas_kg_s = self.m_O2_kg_s / x_O2
-            else:
-                m_gas_kg_s = 0.0
-                
-            # === LIQUID WATER (BULK COOLING) ===
-            # Anode Water = Total Recirc - Consumed - Cathode Drag
-            recirc = getattr(self, 'recirc_flow_kg_s', 0.0)
-            cathode_drag = self.m_H2O_kg_s * CONST.cathode_liquid_water_factor
-            m_H2O_liq_kg_s = recirc - self.m_H2O_kg_s - cathode_drag
-            
-            if m_H2O_liq_kg_s < 0:
-                # Fallback if recirc calculation is weird or zero (startup)
-                # Ensure at least some water if operational
-                m_H2O_liq_kg_s = 0.0
-                
-            m_total_stream = m_gas_kg_s + m_H2O_liq_kg_s
-            
-            # === GLOBAL MASS FRACTIONS ===
-            if m_total_stream > 0:
-                x_O2_global = (m_gas_kg_s * x_O2) / m_total_stream
-                x_H2_global = (m_gas_kg_s * x_H2) / m_total_stream
-                x_H2O_vap_global = (m_gas_kg_s * x_H2O_vap) / m_total_stream
-                x_H2O_liq_global = m_H2O_liq_kg_s / m_total_stream
-            else:
-                 x_O2_global = x_O2; x_H2_global = x_H2; x_H2O_vap_global = x_H2O_vap; x_H2O_liq_global = 0.0
+            # Global mass fractions (gas + liquid combined)
+            x_O2_global = (m_o2_gas_kg_s * x_O2_gas) / m_total_stream
+            x_H2_global = (m_o2_gas_kg_s * x_H2_gas) / m_total_stream
+            x_H2O_vap_global = (m_o2_gas_kg_s * x_H2O_vap_gas) / m_total_stream
+            x_H2O_liq_global = m_o2_liq_kg_s / m_total_stream
 
             return Stream(
                 mass_flow_kg_h=m_total_stream * 3600.0,
                 temperature_k=T_K,
-                pressure_pa=P_total_pa, # 40 bar
+                pressure_pa=P_total_pa,
                 composition={
                     'O2': x_O2_global,
                     'H2': x_H2_global,
                     'H2O': x_H2O_vap_global,
                     'H2O_liq': x_H2O_liq_global
                 },
-                phase='mixed', # Liquid dominated usually
+                phase='mixed',
                 extra={
-                     'h2_ppm_molar': CONST.anode_h2_crossover_ppm_molar
+                    'h2_ppm_molar': CONST.anode_h2_crossover_ppm_molar
                 }
             )
         elif port_name == 'heat_out':
@@ -900,6 +1004,9 @@ class DetailedPEMElectrolyzer(Component):
                 water_received_kg = value.mass_flow_kg_h * self.dt
                 self.water_buffer_kg += water_received_kg
                 self.available_water_kg_h = value.mass_flow_kg_h
+                # DEBUG: Track receive_input calls
+                if self.t_op_h < 0.05:
+                    print(f"[PEM receive_input] flow={value.mass_flow_kg_h:.0f}kg/h, buffer+={water_received_kg:.2f}kg, buffer_now={self.water_buffer_kg:.2f}kg")
                 return value.mass_flow_kg_h
         elif port_name == 'power_in':
             if isinstance(value, (int, float)):

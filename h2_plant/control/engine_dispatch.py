@@ -294,11 +294,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             self._soec.receive_input('power_in', result.P_soec, 'electricity')
 
         if self._pem:
-            # Water supply workaround
-            from h2_plant.core.stream import Stream
-            # Reuse a single stream object? For now, create light.
-            water_stream = Stream(10000.0, 298.15, 5e5, {'H2O': 1.0}, 'liquid')
-            self._pem.receive_input('water_in', water_stream, 'water')
+            # NOTE: Water supply is handled by the topology (PEM_Water_Pump).
+            # DO NOT add hardcoded water here - it causes double delivery!
             self._pem.set_power_input_mw(result.P_pem)
 
         self._history['minute'][step_idx] = minute

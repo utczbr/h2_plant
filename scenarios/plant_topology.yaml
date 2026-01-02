@@ -82,7 +82,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_KOD_1"
         resource_type: "stream"
 
@@ -110,7 +110,7 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_KOD_2"
         resource_type: "stream"
 
@@ -127,7 +127,7 @@ nodes:
         target_port: "h2_in"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_Cyclone_1"
         resource_type: "stream"
 
@@ -201,7 +201,7 @@ nodes:
         target_port: "h2_in"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_Cyclone_2"
         resource_type: "stream"
 
@@ -243,7 +243,7 @@ nodes:
         target_port: "h2_in"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_Cyclone_3"
         resource_type: "stream"
 
@@ -285,7 +285,7 @@ nodes:
         target_port: "h2_in"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_Cyclone_4"
         resource_type: "stream"
 
@@ -327,7 +327,7 @@ nodes:
         target_port: "h2_in"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_Cyclone_5"
         resource_type: "stream"
 
@@ -395,7 +395,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "SOEC_Drain_Mixer"
         target_port: "SOEC_H2_Coalescer_2"
         resource_type: "stream"
 
@@ -446,7 +446,7 @@ nodes:
   - id: "SOEC_O2_compressor_1"
     type: "CompressorSingle"
     params:
-      outlet_pressure_bar: 2.0
+      outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
     connections:
@@ -458,7 +458,7 @@ nodes:
   # Stage 2
   - id: "SOEC_O2_Drycooler_2"
     type: "DryCooler"
-    params:
+    params: 
       component_id: "SOEC_O2_Drycooler_2"
       target_temp_c: 30.0
     connections:
@@ -470,7 +470,7 @@ nodes:
   - id: "SOEC_O2_compressor_2"
     type: "CompressorSingle"
     params:
-      outlet_pressure_bar: 5.0
+      outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
     connections:
@@ -494,7 +494,7 @@ nodes:
   - id: "SOEC_O2_compressor_3"
     type: "CompressorSingle"
     params:
-      outlet_pressure_bar: 10.0
+      outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
     connections:
@@ -521,38 +521,71 @@ nodes:
       outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
-    connections: []
+    connections:
+      - source_port: "outlet"
+        target_name: "SOEC_O2_Drycooler_5"
+        target_port: "fluid_in"
+        resource_type: "stream"
 
+  # Stage 5
+  - id: "SOEC_O2_Drycooler_5"
+    type: "DryCooler"
+    params:
+      component_id: "SOEC_O2_Drycooler_5"
+      target_temp_c: 30.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "SOEC_O2_compressor_5"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "SOEC_O2_compressor_5"
+    type: "CompressorSingle"
+    params:
+      outlet_pressure_bar: 15.0
+      max_temp_c: 135.0
+      temperature_limited: true
+    connections: []
 
 
   # =================================================================================
   # WATER RECIRCULATION LOOP
   # =================================================================================
 
-  - id: "Drain_Mixer"
+  - id: "SOEC_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2", "SOEC_H2_Cyclone_1", "SOEC_H2_Cyclone_2", "SOEC_H2_Cyclone_3", "SOEC_H2_Cyclone_4", "SOEC_H2_Cyclone_5", "SOEC_H2_Coalescer_2", "PEM_O2_KOD_1", "PEM_O2_KOD_2", "PEM_O2_Coalescer_1"]
+      source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2", "SOEC_H2_Cyclone_1", "SOEC_H2_Cyclone_2", "SOEC_H2_Cyclone_3", "SOEC_H2_Cyclone_4", "SOEC_H2_Cyclone_5", "SOEC_H2_Coalescer_2"]
     connections:
       - source_port: "outlet"
-        target_name: "Makeup_Mixer_1"
+        target_name: "SOEC_Makeup_Mixer"
         target_port: "drain_in"
         resource_type: "stream"
   
-  - id: "Makeup_Mixer_1"
+  - id: "SOEC_Makeup_Mixer"
     type: "MakeupMixer"
     params:
-      target_flow_kg_h: 3600.0
+      target_flow_kg_h: 3600.0  # SOEC theoretical demand
     connections:
       - source_port: "water_out"
-        target_name: "Feed_Pump"
+        target_name: "SOEC_Feed_Pump"
         target_port: "water_in"
         resource_type: "stream"
+  
+  # Water Balance Tracker: Calculates stoichiometric water consumption from H2 production
+  - id: "Water_Balance_Tracker"
+    type: "WaterBalanceTracker"
+    params: {}
+    connections:
+      - source_port: "consumption_out"
+        target_name: "SOEC_Makeup_Mixer"
+        target_port: "consumption_in"
+        resource_type: "signal"
 
-  - id: "Feed_Pump"
+  - id: "SOEC_Feed_Pump"
     type: "WaterPumpThermodynamic"
     params:
-      pump_id: "Feed_Pump"
+      pump_id: "SOEC_Feed_Pump"
       capacity_kg_h: 3600.0
       target_pressure_pa: 500000.0 # 5 bar
     connections:
@@ -571,6 +604,58 @@ nodes:
       - source_port: "fluid_out"
         target_name: "SOEC_Cluster"
         target_port: "steam_in"
+        resource_type: "stream"
+
+  # =================================================================================
+  # PEM WATER RECIRCULATION LOOP
+  # =================================================================================
+
+  - id: "PEM_Drain_Mixer"
+    type: "DrainRecorderMixer"
+    params:
+      source_ids: ["PEM_H2_KOD_1", "PEM_H2_KOD_2", "PEM_H2_KOD_3", "PEM_H2_Coalescer_1", "PEM_O2_KOD_1", "PEM_O2_KOD_2", "PEM_O2_Coalescer_1"]
+    connections:
+      - source_port: "outlet"
+        target_name: "PEM_O2_Valve"
+        target_port: "inlet"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "PEM_Drain_Mixer"
+        target_port: "PEM_O2_Coalescer_1"
+        resource_type: "stream"
+
+  - id: "PEM_O2_Valve"
+    type: "Valve"
+    params:
+      component_id: "PEM_O2_Valve"
+      P_out_pa: 100000.0 # 1 bar
+      fluid: "water"
+    connections: 
+      - source_port: "outlet"
+        target_name: "PEM_Makeup_Mixer"
+        target_port: "drain_in"
+        resource_type: "stream"
+
+  - id: "PEM_Makeup_Mixer"
+    type: "MakeupMixer"
+    params:
+      target_flow_kg_h: 4000.0  # PEM theoretical demand (~5 MW)
+    connections:
+      - source_port: "water_out"
+        target_name: "PEM_Water_Pump"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "PEM_Water_Pump"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "PEM_Water_Pump"
+      capacity_kg_h: 4000.0
+      target_pressure_pa: 100000.0  # 1 bar (PEM operating pressure)
+    connections:
+      - source_port: "water_out"
+        target_name: "PEM_Electrolyzer"
+        target_port: "water_in"
         resource_type: "stream"
 
   # =================================================================================
@@ -604,6 +689,10 @@ nodes:
       - source_port: "gas_outlet"
         target_name: "PEM_H2_DryCooler_1"
         target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "liquid_drain"
+        target_name: "PEM_Drain_Mixer"
+        target_port: "PEM_H2_KOD_1"
         resource_type: "stream"
 
   - id: "PEM_H2_DryCooler_1"
@@ -639,6 +728,10 @@ nodes:
         target_name: "PEM_H2_Coalescer_1"
         target_port: "inlet"
         resource_type: "gas_mixture"
+      - source_port: "liquid_drain"
+        target_name: "PEM_Drain_Mixer"
+        target_port: "PEM_H2_KOD_2"
+        resource_type: "stream"
 
   - id: "PEM_H2_Coalescer_1"
     type: "Coalescer"
@@ -648,6 +741,10 @@ nodes:
       - source_port: "outlet"
         target_name: "PEM_H2_ElectricBoiler_1"
         target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "PEM_Drain_Mixer"
+        target_port: "PEM_H2_Coalescer_1"
         resource_type: "stream"
 
   - id: "PEM_H2_ElectricBoiler_1"
@@ -695,6 +792,11 @@ nodes:
         target_name: "PEM_H2_ElectricBoiler_2"
         target_port: "fluid_in"
         resource_type: "stream"
+      - source_port: "liquid_drain"
+        target_name: "PEM_Drain_Mixer"
+        target_port: "PEM_H2_KOD_3"
+        resource_type: "stream"
+        resource_type: "stream"
 
   - id: "PEM_H2_ElectricBoiler_2"
     type: "ElectricBoiler"
@@ -737,7 +839,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "Drain_Mixer"
+        target_name: "PEM_Drain_Mixer"
         target_port: "PEM_O2_KOD_1"
         resource_type: "stream"
 
@@ -776,7 +878,7 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "Drain_Mixer"
+        target_name: "PEM_Drain_Mixer"
         target_port: "PEM_O2_KOD_2"
         resource_type: "stream"
 
@@ -790,7 +892,7 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
       - source_port: "drain"
-        target_name: "Drain_Mixer"
+        target_name: "PEM_Drain_Mixer"
         target_port: "PEM_O2_Coalescer_1"
         resource_type: "stream"
 

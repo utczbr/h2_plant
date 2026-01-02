@@ -2,6 +2,11 @@ h2_price_eur_kg: 9.6
 ppa_price_eur_mwh: 50.0
 arbitrage_enabled: true
 
+# Grid Firming: Minimum guaranteed power availability from utility (MW)
+# When wind power falls below this value, grid imports the difference.
+# Set to 0 to disable grid firming (pure wind-following mode).
+guaranteed_power_mw: 10.0
+
 # Optional: Set explicit threshold (EUR/MWh). If set, overrides calculated threshold.
 # Calculated default: PPA + (1000/η) × H2_price ≈ 306 EUR/MWh for SOEC
 # arbitrage_threshold_eur_mwh: 300.0

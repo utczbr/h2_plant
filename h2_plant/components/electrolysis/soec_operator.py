@@ -253,6 +253,7 @@ class SOECOperator(Component):
         # Power setpoint interface
         self._power_setpoint_mw = 0.0
         self.available_water_kg_h = float('inf')
+        self.current_water_input_kg = 0.0
 
     def _update_virtual_map(self) -> None:
         """
@@ -346,14 +347,19 @@ class SOECOperator(Component):
         super().step(t)
 
         # Handle water input accumulation for new timesteps
-        if t != self._last_step_time:
-            if self._input_water_buffer_kg_h:
-                self.available_water_kg_h = sum(self._input_water_buffer_kg_h)
-                self._input_water_buffer_kg_h.clear()
-            else:
-                self.available_water_kg_h = float('inf')
+        # Always process buffer if data is present. Remove time-check guard to prevent
+        # accumulation bugs (float comparison or cycle issues).
+        if self._input_water_buffer_kg_h:
+            water_sum = sum(self._input_water_buffer_kg_h)
+            self.available_water_kg_h = water_sum
+            self.current_water_input_kg = water_sum
+            self._input_water_buffer_kg_h.clear()
+        elif t != self._last_step_time:
+            # Only reset default if time changed and no input (new step start)
+            self.available_water_kg_h = float('inf')
+            self.current_water_input_kg = 0.0
 
-            self._last_step_time = t
+        self._last_step_time = t
 
         # Get power setpoint from port interface
         reference_power_mw = self._power_setpoint_mw
@@ -403,18 +409,27 @@ class SOECOperator(Component):
         self.total_h2_produced += h2_produced_kg
         self.last_step_h2_kg = h2_produced_kg
 
-        # Steam consumption (stoichiometric + excess)
-        steam_input_kg = h2_produced_kg * self.steam_input_ratio
-        self.total_steam_consumed += steam_input_kg
-        self.last_step_steam_input_kg = steam_input_kg
-
-        # Unreacted steam output (excess above stoichiometric)
-        reaction_steam_kg = h2_produced_kg * 9.0
-        self.last_water_output_kg = max(0.0, steam_input_kg - reaction_steam_kg)
+        # Steam consumption (Reaction + Excess)
+        # Stoichiometry: 9.0 kg H2O per kg H2 (approx)
+        reaction_steam_kg = h2_produced_kg * 8.936 # Precise stoichiometry
+        self.total_steam_consumed += reaction_steam_kg # Only count reacted water as consumed
+        
+        # Calculate unreacted steam based on ACTUAL input
+        # Fix: Convert Input Rate (kg/h) to Input Mass (kg) for this timestep
+        input_mass_kg = self.current_water_input_kg * self.dt
+        
+        if input_mass_kg > 0:
+             self.last_water_output_kg = max(0.0, input_mass_kg - reaction_steam_kg)
+             self.last_step_steam_input_kg = input_mass_kg
+        else:
+             # Fallback for initialization/standalone mode
+             theoretical_input_kg = h2_produced_kg * self.steam_input_ratio
+             self.last_step_steam_input_kg = theoretical_input_kg
+             self.last_water_output_kg = max(0.0, theoretical_input_kg - reaction_steam_kg)
 
         self.previous_total_power = current_total_power
 
-        return current_total_power, h2_produced_kg, steam_input_kg
+        return current_total_power, h2_produced_kg, self.last_step_steam_input_kg
 
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """

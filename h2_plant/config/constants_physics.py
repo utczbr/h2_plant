@@ -119,8 +119,11 @@ class PEMConstants:
     h2o_vapor_ppm_molar: float = _get_val('pem_system', 'h2o_vapor_ppm_molar', 5000.0) 
     
     # === Entrained Liquid Water ===
-    # Cathode: Liquid water dragged is ~5x the consumed water mass
-    cathode_liquid_water_factor: float = _get_val('pem_system', 'cathode_liquid_water_factor', 5.0)
+    # Cathode: Net electro-osmotic drag after back-diffusion.
+    # Raw drag is ~2.5 H2O/H+ (~45 kg H2O per kg H2), but most returns via back-diffusion.
+    # Net effective drag is typically 5-15% of stoichiometric water consumption.
+    # Using 0.10 (10% of consumption) for realistic mass balance.
+    cathode_liquid_water_factor: float = _get_val('pem_system', 'cathode_liquid_water_factor', 0.10)
     
     # Anode: Carries the bulk cooling flow. 
     # Assumed Delta T for cooling loop sizing if not specified dynamically
