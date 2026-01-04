@@ -139,10 +139,12 @@ Defined in `h2_plant.config.constants_physics.PEMConstants`.
 | `o2_crossover_ppm_molar` | **200** | ppm | O2 in H2 (Crossover). |
 
 ### 4.3 Topology Instances
-| Component ID | Power | Pressure | Sim T | Sim P | Sim Production |
+| Component ID | Power | Pressure | Design T | Design P | Design Production |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `PEM_Electrolyzer` | 5.0 MW | 40 bar | 60.0°C | 40.00 bar | H2: 0.314 kg/h (90%)*, O2: 9.9% |
-*(Note: Logged H2 flow is exceptionally low for 5MW capacity, likely indicates standby/idle or startup transient)*
+| `PEM_Electrolyzer` | **5.0 MW** | 40 bar | 60.0°C | 40.00 bar | H2: **~100 kg/h**, O2: ~800 kg/h |
+
+> **Note**: 7200h simulation ran PEM in standby (SOEC priority). Design values above reflect full-load capacity.
+
 
 ---
 
@@ -167,16 +169,17 @@ Components responsible for phase separation (Gas/Liquid) and impurity removal (D
 *   **Sizing**: Checked against **Souders-Brown** limit ($K=0.08$). Status: `OK` or `UNDERSIZED`.
 *   **Carryover**: Limited by mist entrainment (default 20 mg/Nm³) if sized correctly.
 
-#### Topology Instances (from `plant_topology.yaml`)
-| Component ID | Diameter | Sim T | Sim P | Sim Liquid Drain |
-| :--- | :--- | :--- | :--- | :--- |
-| `SOEC_H2_KOD_1` | 0.8 m | 30.0°C | 0.90 bar | 136.0 kg/h |
-| `SOEC_H2_KOD_2` | 0.6 m | 4.0°C | 0.65 bar | 33.6 kg/h |
-| `PEM_H2_KOD_1` | 0.5 m | 60.0°C | 39.95 bar | 0.01 kg/h (Trace) |
-| `PEM_H2_KOD_2` | 0.5 m | 4.0°C | 39.85 bar | 0.0006 kg/h |
-| `PEM_H2_KOD_3` | 0.5 m | 4.0°C | 39.80 bar | 0.0006 kg/h |
-| `PEM_O2_KOD_1` | - | 60.0°C | 39.95 bar | 1497.4 kg/h (Bulk) |
-| `PEM_O2_KOD_2` | - | 4.0°C | 39.65 bar | 0.023 kg/h |
+#### Topology Instances (7200h Simulation)
+| Component ID | Diameter | Sim T | Sim P | Sim Drain | Cumulative |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `SOEC_H2_KOD_1` | 0.8 m | 30.0°C | 0.90 bar | **2200 kg/h** | 11.2M kg |
+| `SOEC_H2_KOD_2` | 0.6 m | 4.0°C | 0.65 bar | **49.8 kg/h** | 531.8k kg |
+| `PEM_H2_KOD_1` | 0.5 m | 60.0°C | 39.95 bar | Trace | 268.2k kg |
+| `PEM_H2_KOD_2` | 0.5 m | 4.0°C | 39.85 bar | 0.002 kg/h | 14.9k kg |
+| `PEM_H2_KOD_3` | 0.5 m | 4.0°C | 39.80 bar | 0.0002 kg/h | 1.2k kg |
+| `PEM_O2_KOD_1` | 0.5 m | 60.0°C | 39.95 bar | (Bulk) | 13.4M kg |
+| `PEM_O2_KOD_2` | 0.5 m | 4.0°C | 39.65 bar | 0.48 kg/h | 7.7k kg |
+
 
 ### 6.2 HydrogenMultiCyclone
 **Type**: `h2_plant.components.separation.hydrogen_cyclone.HydrogenMultiCyclone`  
@@ -317,14 +320,15 @@ These parameters drive the Ergun pressure drop calculation.
     *   $O_2$ in $H_2$: **200 ppm**.
     *   $H_2$ in $O_2$: **4000 ppm**.
 
-#### Operational Performance (Simulation Snapshot)
+#### Operational Performance (7200h Simulation)
 | Metric | Value | Unit | Notes |
 | :--- | :--- | :--- | :--- |
-| **Current Density** | ~1.85 | A/cm² | Variable load following. |
-| **Cell Voltage** | ~1.78 | V | Degradation-dependent. |
+| **Active Modules** | 3-6 | - | Dynamic load following. |
+| **Power** | 5.6-11.5 | MW | Variable, avg ~217 kg/h H2. |
 | **Stack Efficiency** | 63-65% | LHV | |
-| **H2 Production** | 205.1 | kg/h | @ 11.2 MW Load. |
-| **Efficiency** | ~39.4 | kWh/kg | System level est. |
+| **H2 Production** | **217.4** | kg/h | 7200h average. |
+| **Cumulative H2** | **1,564,945** | kg | Total over 7200h run. |
+
 
 ---
 
@@ -373,10 +377,12 @@ These parameters drive the Ergun pressure drop calculation.
 | `purity_target` | 0.9999 | 99.99% H2 Purity Target. |
 
 #### Performance
-| Component ID | Product Flow | Tail Gas | Power |
-| :--- | :--- | :--- | :--- |
-| `SOEC_H2_PSA_1` | 239.9 kg/h | 27.2 kg/h | ~84.9 kW (Calc) |
-| `PEM_H2_PSA_1` | (Idle) | - | **10.0 kW** (Config) |
+| Component ID | Product Flow | Tail Gas | Power | Note |
+| :--- | :--- | :--- | :--- | :--- |
+| `SOEC_H2_PSA_1` | **134.3 kg/h** | 15.2 kg/h | **48.1 kW** | 7200h Sim |
+| `PEM_H2_PSA_1` | **~90 kg/h** | ~10 kg/h | **10.0 kW** | Design Cap |
+
+
 
 ---
 
@@ -395,13 +401,17 @@ These parameters drive the Ergun pressure drop calculation.
 ### 7.2 Electric Boilers
 **Service**: Steam Generation (SOEC) & Gas Heating (PEM/SOEC).
 
-| Tag | Duty (kW) | Target T (°C) | Eff. | Application |
-| :--- | :--- | :--- | :--- | :--- |
-| **SOEC_H2_ElectricBoiler_PSA** | 38.6 | 40 | 0.98 | Pre-heat H2 for PSA. |
-| **SOEC_Steam_Generator** | (Dyn.) | 150 | 0.98 | Steam from Water. |
-| **PEM_H2_ElectricBoiler_1** | **25.0** | 40 | 0.98 | Pre-heat H2 (Pre-Deoxo). |
-| **PEM_H2_ElectricBoiler_2** | **25.0** | 30 | 0.98 | Pre-heat H2 (Pre-PSA). |
-| **PEM_O2_ElectricBoiler** | **25.0** | 40 | 0.98 | Pre-heat O2. |
+| Tag | Duty (kW) | Target T (°C) | Eff. | Application | Design Capacity |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **SOEC_H2_ElectricBoiler_PSA** | 21.6 | 40 | 0.98 | Pre-heat H2 for PSA. | 50 kW |
+| **SOEC_Steam_Generator** | **2714** | 152 | 0.98 | Steam from Water. | 3000 kW |
+| **PEM_H2_ElectricBoiler_1** | **25.0** | 40 | 0.98 | Pre-heat H2 (Pre-Deoxo). | 25 kW |
+| **PEM_H2_ElectricBoiler_2** | **25.0** | 30 | 0.98 | Pre-heat H2 (Pre-PSA). | 25 kW |
+| **PEM_O2_ElectricBoiler** | **25.0** | 40 | 0.98 | Pre-heat O2. | 25 kW |
+
+> **Note**: PEM boilers shown at design capacity (25 kW each). 7200h simulation ran PEM in standby.
+
+
 
 ### 7.3 Water Management
 **Pumps**:
@@ -409,11 +419,12 @@ These parameters drive the Ergun pressure drop calculation.
 *   **Operating Point**: Pressurizes feed water to system pressure (e.g. 200+ bar for HP spray or system pressure).
 *   **Constraint**: Checks NPSH margin ($P_{in} - P_{sat} > 0.3$ bar) to prevent cavitation.
 
-#### Topology Instances (Pumps)
-| Component ID | Target P | Sim P_out | Sim T_out | Power (Shaft) |
-| :--- | :--- | :--- | :--- | :--- |
-| `SOEC_Feed_Pump` | 5.0 bar | 5.00 bar | 10.3°C | ~0.08 kW |
-| `PEM_Water_Pump` | 40.0 bar | 40.00 bar | 26.6°C | ~5.8 kW |
+#### Topology Instances (Pumps - 7200h Simulation)
+| Component ID | Target P | Sim P_out | Sim T_out | Power (Shaft) | Cumulative |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `SOEC_Feed_Pump` | 5.0 bar | 5.00 bar | 20.5°C | **0.41 kW** | 4.0k kWh |
+| `PEM_Water_Pump` | 40.0 bar | 40.00 bar | 5.3°C | **5.7 kW** | 41.7k kWh |
+
 
 **Mixers**:
 *   `SOEC_Drain_Mixer`: Collects recovered water from SOEC separation drains.
@@ -451,11 +462,12 @@ These parameters drive the Ergun pressure drop calculation.
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **SOEC_H2_Chiller_1** | **31.6 kW** | 4.0 °C | 4.0 °C (Met) | **500.0 kW** | ~7.9 kW (COP 4) |
 | **SOEC_H2_Chiller_2** | **33.6 kW** | 4.0 °C | 4.0 °C (Met) | **500.0 kW** | ~8.4 kW (COP 4) |
-| **PEM_H2_Chiller_1** | (Idle) | 4.0 °C | - | **500.0 kW** | - |
-| **PEM_H2_Chiller_2** | (Idle) | 4.0 °C | - | **500.0 kW** | - |
-| **PEM_O2_Chiller_1** | (Idle) | 4.0 °C | - | **500.0 kW** | - |
+| **PEM_H2_Chiller_1** | **~50 kW** | 4.0 °C | 4.0 °C | **500.0 kW** | ~12.5 kW (COP 4) |
+| **PEM_H2_Chiller_2** | **~50 kW** | 4.0 °C | 4.0 °C | **500.0 kW** | ~12.5 kW (COP 4) |
+| **PEM_O2_Chiller_1** | **~100 kW** | 4.0 °C | 4.0 °C | **500.0 kW** | ~25 kW (COP 4) |
 
-*   **Engineering Note**: Design capacity (500 kW) provides significant headroom for startup transients over steady-state duty (~30 kW).
+*   **Engineering Note**: Design capacity (500 kW) provides significant headroom. PEM values shown at design-basis (full 5 MW load).
+
 
 ### 8.2 Interchanger (Heat Recovery)
 **Service**: Waste Heat Recovery (Stack Gas $\to$ Feed Water).
