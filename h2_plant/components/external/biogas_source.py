@@ -65,7 +65,8 @@ class BiogasSource(Component):
         component_id: str = "biogas_source",
         max_flow_rate_kg_h: float = 1000.0,
         methane_content: float = 0.60,
-        pressure_bar: float = 5.0
+        pressure_bar: float = 5.0,
+        temperature_c: float = 25.0
     ):
         """
         Initialize the biogas source.
@@ -78,12 +79,14 @@ class BiogasSource(Component):
                 range is 0.50-0.70 depending on feedstock. Default: 0.60.
             pressure_bar (float): Supply pressure in bar gauge. Must exceed
                 ATR reactor pressure for flow. Default: 5.0.
+            temperature_c (float): Supply temperature in Celsius. Default: 25.0.
         """
         super().__init__()
         self.component_id = component_id
         self.max_flow_rate_kg_h = max_flow_rate_kg_h
         self.methane_content = methane_content
         self.pressure_bar = pressure_bar
+        self.temperature_k = temperature_c + 273.15
 
         # State variables
         self.biogas_output_kg_h = 0.0
@@ -100,6 +103,15 @@ class BiogasSource(Component):
             registry (ComponentRegistry): Central registry for component access.
         """
         super().initialize(dt, registry)
+        
+        # Pre-allocate output stream to avoid object creation in inner loops
+        self._output_stream = Stream(
+            mass_flow_kg_h=0.0,
+            temperature_k=self.temperature_k,
+            pressure_pa=self.pressure_bar * 1e5,
+            composition={'CH4': self.methane_content, 'CO2': 1.0 - self.methane_content},
+            phase='gas'
+        )
         self._initialized = True
 
     def step(self, t: float) -> None:
@@ -117,6 +129,9 @@ class BiogasSource(Component):
         # Fixed utilization rate (stub for demand-driven logic)
         self.biogas_output_kg_h = self.max_flow_rate_kg_h * 0.5
         self.cumulative_biogas_kg += self.biogas_output_kg_h * self.dt
+        
+        # Update cached stream
+        self._output_stream.mass_flow_kg_h = self.biogas_output_kg_h
 
     def get_state(self) -> Dict[str, Any]:
         """
@@ -153,13 +168,7 @@ class BiogasSource(Component):
             ValueError: If port_name is not a valid output port.
         """
         if port_name in ['biogas_out', 'out']:
-            return Stream(
-                mass_flow_kg_h=self.biogas_output_kg_h,
-                temperature_k=300.0,
-                pressure_pa=self.pressure_bar * 1e5,
-                composition={'CH4': self.methane_content, 'CO2': 1.0 - self.methane_content},
-                phase='gas'
-            )
+            return self._output_stream
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 

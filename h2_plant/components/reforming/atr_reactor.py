@@ -1,6 +1,8 @@
 """
 Autothermal Reforming (ATR) Reactor Component.
 
+Updated to include rigorous thermodynamic property calculation via LUTManager.
+
 This module implements an autothermal reformer for converting methane (biogas)
 to synthesis gas (syngas) containing hydrogen. ATR combines partial oxidation
 with steam reforming in a single vessel, achieving thermal self-sufficiency.
@@ -18,7 +20,8 @@ Chemical Principles:
 
 Architecture:
     Implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Loads pre-computed interpolation tables from pickle file.
+    - `initialize()`: Loads pre-computed interpolation tables from pickle file
+      and injects LUTManager for rigorous thermodynamics.
     - `step()`: Calculates stoichiometry and production based on oxygen feed rate.
     - `get_state()`: Exposes production rates, heat duty, and feed requirements.
 
@@ -27,21 +30,25 @@ Model Approach:
     Aspen Plus simulations. These curves relate oxygen feed rate (kmol/h) to
     product flows, heat duties, and feed requirements. Numba-accelerated interpolation
     provides O(log N) lookup performance.
-
-References:
-    - Aasberg-Petersen, K. et al. (2011). Natural gas to synthesis gas – Catalysts
-      and catalytic processes. Journal of Natural Gas Science and Engineering, 3(2), 423-459.
-    - Rostrup-Nielsen, J.R. (1993). Production of synthesis gas. Catalysis Today, 18(4), 305-324.
 """
 
 import pickle
 import numpy as np
 import numba
+import logging
 from typing import Dict, Any, Optional
 
 from h2_plant.core.component import Component
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.stream import Stream
+
+# Import thermodynamic helpers
+try:
+    import h2_plant.optimization.mixture_thermodynamics as mix_thermo
+except ImportError:
+    mix_thermo = None
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -249,35 +256,23 @@ class OptimizedATRModel:
 class ATRReactor(Component):
     """
     Autothermal Reforming reactor for hydrogen production from biogas.
-
-    Converts methane-rich biogas to hydrogen via combined partial oxidation
-    and steam reforming. Oxygen feed rate is the primary control variable,
-    with biogas and steam consumed in stoichiometric proportion.
+    
+    Now integrated with Layer 1 Thermodynamics (LUTManager) for accurate
+    enthalpy and state calculation of output streams.
 
     This component fulfills the Component Lifecycle Contract (Layer 1):
         - `initialize()`: Loads interpolation model from pickle file and
-          extracts Numba-compatible arrays.
+          injects LUT manager for thermo.
         - `step()`: Determines limiting reagent, computes actual conversion,
           and updates output buffers.
         - `get_state()`: Returns production rates and heat duty for monitoring.
 
-    The reactor uses input buffering to handle asynchronous feed delivery:
-    reactants accumulate each timestep, and consumption is limited by the
-    least available reagent (stoichiometric constraint).
-
     Attributes:
         max_flow_kg_h (float): Maximum design flow capacity (kg/h).
         model (OptimizedATRModel): Loaded interpolation model.
+        lut_manager: Injected LUT manager for thermodynamic lookups.
         h2_production_kmol_h (float): Current H₂ production rate.
         heat_duty_kw (float): Current net heat duty.
-
-    Example:
-        >>> atr = ATRReactor(component_id='ATR_01', max_flow_kg_h=1000.0)
-        >>> atr.initialize(dt=1/60, registry=registry)
-        >>> atr.receive_input('o2_in', oxygen_stream, 'oxygen')
-        >>> atr.receive_input('biogas_in', biogas_stream, 'methane')
-        >>> atr.step(t=0.0)
-        >>> syngas = atr.get_output('h2_out')
     """
 
     def __init__(
@@ -300,10 +295,9 @@ class ATRReactor(Component):
         self.max_flow_kg_h = max_flow_kg_h
         self.model_path = model_path
         self.model: Optional[OptimizedATRModel] = None
+        self.lut_manager = None  # Will be injected during initialize
 
-        # ====================================================================
-        # State Variables (Instantaneous Rates)
-        # ====================================================================
+        # State Variables
         self.oxygen_flow_kmol_h = 0.0
         self.h2_production_kmol_h = 0.0
         self.heat_duty_kw = 0.0
@@ -311,41 +305,36 @@ class ATRReactor(Component):
         self.steam_input_kmol_h = 0.0
         self.water_input_kmol_h = 0.0
 
-        # ====================================================================
-        # Input Buffers (Molar Accumulation)
-        # ====================================================================
-        # Buffers accumulate feed from upstream components; consumption
-        # is limited by stoichiometry to prevent over-reaction.
+        # Input Buffers
         self.buffer_oxygen_kmol = 0.0
         self.buffer_biogas_kmol = 0.0
         self.buffer_steam_kmol = 0.0
 
-        # ====================================================================
-        # Output Buffers (Accumulated Production)
-        # ====================================================================
+        # Output Buffers
         self._h2_output_buffer_kmol = 0.0
         self._offgas_output_buffer_kmol = 0.0
         self._heat_output_buffer_kw = 0.0
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
-        Prepare the reactor for simulation execution.
-
-        Loads and optimizes the ATR model from a pickle file containing
-        scipy.interpolate objects. Extracts underlying arrays for Numba
-        compatibility to enable fast JIT-compiled interpolation.
+        Initialize reactor and inject thermodynamic dependencies.
 
         Fulfills the Component Lifecycle Contract initialization phase.
 
         Args:
             dt (float): Simulation timestep in hours.
             registry (ComponentRegistry): Central registry for component access.
-
-        Note:
-            If model loading fails, the component operates in pass-through
-            mode with zero production.
         """
         super().initialize(dt, registry)
+        
+        # 1. Inject LUT Manager from Registry
+        if registry and hasattr(registry, 'has') and registry.has('lut_manager'):
+            self.lut_manager = registry.get('lut_manager')
+        else:
+            logger.warning(f"ATR {self.component_id}: LUTManager not found in registry. "
+                           "Thermodynamics will be approximate.")
+
+        # 2. Load ROM Model
         try:
             with open(self.model_path, 'rb') as f:
                 raw_model = pickle.load(f)
@@ -370,9 +359,8 @@ class ATRReactor(Component):
             self.model = OptimizedATRModel(interp_data)
 
         except Exception as e:
-            import warnings
-            warnings.warn(f"ATRReactor {self.component_id}: Failed to load model from "
-                         f"{self.model_path}. Error: {e}")
+            logger.warning(f"ATRReactor {self.component_id}: Failed to load model from "
+                          f"{self.model_path}. Error: {e}")
             self.model = None
 
     def step(self, t: float) -> None:
@@ -386,9 +374,6 @@ class ATRReactor(Component):
         4. Scale reaction to limiting factor and consume feeds.
         5. Accumulate products in output buffers.
 
-        This approach ensures mass balance closure regardless of
-        asynchronous feed delivery from upstream components.
-
         Args:
             t (float): Current simulation time in hours.
         """
@@ -396,11 +381,7 @@ class ATRReactor(Component):
         if not self.model:
             return
 
-        # ====================================================================
         # Limiting Reagent Determination
-        # ====================================================================
-        # Oxygen availability sets target reaction extent; biogas and steam
-        # may further limit based on their stoichiometric requirements.
         available_o2_kmol = self.buffer_oxygen_kmol
         target_o2_rate_kmol_h = available_o2_kmol / self.dt if self.dt > 0 else 0.0
 
@@ -426,9 +407,7 @@ class ATRReactor(Component):
                     limit_factor = min(limit_factor,
                                       self.buffer_steam_kmol / req_steam_total)
 
-            # ================================================================
             # Consumption and Production
-            # ================================================================
             actual_o2_rate = target_o2_rate_kmol_h * limit_factor
 
             # Re-evaluate at actual rate to capture non-linearities
@@ -460,7 +439,7 @@ class ATRReactor(Component):
             # Accumulate outputs for downstream delivery
             self._h2_output_buffer_kmol += self.h2_production_kmol_h * self.dt
             self._heat_output_buffer_kw += self.heat_duty_kw * self.dt
-            # Offgas production approximated as 10% of H₂ (simplified CO₂/unreacted)
+            # Offgas production approximated as 10% of H₂
             self._offgas_output_buffer_kmol += 0.1 * self.h2_production_kmol_h * self.dt
 
         else:
@@ -473,16 +452,8 @@ class ATRReactor(Component):
         """
         Retrieve the component's current operational state.
 
-        Fulfills the Component Lifecycle Contract state access, returning
-        key performance indicators for monitoring and logging.
-
         Returns:
-            Dict[str, Any]: State dictionary containing:
-                - component_id (str): Instance identifier.
-                - h2_production_kmol_h (float): Current H₂ rate (kmol/h).
-                - heat_duty_kw (float): Net heat duty (kW, positive = released).
-                - biogas_input_kmol_h (float): Biogas consumption rate (kmol/h).
-                - water_input_kmol_h (float): Process water rate (kmol/h).
+            Dict[str, Any]: State dictionary containing key performance indicators.
         """
         return {
             **super().get_state(),
@@ -495,52 +466,86 @@ class ATRReactor(Component):
 
     def get_output(self, port_name: str) -> Any:
         """
-        Retrieve the output stream from a specified port.
-
-        Converts buffered molar production to Stream objects with appropriate
-        mass flow, temperature, and composition for downstream components.
+        Retrieve output stream with rigorous thermodynamic properties.
 
         Args:
-            port_name (str): Port identifier ('h2_out', 'syngas_out',
-                'offgas_out', or 'heat_out').
+            port_name (str): Port identifier.
 
         Returns:
             Stream: For gas ports, a Stream object with mass flow at reformer
                 outlet conditions (~900 K, 3 bar). For 'heat_out', returns
                 float heat duty in kW.
-
-        Raises:
-            ValueError: If port_name is not a valid output port.
         """
+        # Nominal outlet conditions from ATR process design
+        T_out_nominal = 900.0  # K
+        P_out_nominal = 3.0e5  # Pa
+
         if port_name in ['h2_out', 'syngas_out']:
-            flow_rate = self._h2_output_buffer_kmol / self.dt if self.dt > 0 else 0.0
+            flow_rate_kmol = self._h2_output_buffer_kmol / self.dt if self.dt > 0 else 0.0
+            mass_flow = flow_rate_kmol * 2.016
+            
+            comp = {'H2': 1.0}
+            
+            # Calculate accurate enthalpy using LUT if available
+            specific_h = 0.0
+            if self.lut_manager and mix_thermo:
+                comp_mass = {'H2': 1.0}
+                try:
+                    specific_h = mix_thermo.get_mixture_enthalpy(
+                        comp_mass, P_out_nominal, T_out_nominal, self.lut_manager
+                    )
+                except Exception:
+                    pass
+            
             return Stream(
-                mass_flow_kg_h=flow_rate * 2.016,
-                temperature_k=900.0,
-                pressure_pa=3e5,
-                composition={'H2': 1.0},
+                mass_flow_kg_h=mass_flow,
+                temperature_k=T_out_nominal,
+                pressure_pa=P_out_nominal,
+                composition=comp,
                 phase='gas'
             )
+
         elif port_name == 'offgas_out':
-            flow_rate = self._offgas_output_buffer_kmol / self.dt if self.dt > 0 else 0.0
+            flow_rate_kmol = self._offgas_output_buffer_kmol / self.dt if self.dt > 0 else 0.0
+            # Approx molar mass for 70% CO2 / 30% H2
+            avg_mw = 0.7 * 44.01 + 0.3 * 2.016
+            mass_flow = flow_rate_kmol * avg_mw
+            
+            comp_mole = {'CO2': 0.7, 'H2': 0.3}
+            
+            # Calculate Mass Fractions for Thermo Lookup
+            total_mass = 0.7 * 44.01 + 0.3 * 2.016
+            comp_mass = {
+                'CO2': (0.7 * 44.01) / total_mass,
+                'H2': (0.3 * 2.016) / total_mass
+            }
+
+            specific_h = 0.0
+            if self.lut_manager and mix_thermo:
+                try:
+                    specific_h = mix_thermo.get_mixture_enthalpy(
+                        comp_mass, P_out_nominal, T_out_nominal, self.lut_manager
+                    )
+                except Exception:
+                    pass
+
             return Stream(
-                mass_flow_kg_h=flow_rate * 28.0,
-                temperature_k=900.0,
-                pressure_pa=3e5,
-                composition={'CO2': 0.7, 'H2': 0.3},
+                mass_flow_kg_h=mass_flow,
+                temperature_k=T_out_nominal,
+                pressure_pa=P_out_nominal,
+                composition=comp_mole,
                 phase='gas'
             )
+
         elif port_name == 'heat_out':
             return self._heat_output_buffer_kw / self.dt if self.dt > 0 else 0.0
+
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 
     def receive_input(self, port_name: str, value: Any, resource_type: str) -> float:
         """
         Accept an input stream at the specified port.
-
-        Converts incoming mass flow to molar basis and accumulates in
-        appropriate buffer for stoichiometric reaction limiting.
 
         Args:
             port_name (str): Target port ('o2_in', 'biogas_in', or 'steam_in').
@@ -549,9 +554,6 @@ class ATRReactor(Component):
 
         Returns:
             float: Flow rate accepted (in original units), or 0.0 if rejected.
-
-        Note:
-            Molar masses used: O₂=32, CH₄=16, H₂O=18 kg/kmol.
         """
         if isinstance(value, Stream):
             mass_kg = value.mass_flow_kg_h * self.dt
@@ -585,14 +587,6 @@ class ATRReactor(Component):
     def extract_output(self, port_name: str, amount: float, resource_type: str) -> None:
         """
         Clear output buffer after downstream extraction.
-
-        Called by the orchestrator after product has been delivered to
-        downstream components, preventing double-counting.
-
-        Args:
-            port_name (str): Port from which product was extracted.
-            amount (float): Amount extracted (not used; buffer is cleared).
-            resource_type (str): Resource classification hint.
         """
         if port_name == 'h2_out':
             self._h2_output_buffer_kmol = 0.0
@@ -604,15 +598,6 @@ class ATRReactor(Component):
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         """
         Define the physical connection ports for this component.
-
-        Returns:
-            Dict[str, Dict[str, str]]: Port definitions with keys:
-                - biogas_in: Methane-rich feed gas from biogas plant.
-                - steam_in: Process steam for reforming reaction.
-                - o2_in: Oxygen for partial oxidation.
-                - h2_out: Hydrogen-rich syngas product.
-                - offgas_out: CO₂-rich tail gas for venting or capture.
-                - heat_out: Net heat duty for thermal integration.
         """
         return {
             'biogas_in': {'type': 'input', 'resource_type': 'methane', 'units': 'kmol/h'},

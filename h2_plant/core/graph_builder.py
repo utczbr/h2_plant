@@ -13,10 +13,13 @@ from h2_plant.components.compression.compressor_single import CompressorSingle
 from h2_plant.components.balance_of_plant.pump import Pump
 from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer as Mixer
 from h2_plant.components.control.valve import ThrottlingValve as Valve
+from h2_plant.components.external.biogas_source import BiogasSource
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 from h2_plant.components.water.makeup_mixer import MakeupMixer
+from h2_plant.components.external.oxygen_makeup import OxygenMakeupNode
 from h2_plant.components.water.water_balance_tracker import WaterBalanceTracker
 from h2_plant.components.thermal.interchanger import Interchanger
+from h2_plant.components.thermal.attemperator import Attemperator
 from h2_plant.components.water.water_pump import WaterPumpThermodynamic
 from h2_plant.optimization.lut_manager import LUTManager
 from h2_plant.core.component_ids import ComponentID
@@ -364,6 +367,32 @@ class PlantGraphBuilder:
                  eta_is=eta_is,
                  eta_m=eta_m
              )
+
+            return BiogasSource(
+                component_id=node.id,
+                pressure_bar=float(node.params.get('pressure_bar', 5.0)),
+                temperature_c=float(node.params.get('temperature_c', 25.0)),
+                max_flow_rate_kg_h=float(node.params.get('max_flow_rate_kg_h', 1000.0)),
+                methane_content=float(node.params.get('methane_content', 0.60))
+            )
+
+        elif node.type == "OxygenMakeupNode":
+            return OxygenMakeupNode(
+                component_id=node.id,
+                target_flow_kg_h=float(node.params.get('target_flow_kg_h', 1000.0)),
+                supply_pressure_bar=float(node.params.get('supply_pressure_bar', 15.0)),
+                supply_temperature_c=float(node.params.get('supply_temperature_c', 25.0)),
+                supply_purity=float(node.params.get('supply_purity', 0.995))
+            )
+
+        elif node.type == "Attemperator":
+            return Attemperator(
+                component_id=node.id,
+                target_temp_k=float(node.params.get('target_temp_k', 623.15)),
+                max_water_flow_kg_h=float(node.params.get('max_water_flow_kg_h', 1000.0)),
+                pressure_drop_bar=float(node.params.get('pressure_drop_bar', 0.5)),
+                min_superheat_delta_k=float(node.params.get('min_superheat_delta_k', 5.0))
+            )
 
         elif node.type == "WaterBalanceTracker":
             return WaterBalanceTracker()

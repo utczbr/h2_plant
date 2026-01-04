@@ -73,6 +73,9 @@ def _get_topology_section(comp_id: str, comp_type: str) -> int:
     cid = comp_id.upper()
     ctype = comp_type.upper()
     
+    # 0. ATR / WGS / Reformer (Highest Priority for this unit)
+    if any(k in cid for k in ["ATR", "WGS", "SHIFT", "REFORM", "BIOGAS"]): return 8
+    
     # 1. Storage & Distribution (High Priority)
     if "HP_" in cid: return 7
     if any(k in cid for k in ["STORAGE", "TANK", "GRID", "CONSUMER"]): return 7
@@ -134,7 +137,8 @@ SECTION_HEADERS = {
     4: "=== Section 4: SOEC O2 Train (Anode) ===",
     5: "=== Section 5: PEM H2 Train (Cathode) ===",
     6: "=== Section 6: PEM O2 Train (Anode) ===",
-    7: "=== Section 7: Storage & Distribution ==="
+    7: "=== Section 7: Storage & Distribution ===",
+    8: "=== Section 8: ATR Reforming & WGS Unit ==="
 }
 
 def print_stream_summary_table(
@@ -149,7 +153,7 @@ def print_stream_summary_table(
     print("-" * 145)
 
     # Group components by section
-    sections = {i: [] for i in range(1, 8)}
+    sections = {i: [] for i in range(1, 9)}
     
     # Sort components into sections based on ID/Type rules
     # We use the passed topo_order to maintain flow order *within* sections
@@ -187,7 +191,7 @@ def print_stream_summary_table(
         sections[sec_idx].append((cid, stream))
 
     # Print by section
-    for i in range(1, 8):
+    for i in range(1, 9):
         comps = sections[i]
         if not comps: continue
         

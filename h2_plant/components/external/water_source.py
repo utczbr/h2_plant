@@ -86,6 +86,15 @@ class ExternalWaterSource(Component):
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Prepare the component for simulation."""
         super().initialize(dt, registry)
+        
+        # Pre-allocate output stream
+        self._output_stream = Stream(
+            mass_flow_kg_h=self.flow_rate_kg_h,
+            temperature_k=273.15 + self.temperature_c,
+            pressure_pa=self.pressure_bar * 1e5,
+            composition={'H2O': 1.0},
+            phase='liquid'
+        )
 
     def step(self, t: float) -> None:
         """Execute one simulation timestep."""
@@ -101,17 +110,14 @@ class ExternalWaterSource(Component):
         self.cumulative_water_kg += self.water_output_kg
         # Approx 1000 kg = 1 m³
         self.cumulative_cost += (self.water_output_kg / 1000.0) * self.cost_per_m3
+        
+        # Update cached stream
+        self._output_stream.mass_flow_kg_h = current_flow_kg_h
 
     def get_output(self, port_name: str) -> Any:
         """Retrieve the output stream from a specified port."""
         if port_name == 'water_out':
-            return Stream(
-                mass_flow_kg_h=self.flow_rate_kg_h,
-                temperature_k=273.15 + self.temperature_c,
-                pressure_pa=self.pressure_bar * 1e5,
-                composition={'H2O': 1.0},
-                phase='liquid'
-            )
+            return self._output_stream
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 
