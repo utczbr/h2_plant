@@ -312,7 +312,7 @@ class DryCoolerIndirectConstants:
     # --- Stage 2: DC (Glycol -> Air) ---
     # Heat Transfer Areas (m²)
     AREA_H2_DC_M2: Final[float] = 453.62
-    AREA_O2_DC_M2: Final[float] = 42.95  
+    AREA_O2_DC_M2: Final[float] = 92.95  
     
     # Design Values
     U_VALUE_DC_W_M2_K: Final[float] = 35.0

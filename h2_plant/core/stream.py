@@ -26,7 +26,7 @@ except ImportError:
 SPECIES_INDICES = {'H2': 0, 'O2': 1, 'N2': 2, 'H2O': 3, 'CH4': 4, 'CO2': 5}
 GAS_MW_ARR = np.array([0.002016, 0.032, 0.028014, 0.018015, 0.01604, 0.04401], dtype=np.float64)
 
-@dataclass
+@dataclass(slots=True)
 class Stream:
     """
     Represents a material flow with thermodynamic properties.
@@ -38,24 +38,21 @@ class Stream:
     phase: str = 'gas'  # 'gas', 'liquid', 'mixed'
     extra: Dict[str, float] = field(default_factory=dict)
     
+    # PERFORMANCE: Cached attributes (declared for slots compatibility)
+    _cached_enthalpy: Optional[float] = field(default=None, init=False, repr=False)
+    _arrays_cached: bool = field(default=False, init=False, repr=False)
+    _mass_fracs_arr: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _mole_fracs_arr: Optional[np.ndarray] = field(default=None, init=False, repr=False)
+    _cached_M_mix: float = field(default=0.0, init=False, repr=False)
+    _cached_sum_ylny: float = field(default=0.0, init=False, repr=False)
+    
     def __post_init__(self):
-        """Validate composition and cache expensive properties."""
+        """Validate composition and normalize if needed."""
         total_fraction = sum(self.composition.values())
         if abs(total_fraction - 1.0) > 1e-3 and total_fraction > 0:
             # Normalize if not summing to 1 (unless empty)
             for k in self.composition:
                 self.composition[k] /= total_fraction
-        
-        # PERFORMANCE: Lazy enthalpy calculation
-        self._cached_enthalpy: Optional[float] = None
-        
-        # PERFORMANCE: Lazy composition array caching
-        # Only streams that need JIT access will compute arrays
-        self._arrays_cached: bool = False
-        self._mass_fracs_arr: Optional[np.ndarray] = None
-        self._mole_fracs_arr: Optional[np.ndarray] = None
-        self._cached_M_mix: float = 0.0
-        self._cached_sum_ylny: float = 0.0
         
     def _cache_composition_arrays(self) -> None:
         """Compute canonical array representations using JIT optimization."""

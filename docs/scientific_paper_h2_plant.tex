@@ -1216,94 +1216,81 @@ System efficiency is quantified via the **Water Recovery Ratio (WRR)**:
 This telemetry prevents "phantom mass generation" in the simulation and verifies that the closed-loop mass balance holds true over transient operation.
 
 % ============================================================================
-% SECTION 4: COMPUTATIONAL OPTIMIZATION (IMPLEMENTATION)
+% SECTION 4: ENGINEERING IMPLEMENTATION
 % ============================================================================
-\section{Computational Optimization}
-\label{sec:optimization}
+\section{Engineering Implementation}
+\label{sec:implementation}
 
-To achieve a 25-year lifecycle simulation at \SI{1}{\minute} resolution, the computational engine must execute over 13 million timesteps. If each timestep requires dozens of thermodynamic property calls, the cumulative latency of standard libraries renders the simulation intractable. To resolve this, the architecture employs a two-tier optimization strategy: \textbf{Thermodynamic Caching} (Look-Up Tables) and \textbf{Just-In-Time Compilation} (Numba JIT).
+The mathematical models defined in Section~\ref{sec:math} are implemented through a high-performance computing architecture designed to bridge the gap between rigorous thermodynamics and lifecycle-scale timeframes. This section details the specific algorithms and data structures that enable the 50--200$\times$ speedup.
 
-\subsection{Look-Up Table (LUT) Architecture}
+\subsection{Hybrid Thermodynamic Solver Strategy}
 
-Thermodynamic state calculation traditionally requires iterative solutions to complex Equations of State (EOS). The \texttt{LUTManager} circumvents this by implementing a ``Generate Once, Cache Forever'' strategy.
+To balance accuracy with speed, the simulation employs a \textbf{Cascading Fidelity Strategy} for property resolution. For every component step, the solver dynamically selects the most efficient computational path based on fluid composition and state (as implemented in \texttt{CompressorSingle}):
 
-\subsubsection{The Topographical Map Analogy}
+\begin{enumerate}
+    \item \textbf{LUT Path ($\sim$\SI{1}{\micro\second})}: For pure fluids ($x_i > 0.98$) within the tabulated $(P, T)$ domain, properties are retrieved via bilinear interpolation from pre-computed grids.
+    \item \textbf{Mixture-LUT Path ($\sim$\SI{6}{\micro\second})}: For standard mixtures (e.g., H$_2$/H$_2$O), the solver applies the ``Ideal Mixing of Real Gases'' approximation using JIT-compiled kernels:
+    \begin{equation}
+        H_{mix}(P, T) \approx \sum_{i} y_i H_i(P, T)
+    \end{equation}
+    where $H_i(P, T)$ is retrieved from the pure-fluid LUTs. This captures real-gas compressibility effects of the individual components without the cost of a full mixture EOS minimization.
+    \item \textbf{HEOS Path ($\sim$\SI{100}{\micro\second})}: For complex or critical points (e.g., critical separators), the system falls back to the full Helmholtz Energy Equation of State (via CoolProp).
+    \item \textbf{Ideal Gas Fallback}: When tabulated data is unavailable, the solver reverts to ideal gas laws with composition-weighted constants.
+\end{enumerate}
 
-To explain the necessity of this approach, consider a hiker navigating difficult terrain (the thermodynamic state space):
+This hierarchy ensures that expensive EOS calls are restricted to $<0.1\%$ of the simulation steps.
 
+\subsection{Thermodynamic Caching Architecture (LUTs)}
+
+The simulation avoids redundant thermodynamic calculations by pre-computing property manifolds into \textbf{Look-Up Tables (LUTs)}, applying a ``Generate Once, Cache Forever'' strategy.
+
+\subsubsection{Topographical Discretization}
+The $(P, T)$ domain is discretized into a logarithmically spaced grid to capture fast gradients near saturation lines while covering the wide operating envelope:
 \begin{itemize}
-    \item \textbf{CoolProp Approach (Calculation)}: Without a map, every step requires solving complex equations to determine altitude. Accurate, but slow ($\sim$\SI{1000}{\micro\second} per call).
-    \item \textbf{LUT Approach (Interpolation)}: The simulation pre-prints a high-resolution topographic map. Property retrieval becomes a simple lookup on the map---orders of magnitude faster ($\sim$\SI{1}{\micro\second}).
+    \item \textbf{Pressure}: \SI{0.05}{\bar} to \SI{1000}{\bar} (log-spaced to capture low-pressure density sensitivity)
+    \item \textbf{Temperature}: \SI{273}{\kelvin} to \SI{1200}{\kelvin} (linear)
+    \item \textbf{Resolution}: $2000 \times 2000$ points per fluid (H$_2$, O$_2$, H$_2$O, N$_2$, CH$_4$, CO$_2$)
 \end{itemize}
 
-\subsubsection{Grid Discretization Strategy}
+\subsubsection{JIT-Compiled Interpolation}
+Runtime retrieval is performed by Numerical Kernels (see Section~\ref{sec:jit}) implementing optimized bilinear interpolation. For a query point $(P, T)$ falling within grid cell $(i, j)$:
 
-The ``map'' is constructed as a 2D grid of Pressure ($P$) and Temperature ($T$). However, a uniform checkerboard grid is inefficient because gases behave differently across pressure regimes.
+\begin{multline}
+    f(P, T) \approx (1-t)(1-u)f_{i,j} + t(1-u)f_{i+1,j} \\
+    + (1-t)u f_{i,j+1} + tu f_{i+1,j+1}
+\end{multline}
 
-\begin{table}[H]
-\centering
-\caption{LUT Grid Specification}
-\label{tab:lut-spec}
-\begin{tabular}{@{}llll@{}}
-\toprule
-\textbf{Axis} & \textbf{Range} & \textbf{Points} & \textbf{Spacing Type} \\
-\midrule
-Pressure & \SI{0.05}{\bar}--\SI{1000}{\bar} & 2000 & Logarithmic (\texttt{geomspace}) \\
-Temperature & \SI{273}{\kelvin}--\SI{1200}{\kelvin} & 2000 & Linear (\texttt{linspace}) \\
-\bottomrule
-\end{tabular}
-\end{table}
+where $t$ and $u$ are normalized coordinates within the cell. This kernel executes in CPU L1 cache, entirely bypassing the Python interpreter overhead.
 
-\paragraph{Why Logarithmic Pressure Spacing?}
-At low pressures (e.g., \SI{1}{\bar}), a \SI{0.1}{\bar} change significantly impacts gas density; at high pressures (e.g., \SI{700}{\bar}), the same change is negligible. The \texttt{np.geomspace} function concentrates thousands of points in the low-pressure region where the ``terrain'' is steep, while spreading points in the high-pressure region where physics are stable. This maintains \textit{uniform relative error} across four orders of magnitude.
+\subsection{Numerical Kernels (JIT)}
+\label{sec:jit}
 
-\subsubsection{Bilinear Interpolation}
+Python's dynamic nature introduces significant latency in iterative solvers. To mitigate this, inner loops are Just-In-Time (JIT) compiled to native machine code using Numba.
 
-When the simulation requests a value between grid points, the \texttt{LUTManager} performs bilinear interpolation---a weighted average of the four surrounding neighbors---allowing the discrete grid to function as a continuous surface with $O(h^2)$ error scaling.
+\subsubsection{Polynomial Integration}
+Enthalpy changes are computed by integrating the Shomate polynomial (Eq.~\ref{eq:shomate-caloric}) analytically. The JIT kernel evaluates the primitive function directly:
 
-\paragraph{Properties Cached}: Density ($\rho$), Enthalpy ($H$), Entropy ($S$), Heat Capacity ($C_p$), Compressibility ($Z$).
+\begin{equation}
+    \Delta H = \left[ A T + \frac{B T^2}{2} + \frac{C T^3}{3} + \frac{D T^4}{4} - \frac{E}{T} \right]_{T_{ref}}^{T}
+\end{equation}
 
-\paragraph{Fluids}: H$_2$, O$_2$, H$_2$O, CO$_2$, CH$_4$, N$_2$.
+This vectorized operation computes enthalpy for multi-component streams (6 species) in a single CPU instruction pass (SIMD).
 
-\subsubsection{Cache Hit/Miss Mechanism}
+\subsubsection{Analytical Flash Solver}
+For identifying liquid water dropout (the dominant phase change in the system), the general Rachford-Rice solver is replaced by a closed-form analytical solution for single-condensable binary systems. Given the water mole fraction $z_{\text{H}_2\text{O}}$ and equilibrium constant $K = P_{sat}(T)/P$:
 
-\begin{itemize}
-    \item \textbf{Cache Hit}: Query within bounds uses bilinear interpolation (\SI{0.5}{\micro\second}--\SI{2}{\micro\second})
-    \item \textbf{Cache Miss}: Out-of-bounds falls back to CoolProp (\SI{100}{\micro\second}--\SI{1000}{\micro\second}), with logged warning
-\end{itemize}
+\begin{equation}
+    \beta = \frac{1 - z_{\text{H}_2\text{O}}}{1 - K}
+\end{equation}
 
-\subsection{JIT-Compiled Numerical Kernels}
+This non-iterative formulation is numerically stable even near the dew point ($K \to 1$), where iterative Newton-Raphson methods often diverge.
 
-While Python offers high-level flexibility for architecture, its interpreted nature introduces significant overhead for mathematical loops (the ``hot paths''). The \texttt{numba\_ops} module mitigates this via Just-In-Time (JIT) compilation.
+\subsection{Control Plane Optimization}
 
-\subsubsection{Mitigating Interpreter Overhead}
+To support high-frequency dispatch logic (Section~\ref{sec:control}), the architecture optimizes data access patterns.
 
-In standard Python, every arithmetic operation involves type-checking and object boxing/unboxing. The \texttt{@njit} decorator instructs the LLVM compiler to translate Python functions into optimized machine code at runtime, bypassing the Global Interpreter Lock (GIL) and allowing raw floating-point operations at speeds comparable to C or Fortran.
-
-\subsubsection{Algorithmic Optimization: The Single-Condensable Flash}
-
-Standard Vapor-Liquid Equilibrium (VLE) calculations require iterative solvers (Newton-Raphson) to find the vapor fraction $\beta$. However, for the specific case where \textit{only water condenses}---a valid assumption for H$_2$/H$_2$O mixtures---the problem simplifies to an analytical solution:
-
-\begin{lstlisting}[caption={JIT-Compiled Analytical Flash Solver}]
-@njit
-def solve_rachford_rice_single_condensable(
-    z_condensable: float,
-    K_value: float
-) -> float:
-    """O(1) complexity: bypasses Newton-Raphson iteration."""
-    # Thermodynamic bounds check
-    if K_value >= 1.0:       # Superheated (all vapor)
-        return 1.0
-    if z_condensable <= K_value:  # Undersaturated
-        return 1.0
-    # Analytical solution for vapor fraction
-    beta = (1.0 - z_condensable) / (1.0 - K_value)
-    return np.clip(beta, 0.0, 1.0)
-\end{lstlisting}
-
-\subsubsection{Performance Implications}
-
-By combining \textbf{Algorithmic Reduction} (replacing iterative solver with $O(1)$ algebraic solution) with \textbf{Machine Code Generation} (Numba JIT), this kernel reduces computational cost from $\sim$\SI{500}{\micro\second} (iterative Python) to $<$\SI{50}{\nano\second} (JIT analytical)---a \textbf{10,000$\times$ speedup}. This is critical for flash calculations executing at every timestep across multiple separation units.
+\subsubsection{Zero-Copy Stream Recording}
+The \texttt{EngineDispatchStrategy} employs pre-bound \textbf{Stream Recorders} (NumPy array views) that map directly to the underlying memory of component history buffers. This allows the dispatch loop to read ``actual'' outcomes (e.g., temperature, pressure, mass flow) in $O(1)$ time without dictionary lookups or string hashing, critical for recording 50+ variables every minute for 25 years.
 
 % ============================================================================
 % SECTION 5: INTEGRATED CONTROL ARCHITECTURE

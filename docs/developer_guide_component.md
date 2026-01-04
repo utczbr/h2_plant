@@ -139,35 +139,93 @@ def get_output(self, port_name: str) -> Optional[Stream]:
 
 ## 3. Physical Modeling Best Practices
 
-### 3.1 Thermodynamic Properties (LUTs)
-**Critical**: Avoid calling `CoolProp.PropsSI` inside the `step()` loop. It is too slow (100ms/call). Use `LUTManager` (0.01ms/call).
+### 3.1 Thermodynamic Properties: The Hybrid Solver Strategy
+
+Component thermodynamics use a **Cascading Fidelity Strategy** that dynamically selects the most efficient computational path. Understanding this hierarchy is essential for writing high-performance components.
+
+**Priority Order:**
+
+1.  **LUT Path (~1 µs)**: For pure fluids (>98% single species) within the tabulated `(P, T)` domain, use LUT lookups.
+2.  **Mixture-LUT Path (~6 µs)**: For standard mixtures (e.g., H₂/H₂O), use "Ideal Mixing of Real Gases" via JIT kernels.
+3.  **HEOS Path (~100 µs)**: For complex or critical states, CoolProp's HEOS backend is used (avoid in hot loops).
+4.  **Ideal Gas Fallback**: When no data is available, use mass-weighted ideal gas constants.
+
+**Example (from `CompressorSingle._determine_fluid_strategy`):**
+```python
+# Detect dominant species and select strategy
+if max_frac >= 0.98 and dominant in self._luts:
+    return FluidStrategy.LUT, dominant, {}
+elif all_have_luts and MIX_THERMO_AVAILABLE:
+    return FluidStrategy.LUT_MIXTURE, 'LUT_MIX', {}
+elif COOLPROP_AVAILABLE:
+    return FluidStrategy.COOLPROP_MIXTURE, mixture_str, {}
+else:
+    return FluidStrategy.IDEAL_GAS, '', mix_const
+```
+
+### 3.2 LUT Usage (Layer 2)
+
+**Critical**: Avoid calling `CoolProp.PropsSI` inside the `step()` loop. It is too slow (~100 µs/call). Use `LUTManager` (~1 µs/call).
 
 ```python
-# Bad
+# Bad (100x slower)
 rho = CoolProp.PropsSI('D', 'T', T, 'P', P, 'Hydrogen')
 
-# Good
+# Good (LUT lookup)
 rho = self.lut_manager.lookup('H2', 'D', P, T)
 ```
 
-### 3.2 Mass Conservation
+**Grid Specification:**
+| Axis | Range | Points | Spacing |
+|------|-------|--------|---------|
+| Pressure | 0.05 - 1000 bar | 2000 | Logarithmic |
+| Temperature | 273 - 1200 K | 2000 | Linear |
+
+**Fluids Available**: H₂, O₂, H₂O, N₂, CH₄, CO₂
+
+### 3.3 JIT Kernels (`numba_ops.py`)
+
+For iterative physics (Newton-Raphson, RK4), use Numba JIT compilation to achieve near-C performance.
+
+**Key Functions:**
+| Function | Physics | Usage |
+|----------|---------|-------|
+| `calculate_compression_realgas_jit` | Isentropic compression work | `CompressorSingle` |
+| `solve_rachford_rice_single_condensable` | Single-condensable VLE flash | `KnockOutDrum`, `Coalescer` |
+| `solve_temperature_from_enthalpy_jit` | Enthalpy inversion (H→T) | `ElectricBoiler`, `Mixer` |
+| `calculate_stream_enthalpy_jit` | Shomate polynomial integration | All stream enthalpy calcs |
+
+**Best Practice: Analytical Flash for H₂/H₂O**
+For binary systems where only water condenses, use the closed-form solution instead of iterative Newton-Raphson:
+```python
+from h2_plant.optimization.numba_ops import solve_rachford_rice_single_condensable
+
+# K = P_sat(T) / P_total
+K_h2o = calculate_water_psat_jit(T_k) / P_pa
+beta = solve_rachford_rice_single_condensable(z_h2o, K_h2o)
+# beta = vapor fraction (0-1)
+```
+This reduces flash calculation from ~500 µs (iterative) to ~50 ns (analytical).
+
+### 3.4 Mass Conservation
 **Rule**: $\sum \dot{m}_{in} = \sum \dot{m}_{out} + \frac{dm_{store}}{dt}$
 
 *   **Steady State**: `inlet.mass_flow` must exactly equal `output.mass_flow` + `drain.mass_flow`.
 *   **Dynamic**: Storage tanks must track inventory precisely.
 
-### 3.3 Energy Conservation
+### 3.5 Energy Conservation
 **Rule**: $Q_{net} = \dot{m}(h_{in} - h_{out}) + W_{elec}$
 
 *   **Compressors**: Work input raises enthalpy ($h_{out} > h_{in}$).
 *   **Coolers**: Heat removal lowers enthalpy ($h_{out} < h_{in}$).
 *   Always calculate $T_{out}$ from $H_{out}$ (Enthalpy) logic, not the other way around. $H$ is the conserved quantity; $T$ is a derived property.
 
-### 3.4 Phase Equilibrium (Flash)
+### 3.6 Phase Equilibrium (Flash)
 **Rule**: Never assume a stream is pure liquid/gas if P/T changes.
 
-*   Use `solve_rachford_rice` (in `numba_ops`) for VLE calculations.
+*   Use `solve_rachford_rice_single_condensable` (in `numba_ops`) for H₂/H₂O VLE.
 *   Check if partial pressure of water $P_{H2O} > P_{sat}(T)$. If so, condense liquid.
+
 
 ---
 

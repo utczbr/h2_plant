@@ -1,9 +1,10 @@
-This is pdfTeX, Version 3.141592653-2.6-1.40.24 (TeX Live 2022/Debian) (preloaded format=pdflatex 2025.10.6)  29 DEC 2025 17:45
+This is pdfTeX, Version 3.141592653-2.6-1.40.24 (TeX Live 2022/Debian) (preloaded format=pdflatex 2025.10.6)  3 JAN 2026 09:03
 entering extended mode
  restricted \write18 enabled.
  %&-line parsing enabled.
-**scientific_paper_h2_plant.tex
-(./scientific_paper_h2_plant.tex
+**"/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_paper_h2_plant.tex
+"
+(/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_paper_h2_plant.tex
 LaTeX2e <2022-11-01> patch level 1
 L3 programming layer <2023-01-16>
 (/usr/share/texlive/texmf-dist/tex/latex/base/article.cls
@@ -748,7 +749,7 @@ File: l3backend-pdftex.def 2023-01-16 L3 backend support: PDF output (pdfTeX)
 \l__color_backend_stack_int=\count337
 \l__pdf_internal_box=\box81
 )
-(./scientific_paper_h2_plant.aux)
+(/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_paper_h2_plant.aux)
 \openout1 = `scientific_paper_h2_plant.aux'.
 
 LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 55.
@@ -794,7 +795,8 @@ e
 ))
 Package hyperref Info: Link coloring OFF on input line 55.
 
-(./scientific_paper_h2_plant.out) (./scientific_paper_h2_plant.out)
+(/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_paper_h2_plant.out)
+(/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_paper_h2_plant.out)
 \@outlinefile=\write4
 \openout4 = `scientific_paper_h2_plant.out'.
 
@@ -1306,134 +1308,127 @@ Recorder \OT1/cmr/m/n/10 com-po-
  []
 
 
-Underfull \hbox (badness 1817) in paragraph at lines 1228--1229
-\OT1/cmr/m/n/10 Thermodynamic state cal-cu-la-tion tra-di-tion-ally re-
+Underfull \hbox (badness 10000) in paragraph at lines 1226--1226
+[]\OT1/cmr/bx/n/12 Hybrid Ther-mo-dy-namic Solver
  []
 
 [13]
-Overfull \hbox (73.24387pt too wide) in paragraph at lines 1247--1255
- [][] 
+
+LaTeX Warning: Reference `sec:jit' on page 14 undefined on input line 1256.
+
+
+LaTeX Warning: Reference `sec:control' on page 14 undefined on input line 1290.
+
+
+
+Underfull \hbox (badness 2343) in paragraph at lines 1293--1294
+\OT1/cmr/m/n/10 The \OT1/cmtt/m/n/10 EngineDispatchStrategy \OT1/cmr/m/n/10 em-
+ploys pre-bound
  []
 
 
-Underfull \hbox (badness 3780) in paragraph at lines 1262--1263
-\OT1/cmr/m/n/10 When the sim-u-la-tion re-quests a value be-tween
- []
-
-
-Underfull \hbox (badness 6825) in paragraph at lines 1262--1263
-\OT1/cmr/m/n/10 grid points, the \OT1/cmtt/m/n/10 LUTManager \OT1/cmr/m/n/10 pe
-r-forms bi-lin-ear
- []
-
-
-Overfull \hbox (18.75233pt too wide) in paragraph at lines 1339--1340
+Overfull \hbox (18.75233pt too wide) in paragraph at lines 1326--1327
  [][] 
  []
 
 [14
-pdfTeX warning (ext4): destination with the same identifier (name{table.3}) has
- been already used, duplicate ignored
-<argument> ...shipout:D \box_use:N \l_shipout_box 
-                                                  \__shipout_drop_firstpage_...
-l.1348 \begin{equation}
-                       
 pdfTeX warning (ext4): destination with the same identifier (name{figure.5}) ha
 s been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.1348 \begin{equation}
+l.1335 \begin{equation}
                        ]
-Underfull \hbox (badness 10000) in paragraph at lines 1357--1357
+Underfull \hbox (badness 10000) in paragraph at lines 1344--1344
 []\OT1/cmr/bx/n/14.4 Assumptions and Va-lid-ity
  []
 
 
-Overfull \hbox (73.6019pt too wide) in paragraph at lines 1374--1382
+Overfull \hbox (73.6019pt too wide) in paragraph at lines 1361--1369
  [][] 
  []
 
 
-Underfull \hbox (badness 1168) in paragraph at lines 1394--1394
+Underfull \hbox (badness 1168) in paragraph at lines 1381--1381
 []\OT1/cmr/bx/n/12 Numerical In-te-gra-tion and DAE
  []
 
 [15
-pdfTeX warning (ext4): destination with the same identifier (name{table.4}) has
+pdfTeX warning (ext4): destination with the same identifier (name{table.3}) has
  been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.1433 
+l.1420 
        ]
-Underfull \hbox (badness 7558) in paragraph at lines 1436--1437
+Underfull \hbox (badness 7558) in paragraph at lines 1423--1424
 []\OT1/cmr/bx/n/10 Invalid\OT1/cmr/m/n/10 : ATR pro-cesses with heavy hy-
  []
 
 
-Underfull \hbox (badness 2689) in paragraph at lines 1436--1437
+Underfull \hbox (badness 2689) in paragraph at lines 1423--1424
 \OT1/cmr/m/n/10 dro-car-bons (propane/bu-tane) re-quir-ing multi-
  []
 
 
-Overfull \hbox (5.03076pt too wide) in paragraph at lines 1449--1462
+Overfull \hbox (5.03076pt too wide) in paragraph at lines 1436--1449
  [][] 
  []
 
 
-Overfull \hbox (0.87402pt too wide) in paragraph at lines 1509--1518
+Overfull \hbox (0.87402pt too wide) in paragraph at lines 1496--1505
  [][] 
  []
 
 
-Underfull \hbox (badness 1466) in paragraph at lines 1538--1539
+Underfull \hbox (badness 1466) in paragraph at lines 1525--1526
 []\OT1/cmr/bx/n/10 Rigorous Gov-ern-ing Equa-tions\OT1/cmr/m/n/10 : Sho-mate
  []
 
 
-Underfull \hbox (badness 2359) in paragraph at lines 1538--1539
+Underfull \hbox (badness 2359) in paragraph at lines 1525--1526
 \OT1/cmr/m/n/10 ther-mo-dy-nam-ics, Er-gun packed bed pres-sure
  []
 
 
-Underfull \hbox (badness 2573) in paragraph at lines 1540--1541
+Underfull \hbox (badness 2573) in paragraph at lines 1527--1528
 []\OT1/cmr/bx/n/10 JIT-compiled solvers \OT1/cmr/m/n/10 for flash equi-lib-rium
 
  []
 
 
-Underfull \hbox (badness 1406) in paragraph at lines 1542--1543
+Underfull \hbox (badness 1406) in paragraph at lines 1529--1530
 []\OT1/cmr/bx/n/10 Real-World Data In-ges-tion\OT1/cmr/m/n/10 : En-vi-ron-ment
  []
 
 [16
+pdfTeX warning (ext4): destination with the same identifier (name{table.4}) has
+ been already used, duplicate ignored
+<argument> ...shipout:D \box_use:N \l_shipout_box 
+                                                  \__shipout_drop_firstpage_...
+l.1533 
+       
 pdfTeX warning (ext4): destination with the same identifier (name{table.5}) has
  been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.1546 
+l.1533 
        
 pdfTeX warning (ext4): destination with the same identifier (name{table.6}) has
  been already used, duplicate ignored
 <argument> ...shipout:D \box_use:N \l_shipout_box 
                                                   \__shipout_drop_firstpage_...
-l.1546 
-       
-pdfTeX warning (ext4): destination with the same identifier (name{table.7}) has
- been already used, duplicate ignored
-<argument> ...shipout:D \box_use:N \l_shipout_box 
-                                                  \__shipout_drop_firstpage_...
-l.1546 
+l.1533 
        ]
-Underfull \hbox (badness 1655) in paragraph at lines 1569--1572
+Underfull \hbox (badness 1655) in paragraph at lines 1556--1559
 []\OT1/cmr/m/n/10 Hauch, A. et al. (2020). Re-cent ad-vances in
  []
 
 
-Underfull \hbox (badness 1917) in paragraph at lines 1579--1582
+Underfull \hbox (badness 1917) in paragraph at lines 1566--1569
 []\OT1/cmr/m/n/10 Ergun, S. (1952). Fluid flow through packed
  []
 
-[17] (./scientific_paper_h2_plant.aux)
+[17]
+(/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_paper_h2_plant.aux)
 
 LaTeX Warning: There were undefined references.
 
@@ -1447,47 +1442,68 @@ d.
 (rerunfilecheck)                or use package `bookmark'.
 
 Package rerunfilecheck Info: Checksums for `scientific_paper_h2_plant.out':
-(rerunfilecheck)             Before: 35E0D2F4CE1CA01068E08B4EA01555CD;14825
-(rerunfilecheck)             After:  3141471F98EF19647B28518755484B28;16090.
+(rerunfilecheck)             Before: 3141471F98EF19647B28518755484B28;16090
+(rerunfilecheck)             After:  C12036086EF6D1D544120686922C19B5;15952.
  ) 
 Here is how much of TeX's memory you used:
- 28544 strings out of 476091
- 568875 string characters out of 5794081
+ 28541 strings out of 476091
+ 569454 string characters out of 5794081
  1994330 words of memory out of 5000000
- 48188 multiletter control sequences out of 15000+600000
+ 48190 multiletter control sequences out of 15000+600000
  524700 words of font info for 78 fonts, out of 8000000 for 9000
  1141 hyphenation exceptions out of 8191
- 84i,19n,89p,704b,1736s stack positions out of 10000i,1000n,20000p,200000b,200000s
-{/usr/share/texmf/fonts/enc/dvips/cm-super/cm-super-ts1.enc}</usr/share/texli
-ve/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/share/texlive/tex
-mf-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/share/texlive/texmf-dis
-t/fonts/type1/public/amsfonts/cm/cmbx5.pfb></usr/share/texlive/texmf-dist/fonts
-/type1/public/amsfonts/cm/cmbx7.pfb></usr/share/texlive/texmf-dist/fonts/type1/
-public/amsfonts/cm/cmbx8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/
-amsfonts/cm/cmbx9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfont
-s/cm/cmex10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/c
-mmi10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.p
-fb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></us
-r/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share
-/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/share/texliv
-e/texmf-dist/fonts/type1/public/amsfonts/cm/cmr12.pfb></usr/share/texlive/texmf
--dist/fonts/type1/public/amsfonts/cm/cmr5.pfb></usr/share/texlive/texmf-dist/fo
-nts/type1/public/amsfonts/cm/cmr7.pfb></usr/share/texlive/texmf-dist/fonts/type
-1/public/amsfonts/cm/cmr8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public
-/amsfonts/cm/cmr9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfont
-s/cm/cmsy10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/c
-msy5.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pf
-b></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr
-/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmti10.pfb></usr/share
-/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmti7.pfb></usr/share/texliv
-e/texmf-dist/fonts/type1/public/amsfonts/cm/cmtt10.pfb></usr/share/texlive/texm
-f-dist/fonts/type1/public/amsfonts/cm/cmtt8.pfb></usr/share/texlive/texmf-dist/
-fonts/type1/public/amsfonts/symbols/msam10.pfb></usr/share/texmf/fonts/type1/pu
-blic/cm-super/sfrm1000.pfb>
-Output written on scientific_paper_h2_plant.pdf (17 pages, 477997 bytes).
+ 84i,19n,89p,753b,1736s stack positions out of 10000i,1000n,20000p,200000b,200000s
+
+pdfTeX warning (dest): name{subsubsection.4.2.3} has been referenced but does n
+ot exist, replaced by a fixed one
+
+
+pdfTeX warning (dest): name{subsubsection.4.1.4} has been referenced but does n
+ot exist, replaced by a fixed one
+
+
+pdfTeX warning (dest): name{subsubsection.4.1.3} has been referenced but does n
+ot exist, replaced by a fixed one
+
+
+pdfTeX warning (dest): name{subsubsection.4.1.2} has been referenced but does n
+ot exist, replaced by a fixed one
+
+
+pdfTeX warning (dest): name{subsubsection.4.1.1} has been referenced but does n
+ot exist, replaced by a fixed one
+
+{/usr/share/texmf/fonts/enc/dvips/cm-super/cm-super-ts1.enc}</usr/share/texlive
+/texmf-dist/fonts/type1/public/amsfonts/cm/cmbx10.pfb></usr/share/texlive/texmf
+-dist/fonts/type1/public/amsfonts/cm/cmbx12.pfb></usr/share/texlive/texmf-dist/
+fonts/type1/public/amsfonts/cm/cmbx5.pfb></usr/share/texlive/texmf-dist/fonts/t
+ype1/public/amsfonts/cm/cmbx7.pfb></usr/share/texlive/texmf-dist/fonts/type1/pu
+blic/amsfonts/cm/cmbx8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/am
+sfonts/cm/cmbx9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/
+cm/cmex10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmm
+i10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi5.pfb
+></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi6.pfb></usr/
+share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmmi7.pfb></usr/share/t
+exlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmr10.pfb></usr/share/texlive/
+texmf-dist/fonts/type1/public/amsfonts/cm/cmr12.pfb></usr/share/texlive/texmf-d
+ist/fonts/type1/public/amsfonts/cm/cmr5.pfb></usr/share/texlive/texmf-dist/font
+s/type1/public/amsfonts/cm/cmr7.pfb></usr/share/texlive/texmf-dist/fonts/type1/
+public/amsfonts/cm/cmr8.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/a
+msfonts/cm/cmr9.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/
+cm/cmsy10.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cms
+y5.pfb></usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy7.pfb>
+</usr/share/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmsy8.pfb></usr/s
+hare/texlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmti10.pfb></usr/share/t
+exlive/texmf-dist/fonts/type1/public/amsfonts/cm/cmti7.pfb></usr/share/texlive/
+texmf-dist/fonts/type1/public/amsfonts/cm/cmtt10.pfb></usr/share/texlive/texmf-
+dist/fonts/type1/public/amsfonts/cm/cmtt8.pfb></usr/share/texlive/texmf-dist/fo
+nts/type1/public/amsfonts/symbols/msam10.pfb></usr/share/texmf/fonts/type1/publ
+ic/cm-super/sfrm1000.pfb>
+Output written on "/home/stuart/Documentos/Planta Hidrogenio/docs/scientific_pa
+per_h2_plant.pdf" (17 pages, 477271 bytes).
 PDF statistics:
- 827 PDF objects out of 1000 (max. 8388607)
- 746 compressed objects within 8 object streams
- 324 named destinations out of 1000 (max. 500000)
- 597 words of extra memory for PDF output out of 10000 (max. 10000000)
+ 837 PDF objects out of 1000 (max. 8388607)
+ 756 compressed objects within 8 object streams
+ 318 named destinations out of 1000 (max. 500000)
+ 637 words of extra memory for PDF output out of 10000 (max. 10000000)
 

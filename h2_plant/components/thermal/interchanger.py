@@ -16,7 +16,7 @@ import numpy as np
 
 from h2_plant.core.component import Component
 from h2_plant.core.stream import Stream
-from h2_plant.core.constants import ConversionFactors, GasConstants
+from h2_plant.core.constants import ConversionFactors, GasConstants, StandardConditions
 from h2_plant.core.component_ids import ComponentID
 
 class Interchanger(Component):
@@ -127,50 +127,24 @@ class Interchanger(Component):
         T_c_in = self.cold_stream.temperature_k
         
         # --- 1. Calculate Inlet Specific Enthalpy (Hot) ---
-        # We need accurate H_in including latent potential of water vapor.
-        # H_mix = sum(y_i * H_i)
+        # PERFORMANCE: Use vectorized JIT lookup (single C-space call for all species)
         
-        def get_mixture_enthalpy(stream: Stream, T_k: float, P_pa: float, phase_check: bool = True) -> float:
-            h_mix = 0.0
-            # Get mole fractions for partial pressure calc
-            mole_fracs = stream.mole_fractions
-            
-            for species, mass_frac in stream.composition.items():
-                if mass_frac <= 0: continue
-                
-                h_spec = 0.0
-                if species == 'H2O' and lut_mgr:
-                    # Water: Use LUT with Partial Pressure for accurate Dew Point logic
-                    # or Total Pressure if we want to simplify?
-                    # Using Partial Pressure is physically correct (Dew Point).
-                    y_i = mole_fracs.get(species, 1.0)
-                    p_partial = P_pa * y_i
-                    
-                    # Ensure p_partial is within LUT bounds (0.05 bar min usually)
-                    # If very low, might clip, but usually H2O is significant.
-                    p_lookup = max(5000.0, p_partial) 
-                    
-                    # Lookup Enthalpy
-                    h_spec = lut_mgr.lookup('H2O', 'H', p_lookup, T_k)
-                    
-                elif lut_mgr and species in ['H2', 'O2', 'N2', 'CO2']:
-                     # Gases: LUT lookup (usually ideal gas region)
-                     # Partial pressure doesn't matter much for H ideal gas, but use total P
-                     # or partial? H(T) is dominant.
-                     h_spec = lut_mgr.lookup(species, 'H', P_pa, T_k)
-                else:
-                     # Fallback to Stream's Cp polynomial
-                     # (Create dummy stream for single species calc?)
-                     h_spec = stream.specific_enthalpy_j_kg # Approximate since it uses T_current
-                     # Actually better to calculate manual integral if T != stream.T
-                     # But for now, if LUT fails, ignore or use approx.
-                     pass 
-                
-                h_mix += mass_frac * h_spec
-            return h_mix
-
-        if lut_mgr:
-            h_h_in = get_mixture_enthalpy(self.hot_stream, T_h_in, P_h_in)
+        # Build mass fractions array matching LUT fluid order (H2, O2, N2, CO2, CH4, H2O)
+        # Note: StandardConditions.CANONICAL_FLUID_ORDER = ('H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2')
+        # but LUT config uses ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O') - check lut_manager.LUTConfig
+        
+        hot_mass_fracs = np.zeros(6, dtype=np.float64)
+        lut_fluid_order = lut_mgr.config.fluids if lut_mgr else StandardConditions.CANONICAL_FLUID_ORDER
+        
+        for idx, fluid in enumerate(lut_fluid_order):
+            if fluid in self.hot_stream.composition:
+                hot_mass_fracs[idx] = self.hot_stream.composition[fluid]
+            elif fluid == 'H2O' and 'H2O_liq' in self.hot_stream.composition:
+                # Combine vapor and liquid water for total
+                hot_mass_fracs[idx] = self.hot_stream.composition.get('H2O', 0.0) + self.hot_stream.composition.get('H2O_liq', 0.0)
+        
+        if lut_mgr and lut_mgr.stacked_H is not None:
+            h_h_in = lut_mgr.lookup_mixture_enthalpy(hot_mass_fracs, P_h_in, T_h_in)
         else:
             h_h_in = self.hot_stream.specific_enthalpy_j_kg
 
@@ -182,9 +156,9 @@ class Interchanger(Component):
         # --- 3. Hot Side Availability (Latent-Aware) ---
         T_h_limit = T_c_in + self.min_approach_temp_k
         
-        # Calculate Enthalpy at Limit Temperature
-        if lut_mgr:
-            h_h_limit = get_mixture_enthalpy(self.hot_stream, T_h_limit, P_h_in)
+        # Calculate Enthalpy at Limit Temperature using vectorized lookup
+        if lut_mgr and lut_mgr.stacked_H is not None:
+            h_h_limit = lut_mgr.lookup_mixture_enthalpy(hot_mass_fracs, P_h_in, T_h_limit)
         else:
             # Fallback (Sensible only error)
             Cp_h_approx = 2200.0

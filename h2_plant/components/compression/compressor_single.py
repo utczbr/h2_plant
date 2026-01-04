@@ -786,12 +786,17 @@ class CompressorSingle(Component):
                 self.outlet_temperature_c = T_out_k - 273.15  # FIX: Update Celsius attribute
                 self.compression_work_j_kg = w_actual
                 
-                # Calculate power
-                m_dot_kg_s = self._inlet_stream.mass_flow_kg_h / 3600.0 if self._inlet_stream else 0.0
-                W_shaft_kW = (m_dot_kg_s * w_actual) / 1000.0
-                self.compressor_power_kw = W_shaft_kW / self.mechanical_efficiency if self.mechanical_efficiency > 0 else W_shaft_kW
-                self.total_power_kw = self.compressor_power_kw
-                self.total_energy_kwh = self.total_power_kw * self.dt
+                # Update Celsius attribute
+                self.outlet_temperature_c = T_out_k - 273.15
+                self.outlet_temperature_k = T_out_k
+                self.actual_outlet_temperature_k = T_out_k # Redundant but safe
+                
+                # Calculate energy compliant with step() method architecture
+                drive_efficiency = self.mechanical_efficiency * self.electrical_efficiency
+                w_electrical = w_actual / drive_efficiency if drive_efficiency > 0 else w_actual
+                
+                self.specific_energy_kwh_kg = w_electrical * self.J_TO_KWH
+                self.compression_work_kwh = self.specific_energy_kwh_kg * self.actual_mass_transferred_kg
                 
                 return  # Done - skip strategy dispatch
         else:

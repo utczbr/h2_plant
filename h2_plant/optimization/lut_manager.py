@@ -43,6 +43,20 @@ except ImportError:
 from h2_plant.core.constants import StandardConditions
 from h2_plant.core.component import Component
 
+# PERFORMANCE: Import JIT functions at module level (eliminates 2.2M import lookups)
+try:
+    from h2_plant.optimization.numba_ops import (
+        get_interp_weights_jit,
+        interp_from_weights_jit,
+        bilinear_interp_jit
+    )
+    _JIT_INTERP_AVAILABLE = True
+except ImportError:
+    _JIT_INTERP_AVAILABLE = False
+    get_interp_weights_jit = None
+    interp_from_weights_jit = None
+    bilinear_interp_jit = None
+
 logger = logging.getLogger(__name__)
 
 PropertyType = Literal['D', 'H', 'S', 'C', 'Z']
@@ -148,6 +162,15 @@ class LUTManager(Component):
         self.stacked_Z: Optional[npt.NDArray] = None
         self.stacked_H_from_PS: Optional[npt.NDArray] = None
 
+        # PERFORMANCE: Cache bounds for fast in-bounds check (avoids 2.3M attribute lookups)
+        self._p_min = self.config.pressure_min
+        self._p_max = self.config.pressure_max
+        self._t_min = self.config.temperature_min
+        self._t_max = self.config.temperature_max
+        
+        # PERFORMANCE: Fluid name to stacked index map for vectorized lookups
+        self._fluid_index = {f: i for i, f in enumerate(self.config.fluids)}
+
         self.config.cache_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"LUTManager initialized with cache dir: {self.config.cache_dir}")
@@ -156,29 +179,25 @@ class LUTManager(Component):
         """
         Executes the initialization phase of the Component Lifecycle.
 
-        Strategy: "Generate Once, Cache Forever"
-        1. Defines the coordinate grids for Pressure, Temperature, and Entropy.
-        2. Iterates through configured fluids to load corresponding tables.
-        3. If a valid cache file exists, it is deserialized (fast path).
-        4. If missing/invalid, CoolProp is invoked to generate the table point-by-point (slow path).
-        5. The fresh table is serialized to disk for future runs.
-
-        This approach minimizes simulation startup time while ensuring data integrity.
+        Strategy: "Generate Once, Cache Forever" with Fast-Path Loading
+        
+        OPTIMIZED: Uses pre-stacked NumPy arrays for near-instant loading.
+        1. Check for pre-stacked cache (stacked_luts.npz) - FAST PATH
+        2. If not found, load individual fluid LUTs and stack them - SLOW PATH
+        3. Save stacked arrays for future fast loading
 
         Args:
             dt (float): Timestep (unused by this data service).
             registry (ComponentRegistry, optional): Reference to global component registry.
 
         Raises:
-            RuntimeError: If CoolProp is unavailable and no valid cache exists, preventing system startup.
+            RuntimeError: If CoolProp is unavailable and no valid cache exists.
         """
         super().initialize(dt, registry)
 
         logger.info("Initializing LUT Manager...")
 
         # Generate coordinate grids
-        # Note: Pressure uses GEOMSPACE (logarithmic) to maintain resolution
-        # across 4 orders of magnitude (0.05-1000 bar)
         self._pressure_grid = np.geomspace(
             self.config.pressure_min,
             self.config.pressure_max,
@@ -195,7 +214,26 @@ class LUTManager(Component):
             self.config.entropy_points
         )
 
-        # Load or generate LUTs
+        # =====================================================================
+        # FAST PATH: Load pre-stacked arrays if available
+        # =====================================================================
+        stacked_cache_path = self.config.cache_dir / "stacked_luts_v2.npz"
+        
+        if stacked_cache_path.exists():
+            try:
+                if self._load_stacked_cache(stacked_cache_path):
+                    # Fast path successful - generate saturation LUT and return
+                    self._generate_saturation_lut()
+                    logger.info("LUT Manager initialization complete (fast path)")
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to load stacked cache: {e}. Using slow path.")
+
+        # =====================================================================
+        # SLOW PATH: Load individual fluid LUTs and stack them
+        # =====================================================================
+        logger.info("Building LUT cache (slow path - first run only)...")
+        
         for fluid in self.config.fluids:
             cache_path = self._get_cache_path(fluid)
 
@@ -212,13 +250,16 @@ class LUTManager(Component):
                 self._luts[fluid] = self._generate_lut(fluid)
                 self._save_to_cache(fluid, cache_path)
 
-        # Generate 1D saturation LUT for water (T → P_sat)
+        # Generate 1D saturation LUT for water
         self._generate_saturation_lut()
 
-        # Validate and stack LUTs for JIT
+        # Stack LUTs for JIT access
         self._stack_luts()
+        
+        # Save stacked arrays for future fast loading
+        self._save_stacked_cache(stacked_cache_path)
 
-        logger.info("LUT Manager initialization complete")
+        logger.info("LUT Manager initialization complete (slow path)")
 
     def _stack_luts(self) -> None:
         """
@@ -260,6 +301,100 @@ class LUTManager(Component):
                     self.stacked_H_from_PS[i] = data['H_from_PS']
         
         logger.info(f"Stacked LUTs prepared for {n_fluids} fluids (vectorized backend ready)")
+
+    def _load_stacked_cache(self, cache_path: Path) -> bool:
+        """
+        Load pre-stacked LUT arrays from NPZ file.
+        
+        PERFORMANCE: Uses memory-mapped loading for near-instant startup.
+        
+        Args:
+            cache_path: Path to stacked_luts.npz file.
+            
+        Returns:
+            True if loaded successfully, False if cache is invalid.
+        """
+        logger.info(f"Loading pre-stacked LUTs from {cache_path}")
+        
+        # Load with memory mapping for speed
+        data = np.load(cache_path, mmap_mode='r', allow_pickle=True)
+        
+        # Validate grid dimensions match current config
+        saved_p_points = len(data['pressure_grid'])
+        saved_t_points = len(data['temperature_grid'])
+        
+        if (saved_p_points != self.config.pressure_points or 
+            saved_t_points != self.config.temperature_points):
+            logger.warning(
+                f"Stacked cache grid mismatch. "
+                f"Saved: {saved_p_points}x{saved_t_points}, "
+                f"Current: {self.config.pressure_points}x{self.config.temperature_points}"
+            )
+            return False
+        
+        # Load stacked arrays (copy from mmap to contiguous memory for JIT)
+        self.stacked_H = np.array(data['stacked_H'], dtype=np.float64, order='C')
+        self.stacked_S = np.array(data['stacked_S'], dtype=np.float64, order='C')
+        self.stacked_C = np.array(data['stacked_C'], dtype=np.float64, order='C')
+        self.stacked_D = np.array(data['stacked_D'], dtype=np.float64, order='C')
+        self.stacked_Z = np.array(data['stacked_Z'], dtype=np.float64, order='C')
+        self.stacked_H_from_PS = np.array(data['stacked_H_from_PS'], dtype=np.float64, order='C')
+        
+        # Load grids
+        self._pressure_grid = np.array(data['pressure_grid'], dtype=np.float64)
+        self._temperature_grid = np.array(data['temperature_grid'], dtype=np.float64)
+        self._entropy_grid = np.array(data['entropy_grid'], dtype=np.float64)
+        
+        # Reconstruct _luts dict for compatibility (minimal overhead)
+        fluids = self.config.fluids
+        for i, fluid in enumerate(fluids):
+            self._luts[fluid] = {
+                'H': self.stacked_H[i],
+                'S': self.stacked_S[i],
+                'C': self.stacked_C[i],
+                'D': self.stacked_D[i],
+                'Z': self.stacked_Z[i],
+                'H_from_PS': self.stacked_H_from_PS[i]
+            }
+        
+        logger.info(f"Loaded pre-stacked LUTs for {len(fluids)} fluids")
+        return True
+
+    def _save_stacked_cache(self, cache_path: Path) -> None:
+        """
+        Save pre-stacked LUT arrays to NPZ file for fast future loading.
+        
+        Args:
+            cache_path: Destination path for stacked_luts.npz.
+        """
+        logger.info(f"Saving pre-stacked LUTs to {cache_path}")
+        
+        np.savez(
+            cache_path,
+            stacked_H=self.stacked_H,
+            stacked_S=self.stacked_S,
+            stacked_C=self.stacked_C,
+            stacked_D=self.stacked_D,
+            stacked_Z=self.stacked_Z,
+            stacked_H_from_PS=self.stacked_H_from_PS,
+            pressure_grid=self._pressure_grid,
+            temperature_grid=self._temperature_grid,
+            entropy_grid=self._entropy_grid,
+            config_hash=self._get_config_hash()
+        )
+        
+        logger.info(f"Saved stacked LUT cache ({cache_path.stat().st_size / 1e6:.1f} MB)")
+
+    def _get_config_hash(self) -> str:
+        """Generate a hash of the LUT configuration for cache validation."""
+        import hashlib
+        config_str = (
+            f"{self.config.pressure_min}_{self.config.pressure_max}_{self.config.pressure_points}_"
+            f"{self.config.temperature_min}_{self.config.temperature_max}_{self.config.temperature_points}_"
+            f"{self.config.entropy_min}_{self.config.entropy_max}_{self.config.entropy_points}_"
+            f"{'_'.join(self.config.fluids)}"
+        )
+        return hashlib.md5(config_str.encode()).hexdigest()
 
     def step(self, t: float) -> None:
         """
@@ -379,6 +514,42 @@ class LUTManager(Component):
             np.ascontiguousarray(temperatures)
         )
 
+    def lookup_mixture_enthalpy(
+        self,
+        mass_fracs: npt.NDArray[np.float64],
+        pressure: float,
+        temperature: float
+    ) -> float:
+        """
+        Calculate mixture specific enthalpy using vectorized JIT lookup.
+        
+        PERFORMANCE: Single JIT call handles all species, avoiding 6× 
+        Python/C boundary crossings per enthalpy calculation.
+        
+        Args:
+            mass_fracs: Mass fraction array matching config.fluids order
+                        (H2, O2, N2, CO2, CH4, H2O)
+            pressure: System pressure (Pa)
+            temperature: Temperature (K)
+            
+        Returns:
+            Mixture specific enthalpy (J/kg)
+        """
+        if not self._initialized:
+            self.initialize()
+            
+        # Use vectorized JIT kernel
+        from h2_plant.optimization.numba_ops import get_mixture_enthalpy_fast
+        
+        return get_mixture_enthalpy_fast(
+            self.stacked_H,
+            self._pressure_grid,
+            self._temperature_grid,
+            mass_fracs,
+            pressure,
+            temperature
+        )
+
     def lookup_isentropic_enthalpy(
         self,
         fluid: str,
@@ -448,8 +619,7 @@ class LUTManager(Component):
         Returns:
             float: Interpolated property value.
         """
-        from h2_plant.optimization.numba_ops import get_interp_weights_jit, interp_from_weights_jit
-        
+        # PERFORMANCE: Use module-level cached JIT functions (no import overhead)
         ix, iy, wx, wy = get_interp_weights_jit(
             self._pressure_grid, self._temperature_grid, pressure, temperature
         )
@@ -518,9 +688,10 @@ class LUTManager(Component):
         Returns:
             bool: True if within bounds.
         """
+        # PERFORMANCE: Use cached bounds (avoids config attribute chain)
         return (
-            self.config.pressure_min <= pressure <= self.config.pressure_max and
-            self.config.temperature_min <= temperature <= self.config.temperature_max
+            self._p_min <= pressure <= self._p_max and
+            self._t_min <= temperature <= self._t_max
         )
 
     def _generate_saturation_lut(self) -> None:

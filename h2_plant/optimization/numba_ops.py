@@ -1398,7 +1398,111 @@ def bilinear_interp_jit(
     return val
 
 
-@njit(parallel=True)
+# =============================================================================
+# VECTORIZED MIXTURE ENTHALPY LOOKUP
+# =============================================================================
+
+@njit(cache=True)
+def get_mixture_enthalpy_fast(
+    stacked_H: npt.NDArray[np.float64],    # (N_fluids, N_P, N_T) array
+    P_grid: npt.NDArray[np.float64],        # Pressure grid
+    T_grid: npt.NDArray[np.float64],        # Temperature grid  
+    mass_fracs: npt.NDArray[np.float64],    # (N_fluids,) array
+    P_sys: float,                           # System pressure (Pa)
+    T_k: float                              # Temperature (K)
+) -> float:
+    """
+    Calculate mixture specific enthalpy in a single JIT call.
+    
+    PERFORMANCE: Iterates species loop in compiled C-code, avoiding 6× 
+    Python/C boundary crossings per enthalpy calculation.
+    
+    Physics:
+        h_mix = Σ(w_i × h_i(P, T))
+        
+    Where w_i is mass fraction and h_i is species-specific enthalpy from LUT.
+    
+    Args:
+        stacked_H: Pre-stacked enthalpy tables [N_fluids, N_P, N_T]
+        P_grid: Pressure grid for interpolation
+        T_grid: Temperature grid for interpolation
+        mass_fracs: Mass fractions array matching fluid order
+        P_sys: System pressure (Pa)
+        T_k: Temperature (K)
+        
+    Returns:
+        Mixture specific enthalpy (J/kg)
+    """
+    h_mix = 0.0
+    n_fluids = len(mass_fracs)
+    
+    # Clamp P and T to grid bounds
+    p_min, p_max = P_grid[0], P_grid[-1]
+    t_min, t_max = T_grid[0], T_grid[-1]
+    
+    P_lookup = P_sys
+    if P_lookup < p_min:
+        P_lookup = p_min
+    elif P_lookup > p_max:
+        P_lookup = p_max
+        
+    T_lookup = T_k
+    if T_lookup < t_min:
+        T_lookup = t_min
+    elif T_lookup > t_max:
+        T_lookup = t_max
+    
+    # Find interpolation indices once (shared across all species)
+    n_p = len(P_grid)
+    n_t = len(T_grid)
+    
+    # Binary search for pressure (log-spaced grid)
+    ix = np.searchsorted(P_grid, P_lookup)
+    if ix == 0:
+        ix = 1
+    elif ix >= n_p:
+        ix = n_p - 1
+        
+    # Binary search for temperature (linear grid)
+    iy = np.searchsorted(T_grid, T_lookup)
+    if iy == 0:
+        iy = 1
+    elif iy >= n_t:
+        iy = n_t - 1
+    
+    # Interpolation weights
+    p0, p1 = P_grid[ix-1], P_grid[ix]
+    t0, t1 = T_grid[iy-1], T_grid[iy]
+    
+    wp = (P_lookup - p0) / (p1 - p0) if p1 != p0 else 0.0
+    wt = (T_lookup - t0) / (t1 - t0) if t1 != t0 else 0.0
+    
+    # Iterate species in C-space (fast!)
+    for i in range(n_fluids):
+        w_i = mass_fracs[i]
+        if w_i < 1e-12:
+            continue
+            
+        # Bilinear interpolation for this species
+        H_table = stacked_H[i]
+        q00 = H_table[ix-1, iy-1]
+        q01 = H_table[ix-1, iy]
+        q10 = H_table[ix, iy-1]
+        q11 = H_table[ix, iy]
+        
+        h_i = (
+            q00 * (1 - wp) * (1 - wt) +
+            q10 * wp * (1 - wt) +
+            q01 * (1 - wp) * wt +
+            q11 * wp * wt
+        )
+        
+        h_mix += w_i * h_i
+        
+    return h_mix
+
+
+@njit(parallel=True, cache=True)
 def batch_bilinear_interp_jit(
     grid_x: npt.NDArray[np.float64],
     grid_y: npt.NDArray[np.float64],

@@ -521,31 +521,8 @@ nodes:
       outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
-    connections:
-      - source_port: "outlet"
-        target_name: "SOEC_O2_Drycooler_5"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  # Stage 5
-  - id: "SOEC_O2_Drycooler_5"
-    type: "DryCooler"
-    params:
-      component_id: "SOEC_O2_Drycooler_5"
-      target_temp_c: 30.0
-    connections:
-      - source_port: "fluid_out"
-        target_name: "SOEC_O2_compressor_5"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_compressor_5"
-    type: "CompressorSingle"
-    params:
-      outlet_pressure_bar: 15.0
-      max_temp_c: 135.0
-      temperature_limited: true
     connections: []
+
 
 
   # =================================================================================

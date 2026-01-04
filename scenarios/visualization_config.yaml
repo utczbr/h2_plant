@@ -131,31 +131,35 @@ visualization:
       enabled: true
       plots:
         - title: "H2 Tank Levels"
-          components: ["H2_Tank_1"]
+          components: ["H2_Storage_Tank"]
     
     compressor_power:
       enabled: true
       plots:
-        - title: "Compressor Power Usage"
-          components: ["Compressor_S1", "Compressor_S2", "Compressor_S3", "Compressor_S4", "Compressor_S5", "Compressor_S6"]
+        - title: "SOEC H2 Compressors Power (0-41 bar)"
+          components: ["SOEC_H2_Compressor_S1", "SOEC_H2_Compressor_S2", "SOEC_H2_Compressor_S3", "SOEC_H2_Compressor_S4", "SOEC_H2_Compressor_S5", "SOEC_H2_Compressor_S6"]
+        - title: "Storage Compressors Power (40-500 bar)"
+          components: ["HP_Compressor_S1", "HP_Compressor_S2", "HP_Compressor_S3", "HP_Compressor_S4", "HP_Compressor_S5"]
+        - title: "SOEC O2 Compressors Power"
+          components: ["SOEC_O2_compressor_1", "SOEC_O2_compressor_2", "SOEC_O2_compressor_3", "SOEC_O2_compressor_4", "SOEC_O2_compressor_5"]
 
     # 6. THERMAL & SEPARATION
     # ----------------------------------------------------------------------
     thermal_load_breakdown:
       enabled: true
       plots:
-        - title: "H2 Train Cooling Load"
-          components: ["DryCooler_1", "Chiller_1", "Chiller_2", "Intercooler_1", "Intercooler_2", "Intercooler_3", "Intercooler_4", "Intercooler_5", "Intercooler_6"]
-        - title: "O2 Train Cooling Load"
-          components: ["O2_DryCooler", "O2_Chiller"]
+        - title: "H2 Train Cooling Load (SOEC & PEM)"
+          components: ["SOEC_H2_Interchanger_1", "SOEC_H2_DryCooler_1", "SOEC_H2_Chiller_1", "SOEC_H2_Intercooler_1", "SOEC_H2_Intercooler_2", "SOEC_H2_Intercooler_3", "SOEC_H2_Intercooler_4", "SOEC_H2_Intercooler_5", "SOEC_H2_Intercooler_6", "SOEC_H2_Chiller_2", "PEM_H2_DryCooler_1", "PEM_H2_Chiller_1", "PEM_H2_Chiller_2"]
+        - title: "O2 Train Cooling Load (SOEC & PEM)"
+          components: ["SOEC_O2_Drycooler_1", "SOEC_O2_Drycooler_2", "SOEC_O2_Drycooler_3", "SOEC_O2_Drycooler_4", "SOEC_O2_Drycooler_5", "PEM_O2_Drycooler_1", "PEM_O2_Chiller_1"]
     
     water_removal_bar:
       enabled: true
       plots:
         - title: "H2 Train Water Removal"
-          components: ["KOD_1", "KOD_2", "Cyclone_1", "Cyclone_2", "Cyclone_3", "Cyclone_4", "Cyclone_5", "Coalescer_2"]
-        - title: "O2 Train Water Removal"
-          components: ["O2_KOD_1", "O2_KOD_2", "O2_Coalescer"]
+          components: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2", "SOEC_H2_Cyclone_1", "SOEC_H2_Cyclone_2", "SOEC_H2_Cyclone_3", "SOEC_H2_Cyclone_4", "SOEC_H2_Cyclone_5", "SOEC_H2_Coalescer_2", "PEM_H2_KOD_1", "PEM_H2_KOD_2", "PEM_H2_KOD_3", "PEM_H2_Coalescer_1"]
+        - title: "O2 Train Water Removal (PEM Only)"
+          components: ["PEM_O2_KOD_1", "PEM_O2_KOD_2", "PEM_O2_Coalescer_1"]
 
     # 7. PROCESS TRAIN PROFILES
     # ----------------------------------------------------------------------
@@ -170,33 +174,33 @@ visualization:
         - title: "H2 Main Train - Temperature Profile"
           components: 
             - "SOEC_Cluster"
-            - "Interchanger_1"
-            - "DryCooler_1"
-            - "KOD_1"
-            - "Chiller_1"
-            - "KOD_2"
-            - "Cyclone_1"
-            - "Compressor_S1"
-            - "Intercooler_1"
-            - "Compressor_S2"
-            - "Intercooler_2"
-            - "Cyclone_2"
-            - "Compressor_S3"
-            - "Intercooler_3"
-            - "Cyclone_3"
-            - "Compressor_S4"
-            - "Intercooler_4"
-            - "Cyclone_4"
-            - "Compressor_S5"
-            - "Intercooler_5"
-            - "Cyclone_5"
-            - "Compressor_S6"
-            - "Intercooler_6"
-            - "Deoxo_1"
-            - "Chiller_2"
-            - "Coalescer_2"
-            - "ElectricBoiler_PSA"
-            - "PSA_1"
+            - "SOEC_H2_Interchanger_1"
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_Chiller_1"
+            - "SOEC_H2_KOD_2"
+            - "SOEC_H2_Cyclone_1"
+            - "SOEC_H2_Compressor_S1"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Compressor_S2"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Cyclone_2"
+            - "SOEC_H2_Compressor_S3"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Cyclone_3"
+            - "SOEC_H2_Compressor_S4"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Cyclone_4"
+            - "SOEC_H2_Compressor_S5"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Cyclone_5"
+            - "SOEC_H2_Compressor_S6"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_H2_Deoxo_1"
+            - "SOEC_H2_Chiller_2"
+            - "SOEC_H2_Coalescer_2"
+            - "SOEC_H2_ElectricBoiler_PSA"
+            - "SOEC_H2_PSA_1"
 
     pressure_profile:
       enabled: true
@@ -204,33 +208,33 @@ visualization:
         - title: "H2 Main Train - Pressure Profile"
           components: 
             - "SOEC_Cluster"
-            - "Interchanger_1"
-            - "DryCooler_1"
-            - "KOD_1"
-            - "Chiller_1"
-            - "KOD_2"
-            - "Cyclone_1"
-            - "Compressor_S1"
-            - "Intercooler_1"
-            - "Compressor_S2"
-            - "Intercooler_2"
-            - "Cyclone_2"
-            - "Compressor_S3"
-            - "Intercooler_3"
-            - "Cyclone_3"
-            - "Compressor_S4"
-            - "Intercooler_4"
-            - "Cyclone_4"
-            - "Compressor_S5"
-            - "Intercooler_5"
-            - "Cyclone_5"
-            - "Compressor_S6"
-            - "Intercooler_6"
-            - "Deoxo_1"
-            - "Chiller_2"
-            - "Coalescer_2"
-            - "ElectricBoiler_PSA"
-            - "PSA_1"
+            - "SOEC_H2_Interchanger_1"
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_Chiller_1"
+            - "SOEC_H2_KOD_2"
+            - "SOEC_H2_Cyclone_1"
+            - "SOEC_H2_Compressor_S1"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Compressor_S2"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Cyclone_2"
+            - "SOEC_H2_Compressor_S3"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Cyclone_3"
+            - "SOEC_H2_Compressor_S4"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Cyclone_4"
+            - "SOEC_H2_Compressor_S5"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Cyclone_5"
+            - "SOEC_H2_Compressor_S6"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_H2_Deoxo_1"
+            - "SOEC_H2_Chiller_2"
+            - "SOEC_H2_Coalescer_2"
+            - "SOEC_H2_ElectricBoiler_PSA"
+            - "SOEC_H2_PSA_1"
             
     flow_profile:
       enabled: true
@@ -238,46 +242,46 @@ visualization:
         - title: "H2 Main Train - Flow & Composition Profile"
           components: 
             - "SOEC_Cluster"
-            - "Interchanger_1"
-            - "DryCooler_1"
-            - "KOD_1"
-            - "Chiller_1"
-            - "KOD_2"
-            - "Cyclone_1"
-            - "Compressor_S1"
-            - "Intercooler_1"
-            - "Compressor_S2"
-            - "Intercooler_2"
-            - "Cyclone_2"
-            - "Compressor_S3"
-            - "Intercooler_3"
-            - "Cyclone_3"
-            - "Compressor_S4"
-            - "Intercooler_4"
-            - "Cyclone_4"
-            - "Compressor_S5"
-            - "Intercooler_5"
-            - "Cyclone_5"
-            - "Compressor_S6"
-            - "Intercooler_6"
-            - "Deoxo_1"
-            - "Chiller_2"
-            - "Coalescer_2"
-            - "ElectricBoiler_PSA"
-            - "PSA_1"
+            - "SOEC_H2_Interchanger_1"
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_Chiller_1"
+            - "SOEC_H2_KOD_2"
+            - "SOEC_H2_Cyclone_1"
+            - "SOEC_H2_Compressor_S1"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Compressor_S2"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Cyclone_2"
+            - "SOEC_H2_Compressor_S3"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Cyclone_3"
+            - "SOEC_H2_Compressor_S4"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Cyclone_4"
+            - "SOEC_H2_Compressor_S5"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Cyclone_5"
+            - "SOEC_H2_Compressor_S6"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_H2_Deoxo_1"
+            - "SOEC_H2_Chiller_2"
+            - "SOEC_H2_Coalescer_2"
+            - "SOEC_H2_ElectricBoiler_PSA"
+            - "SOEC_H2_PSA_1"
 
     # 7.2 O2 TRAIN PROFILE (Example of keeping combined if desired, or reuse process_train_profile)
     # process_train_profile: # Re-enable for other trains if needed
     
         
-        - title: "O2 Train Profile"
+        - title: "PEM O2 Train Profile (Wet Oxygen)"
           components:
-            - "SOEC_Cluster"
-            - "O2_KOD_1"
-            - "O2_DryCooler"
-            - "O2_Chiller"
-            - "O2_KOD_2"
-            - "O2_Coalescer"
+            - "PEM_Electrolyzer"
+            - "PEM_O2_KOD_1"
+            - "PEM_O2_Drycooler_1"
+            - "PEM_O2_Chiller_1"
+            - "PEM_O2_KOD_2"
+            - "PEM_O2_Coalescer_1"
 
     # =========================================================================
     # 8. LEGACY CORE GRAPHS (Wrapped from static_graphs.py)
@@ -436,7 +440,21 @@ visualization:
       enabled: true
       plots:
         - title: "Drains Discarded"
-          components: []
+          components:
+             - "SOEC_H2_KOD_1"
+             - "SOEC_H2_KOD_2"
+             - "SOEC_H2_Cyclone_1"
+             - "SOEC_H2_Cyclone_2"
+             - "SOEC_H2_Cyclone_3"
+             - "SOEC_H2_Cyclone_4"
+             - "SOEC_H2_Cyclone_5"
+             - "SOEC_H2_Coalescer_2"
+             - "PEM_H2_KOD_1"
+             - "PEM_H2_KOD_2"
+             - "PEM_H2_KOD_3"
+             - "PEM_O2_KOD_1"
+             - "PEM_O2_KOD_2"
+             - "PEM_O2_Coalescer_1"
     
     legacy_individual_drains:
       enabled: true
@@ -448,13 +466,24 @@ visualization:
       enabled: true
       plots:
         - title: "Dissolved Gas Concentration"
-          components: []
+          components:
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_KOD_2"
+            - "PEM_H2_KOD_1"
+            - "PEM_H2_KOD_2"
+            - "PEM_H2_KOD_3"
+            - "PEM_O2_KOD_1"
+            - "PEM_O2_KOD_2"
+            - "SOEC_Drain_Mixer"
+            - "PEM_Drain_Mixer"
     
     legacy_drain_concentration:
       enabled: true
       plots:
         - title: "Drain Concentration Efficiency"
-          components: []
+          components:
+            - "SOEC_Drain_Mixer"
+            - "PEM_Drain_Mixer"
     
     legacy_mixer_comparison:
       enabled: true
@@ -466,13 +495,16 @@ visualization:
       enabled: true
       plots:
         - title: "Deoxo Reactor Profile"
-          components: []
+          components:
+            - "SOEC_H2_Deoxo_1"
     
     legacy_drain_line:
       enabled: true
       plots:
         - title: "Drain Line Properties"
-          components: []
+          components:
+            - "SOEC_Drain_Mixer"
+            - "PEM_Drain_Mixer"
     
     legacy_recirculation:
       enabled: true
@@ -496,7 +528,9 @@ visualization:
       enabled: true
       plots:
         - title: "Drain Mixer Balance"
-          components: []
+          components:
+            - "SOEC_Drain_Mixer"
+            - "PEM_Drain_Mixer"
 
     # =========================================================================
     # 13. LEGACY ENERGY & SCHEMATIC GRAPHS
@@ -542,29 +576,29 @@ visualization:
           stream_type: "H2"
           components:
             - "SOEC_Cluster"
-            - "Interchanger_1"
-            - "DryCooler_1"
-            - "KOD_1"
-            - "Chiller_1"
-            - "KOD_2"
-            - "Cyclone_1"
-            - "Compressor_S1"
-            - "Intercooler_1"
-            - "Compressor_S2"
-            - "Intercooler_2"
-            - "Compressor_S3"
-            - "Intercooler_3"
-            - "Compressor_S4"
-            - "Intercooler_4"
-            - "Compressor_S5"
-            - "Intercooler_5"
-            - "Compressor_S6"
-            - "Intercooler_6"
-            - "Deoxo_1"
-            - "Chiller_2"
-            - "Coalescer_2"
-            - "ElectricBoiler_PSA"
-            - "PSA_1"
+            - "SOEC_H2_Interchanger_1"
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_Chiller_1"
+            - "SOEC_H2_KOD_2"
+            - "SOEC_H2_Cyclone_1"
+            - "SOEC_H2_Compressor_S1"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Compressor_S2"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Compressor_S3"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Compressor_S4"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Compressor_S5"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Compressor_S6"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_H2_Deoxo_1"
+            - "SOEC_H2_Chiller_2"
+            - "SOEC_H2_Coalescer_2"
+            - "SOEC_H2_ElectricBoiler_PSA"
+            - "SOEC_H2_PSA_1"
     
     # O2 Stream Impurity (H2 in O2)
     legacy_o2_stream_impurity:
@@ -573,12 +607,12 @@ visualization:
         - title: "H₂ Impurity in O₂ Stream"
           stream_type: "O2"
           components:
-            - "SOEC_Cluster"
-            - "O2_KOD_1"
-            - "O2_DryCooler"
-            - "O2_Chiller"
-            - "O2_KOD_2"
-            - "O2_Coalescer"
+            - "PEM_Electrolyzer"
+            - "PEM_O2_KOD_1"
+            - "PEM_O2_Drycooler_1"
+            - "PEM_O2_Chiller_1"
+            - "PEM_O2_KOD_2"
+            - "PEM_O2_Coalescer_1"
     
     legacy_total_mass_flow:
       enabled: true
@@ -593,29 +627,29 @@ visualization:
           train: "H2"
           components:
             - "SOEC_Cluster"
-            - "Interchanger_1"
-            - "DryCooler_1"
-            - "KOD_1"
-            - "Chiller_1"
-            - "KOD_2"
-            - "Cyclone_1"
-            - "Compressor_S1"
-            - "Intercooler_1"
-            - "Compressor_S2"
-            - "Intercooler_2"
-            - "Compressor_S3"
-            - "Intercooler_3"
-            - "Compressor_S4"
-            - "Intercooler_4"
-            - "Compressor_S5"
-            - "Intercooler_5"
-            - "Compressor_S6"
-            - "Intercooler_6"
-            - "Deoxo_1"
-            - "Chiller_2"
-            - "Coalescer_2"
-            - "ElectricBoiler_PSA"
-            - "PSA_1"
+            - "SOEC_H2_Interchanger_1"
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_Chiller_1"
+            - "SOEC_H2_KOD_2"
+            - "SOEC_H2_Cyclone_1"
+            - "SOEC_H2_Compressor_S1"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Compressor_S2"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Compressor_S3"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Compressor_S4"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Compressor_S5"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Compressor_S6"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_H2_Deoxo_1"
+            - "SOEC_H2_Chiller_2"
+            - "SOEC_H2_Coalescer_2"
+            - "SOEC_H2_ElectricBoiler_PSA"
+            - "SOEC_H2_PSA_1"
     
     legacy_o2_stacked:
       enabled: true
@@ -623,9 +657,9 @@ visualization:
         - title: "O2 Stacked Properties"
           train: "O2"
           components:
-            - "SOEC_Cluster"
-            - "O2_KOD_1"
-            - "O2_DryCooler"
-            - "O2_Chiller"
-            - "O2_KOD_2"
-            - "O2_Coalescer"
+            - "PEM_Electrolyzer"
+            - "PEM_O2_KOD_1"
+            - "PEM_O2_Drycooler_1"
+            - "PEM_O2_Chiller_1"
+            - "PEM_O2_KOD_2"
+            - "PEM_O2_Coalescer_1"

@@ -15,6 +15,7 @@ import pandas as pd
 from matplotlib.figure import Figure
 from typing import List, Dict, Any, Optional, Callable
 import logging
+import inspect
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,26 @@ def _wrap_legacy(func: Callable, default_title: str = "Graph") -> Callable:
     def wrapper(df: pd.DataFrame, component_ids: List[str], 
                 title: str, config: Dict[str, Any]) -> Optional[Figure]:
         try:
-            # Legacy functions only need df, ignore component_ids and config
-            fig = func(df)
+            # Smart Argument Passing
+            # Check if the underlying function accepts 'components' or '**kwargs'
+            underlying = getattr(func, '__wrapped__', func)
             
+            try:
+                sig = inspect.signature(underlying)
+                has_comp = 'components' in sig.parameters
+                # Check for **kwargs (VAR_KEYWORD)
+                has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                
+                if has_comp or has_kwargs:
+                    fig = func(df, components=component_ids)
+                else:
+                    fig = func(df)
+            except Exception:
+                # If inspection fails (e.g. C-extension, odd callable), fallback to safe call
+                # Try with components first? No, safer to try without.
+                # Or just assume standard legacy signature.
+                fig = func(df)
+
             # Override title if the figure was created and has axes
             if fig is not None and fig.axes:
                 fig.axes[0].set_title(title or default_title)

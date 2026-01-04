@@ -85,6 +85,9 @@ class DrainRecorderMixer(Component):
         # Running totals for summary
         self._total_mass_kg: Dict[str, float] = {}
         
+        # Exposed metrics for optimized recording
+        self.dissolved_gas_ppm: float = 0.0
+        
         self._lut_manager = None
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
@@ -254,8 +257,17 @@ class DrainRecorderMixer(Component):
                 composition=mixed_comp,
                 phase='liquid'
             )
+            
+            # Update exposed metric for recording
+            non_water_mass_frac = sum(
+                frac for sp, frac in self.outlet_stream.composition.items()
+                if sp not in ('H2O', 'H2O_liq')
+            )
+            self.dissolved_gas_ppm = non_water_mass_frac * 1e6
+            
         else:
             self.outlet_stream = Stream(0.0)
+            self.dissolved_gas_ppm = 0.0
         
         # Clear buffer for next timestep
         self._received_streams.clear()

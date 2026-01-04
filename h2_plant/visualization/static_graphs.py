@@ -1037,19 +1037,23 @@ def create_q_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     return fig
 
 @log_graph_errors
-def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
     """
     Drain Line Properties (T, P, Flow, Dissolved Gas).
     
     Compares aggregated 'IN' state (sum/avg of upstream drains) vs 'OUT' state (Mixer).
-    Filters for H2 and O2 lines based on ID naming.
+    Filters for H2 and O2 lines based on ID naming or explicit configuration.
     """
     fig = Figure(figsize=(14, 12), dpi=dpi, constrained_layout=True)
     
     # 1. Identify Drain Lines (Mixers)
-    # Look for DrainRecorderMixer columns
-    mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
-    mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
+    if components:
+        # Use provided components as the Mixers
+        mixers = components
+    else:
+        # Fallback to auto-discovery
+        mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
+        mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
     
     if not mixers:
         fig.text(0.5, 0.5, 'No DrainRecorderMixer data found', ha='center')
@@ -1320,7 +1324,7 @@ def create_deoxo_profile_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     return fig
 
 @log_graph_errors
-def create_drain_mixer_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+def create_drain_mixer_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
     """
     Drain Mixer Balance (Static Bar Chart).
     
@@ -1330,8 +1334,11 @@ def create_drain_mixer_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     fig = Figure(figsize=(10, 12), dpi=dpi, constrained_layout=True)
     
     # 1. Identify Mixers
-    mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
-    mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
+    if components:
+        mixers = components
+    else:
+        mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
+        mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
     
     if not mixers:
         fig.text(0.5, 0.5, 'No DrainRecorderMixer data found', ha='center')
@@ -1937,7 +1944,7 @@ def create_water_removal_total_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> 
     return fig
 
 @log_graph_errors
-def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
     """Create multi-panel plot for discarded drains."""
     fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
     gs = fig.add_gridspec(3, 1, height_ratios=[1, 1, 1])
@@ -1945,7 +1952,19 @@ def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax2 = fig.add_subplot(gs[1], sharex=ax1)
     ax3 = fig.add_subplot(gs[2], sharex=ax1)
     
-    drain_cols = [c for c in df.columns if 'water_removed_kg_h' in c.lower()]
+    if components:
+        drain_cols = []
+        for cid in components:
+            # Try finding relevant drain columns for this component
+            # Could be water_removed or drain_flow
+            for suffix in ['_water_removed_kg_h', '_drain_flow_kg_h']:
+                col = f"{cid}{suffix}"
+                if col in df.columns:
+                    drain_cols.append(col)
+                    break 
+    else:
+        drain_cols = [c for c in df.columns if 'water_removed_kg_h' in c.lower()]
+        
     components = []
     total_mass = []
     avg_temp = []
@@ -1953,7 +1972,13 @@ def create_drains_discarded_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     dt_hours = 1.0 / 60.0
     
     for col in drain_cols:
-        comp_name = col.replace('_water_removed_kg_h', '').upper()
+        # If we used explicit components, we know the ID.
+        # Otherwise standard parsing
+        if '_water_removed_kg_h' in col:
+            comp_name = col.replace('_water_removed_kg_h', '').upper()
+        else:
+             comp_name = col.replace('_drain_flow_kg_h', '').upper()
+             
         mass_kg = df[col].sum() * dt_hours
         
         temp_col = [c for c in df.columns if comp_name.lower() in c.lower() and 'temp' in c.lower()]
@@ -2385,186 +2410,10 @@ def create_individual_drains_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     
     return fig
 
-@log_graph_errors
-def create_dissolved_gas_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
-    """
-    plot_concentracao_dreno: Dissolved Gas Removal Efficiency.
-    
-    Plots the concentration of dissolved gases (ppm) in the drain streams.
-    Comparing across different separation stages (KOD, Coalescer).
-    """
-    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
-    
-    # Collect PPM data
-    kod_ppm = _find_component_columns(df, 'KOD', 'dissolved_gas_ppm')
-    coal_ppm = _find_component_columns(df, 'Coalescer', 'dissolved_gas_ppm')
-    
-    all_ppm = {**kod_ppm, **coal_ppm}
-    
-    if not all_ppm:
-        ax = fig.add_subplot(111)
-        logger.warning("No dissolved gas data found.")
-        ax.text(0.5, 0.5, 'No dissolved gas data found.\nEnsure KOD/Coalescer calculate and expose ppm.',
-                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
-        ax.set_title('Dissolved Gas Concentration')
-        return fig
-    
-    ax = fig.add_subplot(111)
-    x = df['minute'] if 'minute' in df.columns else df.index
-    
-    for comp_id, data in all_ppm.items():
-        if data.sum() > 0:
-            ax.plot(downsample_for_plot(x), downsample_for_plot(data), label=comp_id, linewidth=1.5)
-            
-    ax.set_ylabel('Concentration (ppm mg/kg)')
-    ax.set_xlabel('Time (Minutes)')
-    ax.set_title('Dissolved Gas Concentration in Drains')
-    ax.legend()
-    ax.grid(True, linestyle='--', alpha=0.5)
-    # Use log scale with lower limit to avoid zero issues
-    ax.set_ylim(bottom=0.01)  # Clip to avoid log(0)
-    ax.set_yscale('log')
-    
-    return fig
 
 
-@log_graph_errors
-def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
-    """
-    plot_concentracao_dreno: Dissolved Gas Removal Efficiency & Mixer.
-    
-    Compares:
-    1. Aggregated IN (Pre-Flash)
-    2. Aggregated OUT (Post-Flash/Separation)
-    3. Final Mixer Output
-    
-    Shows removal efficiency and final quality.
-    """
-    fig = Figure(figsize=(10, 7), dpi=dpi, constrained_layout=True)
-    ax = fig.add_subplot(111)
-    
-    # helper for finding mean
-    def get_mean(pattern):
-        cols = [c for c in df.columns if pattern in c]
-        if not cols: return 0.0
-        return sum(df[c].mean() for c in cols) # Sum if multiple parallel lines? Or mean of mean?
-        # Logic: We are comparing concentration. 
-        # Ideally weighted average by flow, but simple mean is legacy proxy if flows similar.
-        # Let's use max found to be safe or average of active ones.
-        vals = [df[c].mean() for c in cols if df[c].mean() > 0]
-        return sum(vals) / len(vals) if vals else 0.0
 
-    # 1. IN Concentration (Aggregated)
-    # Search for known inlet concentration columns
-    c_in_h2 = get_mean('H2_inlet_dissolved_ppm')
-    c_in_o2 = get_mean('O2_inlet_dissolved_ppm')
-    
-    # If explicit columns missing, try to infer from upstream components?
-    # Legacy hardcoded this. For dynamic, we rely on standard tracking.
-    if c_in_h2 == 0 and c_in_o2 == 0:
-        # Try finding KOD/Coalescer drain ppm as "IN" to the flash system
-        # Actually in new KOD, output IS the drain. 
-        # So KOD Drain PPM = IN to Mixer? 
-        # Let's assume KOD output is "IN" to the treatment system.
-        c_in_h2 = get_mean('KOD_1_dissolved_gas_ppm') + get_mean('Coalescer_H2_dissolved_gas_ppm')
-        # Average it?
-        c_in_h2 /= 2 if c_in_h2 > 0 else 1
 
-    # 2. OUT Concentration (Post Flash / Tank)
-    # In legacy this was after "Flash Drum".
-    # In new topology, this might be "DrainRecorderMixer" BEFORE final mix?
-    # Or just "WaterMixer" output?
-    
-    # Let's look for Mixer Output as "Final"
-    # And maybe "Tank" output as "Intermediate"?
-    
-    # If tracking is sparse, we might only have Component Drains (IN) and Mixer Output (Final).
-    # Legacy had 3 bars.
-    
-    # Let's compare: 
-    # IN (Separators) -> OUT (Mixer)
-    # If we have intermediate "Flash", use it.
-    
-    c_out_h2 = 0.0 # Placeholder for intermediate
-    c_out_o2 = 0.0
-    
-    # 3. Final Mixer
-    c_final_h2 = get_mean('Mixer_dissolved_H2_ppm')
-    if c_final_h2 == 0: c_final_h2 = get_mean('dissolved_gas_ppm') # generic check? dangerous
-    
-    # Specific Mixer check
-    mix_cols = [c for c in df.columns if 'Mixer' in c and 'dissolved' in c]
-    if mix_cols:
-         # Assume last mixer is final
-         # Sort by name length or something?
-         pass
-
-    # RE-EVALUATION:
-    # Use simpler approach matching typical data availability.
-    # Group By GASEOUS SPECIES (H2 vs O2).
-    
-    # H2 Data
-    h2_sources = [c for c in df.columns if 'H2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
-    h2_in_val = df[h2_sources].max(axis=1).mean() if h2_sources else 0.0 # Use max conc source?
-    
-    h2_mixer = [c for c in df.columns if 'H2' in c and 'dissolved' in c and 'Mixer' in c]
-    h2_final_val = df[h2_mixer[0]].mean() if h2_mixer else 0.0
-    
-    # O2 Data
-    o2_sources = [c for c in df.columns if 'O2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
-    o2_in_val = df[o2_sources].max(axis=1).mean() if o2_sources else 0.0
-    
-    o2_mixer = [c for c in df.columns if 'O2' in c and 'dissolved' in c and 'Mixer' in c]
-    o2_final_val = df[o2_mixer[0]].mean() if o2_mixer else 0.0
-    
-    # Assemble Plot Data
-    labels = ['H2 Dissolved', 'O2 Dissolved']
-    in_vals = [h2_in_val, o2_in_val]
-    mid_vals = [h2_in_val * 0.1, o2_in_val * 0.1] # Mock intermediate (Flash efficiency assumption if data missing)
-    # Actually, if we don't have Flash data, maybe skip bar 2? 
-    # Legacy had 'OUT' (Flash).
-    # New system might strictly be Separator -> Mixer.
-    # Let's plot Separator (IN) vs Mixer (OUT).
-    
-    x = np.arange(len(labels))
-    width = 0.35
-    
-    bars1 = ax.bar(x - width/2, in_vals, width, label='Component Drain (IN)', color='#1f77b4')
-    bars2 = ax.bar(x + width/2,  [h2_final_val, o2_final_val], width, label='Final Mixer (OUT)', color='#2ca02c')
-    
-    # Max input for limit
-    max_val = max(max(in_vals), max([h2_final_val, o2_final_val]))
-    if max_val > 0:
-        ax.set_ylim(0, max_val * 1.5)
-        
-    ax.set_ylabel('Concentration (ppm)')
-    ax.set_title('Dissolved Gas Concentration (Source vs Discharge)')
-    ax.set_xticks(x)
-    ax.set_xticklabels(labels)
-    ax.legend()
-    ax.grid(axis='y', linestyle='--', alpha=0.5)
-    
-    # Labels
-    def label_bars(bars):
-        for bar in bars:
-            h = bar.get_height()
-            if h > 0:
-                ax.annotate(f'{h:.4f}', xy=(bar.get_x() + bar.get_width()/2, h),
-                           xytext=(0, 3), textcoords='offset points', ha='center', fontsize=9)
-    
-    label_bars(bars1)
-    label_bars(bars2)
-    
-    # Efficiency Label
-    for i in range(2):
-        inn = in_vals[i]
-        out = [h2_final_val, o2_final_val][i]
-        if inn > 0:
-            eff = (inn - out) / inn
-            ax.annotate(f'Removal: {eff:.1%}', xy=(x[i], max(inn, out)), xytext=(0, 15),
-                       textcoords='offset points', ha='center', fontweight='bold', color='green')
-
-    return fig
     ax.legend()
     ax.grid(axis='y', linestyle='--', alpha=0.5)
     
@@ -2687,73 +2536,297 @@ def create_crossover_impurities_figure(df: pd.DataFrame, dpi: int = DPI_FAST, me
     
     return fig
 
+
+
 @log_graph_errors
-def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+def create_dissolved_gas_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
     """
-    plot_propriedades_linha_dreno: Mixed Drain Line Properties.
+    Dissolved Gas Concentration (Source vs Discharge).
     
-    Plots the properties of the aggregated drain stream (after collection):
-    - Mass Flow (Top)
-    - Temperature (Middle)
-    - Pressure (Bottom)
-    
-    Target Component: 'Drain_Collector' (WaterMixer)
+    Compares average concentration at source separations (e.g. KODs) vs final Mixer.
     """
-    fig = Figure(figsize=(10, 10), dpi=dpi, constrained_layout=True)
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
     
-    # 1. Collect Data using helper
-    mass_data = _find_component_columns(df, 'Drain_Collector', 'outlet_mass_flow_kg_h')
-    temp_data = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_c')
-    pres_data = _find_component_columns(df, 'Drain_Collector', 'outlet_pressure_kpa')
+    # Check for gas data
+    gas_cols = [c for c in df.columns if 'dissolved_gas_ppm' in c]
+    if not gas_cols:
+         pass
+
+    # RE-EVALUATION:
+    # Use simpler approach matching typical data availability.
+    # Group By GASEOUS SPECIES (H2 vs O2).
     
-    # Also try finding by Drain_Mixer
-    if not mass_data:
-         mass_data = _find_component_columns(df, 'Drain_Mixer', 'outlet_mass_flow_kg_h')
-         temp_data = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_c')
-         pres_data = _find_component_columns(df, 'Drain_Mixer', 'outlet_pressure_kpa')
-         
-    if not mass_data or not temp_data:
-        ax = fig.add_subplot(111)
-        logger.warning("No aggregated drain data found.")
-        ax.text(0.5, 0.5, 'No aggregated drain data found.\nEnsure "Drain_Collector" (WaterMixer) exists and has flow.',
-                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
-        ax.set_title('Drain Line Properties')
-        return fig
+    # H2 Data
+    # If explicit components given, try to categorize them
+    if components:
+        h2_sources = [c for c in df.columns if any(x in c for x in components) and 'H2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
+        h2_mixer = [c for c in df.columns if any(x in c for x in components) and 'H2' in c and 'dissolved' in c and 'Mixer' in c]
+    else:
+        h2_sources = [c for c in df.columns if 'H2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
+        h2_mixer = [c for c in df.columns if 'H2' in c and 'dissolved' in c and 'Mixer' in c]
+
+    h2_in_val = df[h2_sources].max(axis=1).mean() if h2_sources else 0.0 # Use max conc source?
+    h2_final_val = df[h2_mixer[0]].mean() if h2_mixer else 0.0
     
+    # O2 Data
+    if components:
+        o2_sources = [c for c in df.columns if any(x in c for x in components) and 'O2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
+        o2_mixer = [c for c in df.columns if any(x in c for x in components) and 'O2' in c and 'dissolved' in c and 'Mixer' in c]
+    else:
+        o2_sources = [c for c in df.columns if 'O2' in c and 'dissolved_gas_ppm' in c and 'Mixer' not in c]
+        o2_mixer = [c for c in df.columns if 'O2' in c and 'dissolved' in c and 'Mixer' in c]
+
+    o2_in_val = df[o2_sources].max(axis=1).mean() if o2_sources else 0.0
+    o2_final_val = df[o2_mixer[0]].mean() if o2_mixer else 0.0
+    
+    # Assemble Plot Data
+    labels = ['H2 Dissolved', 'O2 Dissolved']
+    in_vals = [h2_in_val, o2_in_val]
+
+    # Plot Separator (IN) vs Mixer (OUT).
+    
+    x = np.arange(len(labels))
+    width = 0.35
+    
+    bars1 = ax.bar(x - width/2, in_vals, width, label='Component Drain (IN)', color='#1f77b4')
+    bars2 = ax.bar(x + width/2,  [h2_final_val, o2_final_val], width, label='Final Mixer (OUT)', color='#2ca02c')
+    
+    # Max input for limit
+    max_val = max(max(in_vals), max([h2_final_val, o2_final_val]))
+    if max_val > 0:
+        ax.set_ylim(0, max_val * 1.5)
+        
+    ax.set_ylabel('Concentration (ppm)')
+    ax.set_title('Dissolved Gas Concentration (Source vs Discharge)')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.legend()
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    
+    # Labels
+    def label_bars(bars):
+        for bar in bars:
+            h = bar.get_height()
+            if h > 0:
+                ax.annotate(f'{h:.4f}', xy=(bar.get_x() + bar.get_width()/2, h),
+                           xytext=(0, 3), textcoords='offset points', ha='center', fontsize=9)
+    
+    label_bars(bars1)
+    label_bars(bars2)
+    
+    # Efficiency Label
+    for i in range(2):
+        inn = in_vals[i]
+        out = [h2_final_val, o2_final_val][i]
+        if inn > 0:
+            eff = (inn - out) / inn
+            ax.annotate(f'Removal: {eff:.1%}', xy=(x[i], max(inn, out)), xytext=(0, 15),
+                       textcoords='offset points', ha='center', fontweight='bold', color='green')
+
+    return fig
+
+@log_graph_errors
+def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
+    """
+    plot_concentracao_linha_dreno: Dissolved Gas Tracking.
+    
+    Plots the concentration of dissolved gases (ppm) in the aggregated drain/mixer line.
+    """
+    fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
+    
+    # 1. Collect Data
+    if components:
+        # Use provided ID (likely one mixer)
+        ppm_data = {}
+        for cid in components:
+            found = _find_component_columns(df, cid, 'dissolved_gas_ppm')
+            ppm_data.update(found)
+    else:
+        # Look for Drain_Collector or fallback to Drain_Mixer
+        ppm_data = _find_component_columns(df, 'Drain_Collector', 'dissolved_gas_ppm')
+        if not ppm_data:
+            ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
+            
+    if not ppm_data:
+        # Fallbacks
+        ppm_data = _find_component_columns(df, 'WaterMixer', 'dissolved_gas_ppm')
+        
     x = df['minute'] if 'minute' in df.columns else df.index
     
-    # 2. Plotting (3 Panels)
-    ax1 = fig.add_subplot(311)
-    ax2 = fig.add_subplot(312, sharex=ax1)
-    ax3 = fig.add_subplot(313, sharex=ax1)
+    ax = fig.add_subplot(111)
     
-    # Mass Flow
-    for cid, data in mass_data.items():
-        if data.any():
-            ax1.plot(downsample_for_plot(x), downsample_for_plot(data), label=f"{cid} Flow", color='blue')
-    ax1.set_ylabel('Mass Flow (kg/h)')
-    ax1.set_title('Aggregated Drain Flow')
-    ax1.grid(True, linestyle='--', alpha=0.5)
-    ax1.legend()
-    
-    # Temperature
-    for cid, data in temp_data.items():
-        if data.any():
-            ax2.plot(downsample_for_plot(x), downsample_for_plot(data), label=f"{cid} Temp", color='red')
-    ax2.set_ylabel('Temperature (°C)')
-    ax2.grid(True, linestyle='--', alpha=0.5)
-    
-    # Pressure
-    for cid, data in pres_data.items():
-        if data.any():
-            # Convert kPa to bar
-            data_bar = data / 100.0
-            ax3.plot(downsample_for_plot(x), downsample_for_plot(data_bar), label=f"{cid} Pressure", color='green')
-    ax3.set_ylabel('Pressure (bar)')
-    ax3.set_xlabel('Time (Minutes)')
-    ax3.grid(True, linestyle='--', alpha=0.5)
-    
+    if not ppm_data:
+        logger.warning("No dissolved gas PPM data found in Drain_Collector.")
+        ax.text(0.5, 0.5, 'No dissolved gas PPM data found in Drain_Collector.',
+                ha='center', va='center', transform=ax.transAxes, color='gray')
+    else:
+        for cid, data in ppm_data.items():
+            if data.any():
+                ax.plot(downsample_for_plot(x), downsample_for_plot(data), label=f"{cid} Dissolved Gas")
+                
+        ax.set_ylabel('Concentration (ppm)')
+        ax.set_xlabel('Time (Minutes)')
+        ax.set_title('Dissolved Gas in Aggregated Drain')
+        ax.legend()
+        ax.grid(True, linestyle='--', alpha=0.5)
+        
     return fig
+
+@log_graph_errors
+def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
+    """
+    Drain Line Properties (T, P, Flow, Dissolved Gas).
+    
+    Compares aggregated 'IN' state (sum/avg of upstream drains) vs 'OUT' state (Mixer).
+    Filters for H2 and O2 lines based on ID naming or explicit configuration.
+    """
+    fig = Figure(figsize=(14, 12), dpi=dpi, constrained_layout=True)
+    
+    # 1. Identify Drain Lines (Mixers)
+    if components:
+        # Use provided components as the Mixers
+        mixers = components
+    else:
+        # Fallback to auto-discovery
+        mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
+        mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
+    
+    if not mixers:
+        fig.text(0.5, 0.5, 'No DrainRecorderMixer data found', ha='center')
+        return fig
+
+    # 2. Collect Data for each Line
+    lines_data = {} # {line_name: {'IN': dict, 'OUT': dict}}
+    
+    for mix_id in mixers:
+        # Determine Line Type (H2 or O2)
+        line_type = 'H2' if 'H2' in mix_id else ('O2' if 'O2' in mix_id else 'Unknown')
+        
+        # --- OUT State (Mixer) ---
+        out_flow = df[f"{mix_id}_outlet_mass_flow_kg_h"].mean()
+        
+        # Handle naming mismatch (Legacy vs Engine)
+        if f"{mix_id}_outlet_temp_c" in df.columns:
+            out_temp = df[f"{mix_id}_outlet_temp_c"].mean()
+        else:
+             out_temp = df.get(f"{mix_id}_outlet_temperature_c", pd.Series([25.0])).mean()
+
+        # Pressure: Engine uses bar, Legacy used kPa
+        if f"{mix_id}_outlet_pressure_bar" in df.columns:
+             out_pres_bar = df[f"{mix_id}_outlet_pressure_bar"].mean()
+        else:
+             out_pres_bar = df.get(f"{mix_id}_outlet_pressure_kpa", pd.Series([100.0])).mean() / 100.0
+
+        out_gas = df[f"{mix_id}_dissolved_gas_ppm"].mean()
+        
+        # --- IN State (Aggregation) ---
+        # Find upstream components belonging to this line type
+        # Heuristic: Components matching the line_type string
+        upstream_flow = 0.0
+        upstream_enthalpy_product = 0.0 # Flow * T (Approx for mixing T)
+        upstream_gas_product = 0.0 # Flow * Conc
+        upstream_pressures = []
+        
+        # List of potential upstream component types and their flow columns
+        # (CID_Suffix, Flow_Col_Suffix, Temp_K_Suffix, Pres_Bar_Suffix)
+        
+        # We need to scan all columns to find matching components
+        # Helper to scan:
+        def scan_components(comp_marker, flow_suffix, temp_k_suffix='_drain_temp_k', pres_bar_suffix='_drain_pressure_bar'):
+             nonlocal upstream_flow, upstream_enthalpy_product, upstream_gas_product, upstream_pressures
+             cols = [c for c in df.columns if flow_suffix in c and comp_marker in c]
+             for c in cols:
+                 cid = c.replace(flow_suffix, '')
+                 # Filter by line type 
+                 if line_type not in cid: continue
+                 
+                 flow = df[c].mean()
+                 if flow < 0.001: continue
+                 
+                 # Temp (K -> C)
+                 t_k = df.get(f"{cid}{temp_k_suffix}", pd.Series([298.15])).mean()
+                 t_c = t_k - 273.15
+                 
+                 # Pressure
+                 p_bar = df.get(f"{cid}{pres_bar_suffix}", pd.Series([1.0])).mean()
+                 
+                 # Dissolved Gas (ppm)
+                 # Note: Coalescer/KOD track 'dissolved_gas_ppm' or 'outlet_o2_ppm_mol'? 
+                 # 'dissolved_gas_ppm' is tracked for KOD/Coalescer/Mixer
+                 gas_ppm = df.get(f"{cid}_dissolved_gas_ppm", pd.Series([0.0])).mean()
+                 
+                 upstream_flow += flow
+                 upstream_enthalpy_product += flow * t_c
+                 upstream_gas_product += flow * gas_ppm
+                 upstream_pressures.append(p_bar)
+
+        # Scan KODs
+        scan_components('KOD', '_water_removed_kg_h')
+        # Scan Coalescers
+        scan_components('Coalescer', '_drain_flow_kg_h')
+        # Scan Cyclones
+        scan_components('Cyclone', '_water_removed_kg_h') # Using water_removed based on verify
+        
+        # Calculate Aggregated IN
+        if upstream_flow > 0:
+            in_temp = upstream_enthalpy_product / upstream_flow
+            in_gas = upstream_gas_product / upstream_flow
+            in_pres = np.mean(upstream_pressures) if upstream_pressures else 1.0
+        else:
+            # Fallback if no upstream found (e.g. simple test)
+            in_temp, in_gas, in_pres = out_temp, out_gas, out_pres_bar
+
+        lines_data[line_type] = {
+            'IN': {'Flow': upstream_flow, 'Temp': in_temp, 'Pres': in_pres, 'Gas': in_gas},
+            'OUT': {'Flow': out_flow, 'Temp': out_temp, 'Pres': out_pres_bar, 'Gas': out_gas}
+        }
+
+    # 3. Plotting
+    # 4 Rows (Props) x 2 Columns (H2, O2)
+    gs = fig.add_gridspec(4, 2)
+    props = [
+        ('Flow', 'Vazão (kg/h)', 'tab:green'),
+        ('Temp', 'Temperatura (°C)', 'tab:orange'),
+        ('Pres', 'Pressão (bar)', 'tab:purple'),
+        ('Gas', 'Gás Dissolvido (ppm)', 'tab:brown')
+    ]
+    
+    x_indices = [0, 1]
+    x_labels = ['Agregação IN', 'Mixer/Tank OUT']
+    
+    for col_idx, line_key in enumerate(['H2', 'O2']):
+        data = lines_data.get(line_key)
+        
+        for row_idx, (prop_key, prop_label, color) in enumerate(props):
+            ax = fig.add_subplot(gs[row_idx, col_idx])
+            
+            if data:
+                vals = [data['IN'][prop_key], data['OUT'][prop_key]]
+                ax.plot(x_indices, vals, marker='o', linestyle='-', color=color, linewidth=2, markersize=8)
+                
+                # Value labels
+                for i, v in zip(x_indices, vals):
+                     ax.text(i, v, f"{v:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold', color=color)
+                     
+                # Limits padding
+                min_v, max_v = min(vals), max(vals)
+                margin = (max_v - min_v) * 0.2 if max_v != min_v else 1.0
+                ax.set_ylim(min_v - margin, max_v + margin)
+            else:
+                ax.text(0.5, 0.5, 'No Data', ha='center')
+
+            if row_idx == 0:
+                ax.set_title(f"Fluxo {line_key}")
+            
+            ax.set_ylabel(prop_label)
+            ax.set_xticks(x_indices)
+            ax.set_xticklabels(x_labels)
+            ax.grid(True, linestyle='--', alpha=0.5)
+
+    fig.suptitle('Propriedades da Linha de Drenos (Média)', fontsize=14)
+    return fig
+
 
 @log_graph_errors
 def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
@@ -2837,19 +2910,26 @@ def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) 
     return fig
 
 @log_graph_errors
-def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
     """
     plot_concentracao_linha_dreno: Dissolved Gas Tracking.
     
-    Plots the concentration of dissolved gases (ppm) in the aggregated drain line.
+    Plots the concentration of dissolved gases (ppm) in the aggregated drain/mixer line.
     """
     fig = Figure(figsize=(10, 6), dpi=dpi, constrained_layout=True)
     
     # 1. Collect Data
-    # Look for Drain_Collector or fallback to Drain_Mixer
-    ppm_data = _find_component_columns(df, 'Drain_Collector', 'dissolved_gas_ppm')
-    if not ppm_data:
-        ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
+    if components:
+        # Use provided ID (likely one mixer)
+        ppm_data = {}
+        for cid in components:
+            found = _find_component_columns(df, cid, 'dissolved_gas_ppm')
+            ppm_data.update(found)
+    else:
+        # Look for Drain_Collector or fallback to Drain_Mixer
+        ppm_data = _find_component_columns(df, 'Drain_Collector', 'dissolved_gas_ppm')
+        if not ppm_data:
+            ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
     
     if not ppm_data:
         # Fallbacks
@@ -3106,8 +3186,9 @@ def create_coalescer_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) ->
     
     # Panel 1: Pressure Drop
     for comp_id, data in delta_p_data.items():
+        # Remove hardcoded color to allow automatic distinct colors
         ax1.plot(downsample_for_plot(x), downsample_for_plot(data), 
-                 label=comp_id, linewidth=1.5, color=COLORS.get('coalescer', 'green'))
+                 label=comp_id, linewidth=1.5)
     ax1.set_ylabel('Pressure Drop (bar)')
     ax1.set_title('Coalescer Pressure Drop')
     ax1.legend(loc='upper right', fontsize=8)
@@ -3115,8 +3196,9 @@ def create_coalescer_separation_figure(df: pd.DataFrame, dpi: int = DPI_FAST) ->
     
     # Panel 2: Drain Flow
     for comp_id, data in drain_data.items():
-        ax2.fill_between(downsample_for_plot(x), 0, downsample_for_plot(data), 
-                         label=comp_id, alpha=0.5)
+        # Use plot instead of fill_between to avoid obscuring other lines
+        ax2.plot(downsample_for_plot(x), downsample_for_plot(data), 
+                 label=comp_id, linewidth=1.5)
     ax2.set_ylabel('Liquid Drain (kg/h)')
     ax2.set_xlabel('Time (Minutes)')
     ax2.set_title('Coalescer Liquid Removal')

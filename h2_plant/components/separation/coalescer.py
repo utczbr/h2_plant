@@ -144,6 +144,10 @@ class Coalescer(Component):
         self._last_dissolved_gas_in_kg_h: float = 0.0
         self._last_dissolved_gas_out_kg_h: float = 0.0
 
+        # EXPOSED FOR HISTORY RECORDING (engine_dispatch.py)
+        self.drain_flow_kg_h: float = 0.0
+        self.delta_p_bar: float = 0.0
+
     def initialize(self, dt: float, registry: Any) -> None:
         """
         Prepare the component for simulation execution.
@@ -438,6 +442,10 @@ class Coalescer(Component):
         self._step_gas_dissolved = m_dot_gas_dissolved
         self._last_dissolved_gas_out_kg_h = m_dot_gas_dissolved  # Track OUT for mass balance
 
+        # Update exposed attributes for recorder
+        self.drain_flow_kg_h = self.drain_stream.mass_flow_kg_h
+        self.delta_p_bar = self.current_delta_p_bar
+
         return in_stream.mass_flow_kg_h
     
     def _reset_outputs(self) -> None:
@@ -448,6 +456,9 @@ class Coalescer(Component):
         self.current_power_loss_w = 0.0
         self._step_liq_removed = 0.0
         self._step_gas_dissolved = 0.0
+        # Reset exposed attributes
+        self.drain_flow_kg_h = 0.0
+        self.delta_p_bar = 0.0
 
     def step(self, t: float) -> None:
         """

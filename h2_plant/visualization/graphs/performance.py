@@ -44,7 +44,7 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
 
 
 def plot_scatter(df: pd.DataFrame, component_ids: list, title: str, config: dict) -> Figure:
-    """Generates scatter plots (e.g., Price vs Power)."""
+    """Generates scatter plots with binned average trend line (e.g., Price vs Power)."""
     x_key = config.get('x_axis', 'spot_price')
     y_key = config.get('y_axis', 'total_power')
     
@@ -59,11 +59,43 @@ def plot_scatter(df: pd.DataFrame, component_ids: list, title: str, config: dict
         y_data = df.get(y_key, pd.Series([]))
 
     if x_data is not None and len(x_data) > 0 and len(y_data) > 0:
-        # Downsample if too many points
-        stride = max(1, len(x_data) // 2000)
-        ax.scatter(x_data.iloc[::stride], y_data.iloc[::stride], alpha=0.5, s=10, c='tab:blue')
+        # 1. Raw Scatter (Background context)
+        # Downsample if too many points for the scatter background
+        stride = max(1, len(x_data) // 5000)
+        ax.scatter(x_data.iloc[::stride], y_data.iloc[::stride], 
+                  alpha=0.15, s=15, c='silver', label='Raw Data') # Lighter, more transparent
+
+        # 2. Binned Average (Trend Line)
+        try:
+            # Create bins for X axis (e.g., Price)
+            # Use ~20 bins spanning the range
+            x_min, x_max = x_data.min(), x_data.max()
+            if x_max > x_min:
+                bins = np.linspace(x_min, x_max, 21) # 20 intervals
+                # Cut data into bins
+                df_temp = pd.DataFrame({'x': x_data, 'y': y_data})
+                df_temp['bin'] = pd.cut(df_temp['x'], bins)
+                
+                # Calculate mean per bin
+                binned_stats = df_temp.groupby('bin', observed=True)['y'].agg(['mean', 'count']).reset_index()
+                # Calculate bin centers for plotting
+                binned_stats['x_center'] = binned_stats['bin'].apply(lambda b: b.mid).astype(float)
+                
+                # Filter empty bins
+                binned_stats = binned_stats[binned_stats['count'] > 0]
+                
+                # Plot Trend Line
+                ax.plot(binned_stats['x_center'], binned_stats['mean'], 
+                       color='tab:blue', linewidth=2.5, marker='o', markersize=6, 
+                       label='Average Trend')
+        except Exception as e:
+            logger.warning(f"Failed to calculate binned average for scatter: {e}")
+            # Fallback to simple scatter if binning fails
+            pass
+
         ax.set_xlabel(x_key.replace('_', ' ').title())
         ax.set_ylabel(y_key.replace('_', ' ').title())
+        ax.legend()
     else:
         ax.text(0.5, 0.5, 'No data available', ha='center', va='center', transform=ax.transAxes)
         
