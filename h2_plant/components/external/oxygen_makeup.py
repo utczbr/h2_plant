@@ -9,11 +9,11 @@ Topology Placement:
 Typically placed *after* a mixer that combines various production sources (e.g. SOEC + PEM).
 This ensures the final output stream meets the required demand (e.g. for ATR).
 
-Logic:
+Logic (Updated v2: Min/Max Limits):
 1. Receive `inlet_stream` (Arriving O2).
-2. Calculate `makeup_mass = max(0, target_flow - arriving_flow)`.
-3. Generate makeup stream at configured P/T.
-4. Mix streams (Enthalpy Balance) -> `outlet_stream`.
+2. If arriving_flow < min_target: Inject makeup. Output = min_target.
+3. If min_target <= arriving_flow <= max_limit: Pass through. Output = arriving_flow.
+4. If arriving_flow > max_limit: Vent excess. Output = max_limit.
 """
 
 from typing import Dict, Any, Optional
@@ -23,23 +23,39 @@ from h2_plant.core.constants import GasConstants
 
 class OxygenMakeupNode(Component):
     """
-    Inline compensatory oxygen supply.
+    Inline compensatory oxygen supply with min/max limiting.
     
     Guarantees a minimum output flow rate by topping up the inlet flow with
-    supplemental oxygen from an infinite virtual source.
+    supplemental oxygen from an infinite virtual source. Also caps output
+    at a maximum limit, venting surplus production.
     """
     
     def __init__(
         self,
         component_id: str,
-        target_flow_kg_h: float,
+        target_flow_kg_h: float = None,  # Legacy: alias for min_target
+        min_target_flow_kg_h: float = None,
+        max_limit_flow_kg_h: float = None,
         supply_pressure_bar: float = 15.0,
         supply_temperature_c: float = 25.0,
         supply_purity: float = 0.995
     ):
         super().__init__()
         self.component_id = component_id
-        self.target_flow_kg_h = target_flow_kg_h
+        
+        # Resolve min/max from legacy or new params
+        if min_target_flow_kg_h is not None:
+            self.min_target_flow_kg_h = min_target_flow_kg_h
+        elif target_flow_kg_h is not None:
+            self.min_target_flow_kg_h = target_flow_kg_h
+        else:
+            self.min_target_flow_kg_h = 0.0  # No minimum guarantee
+        
+        if max_limit_flow_kg_h is not None:
+            self.max_limit_flow_kg_h = max_limit_flow_kg_h
+        else:
+            # Default: same as min (original behavior: clamp to target)
+            self.max_limit_flow_kg_h = self.min_target_flow_kg_h
         
         # Supply Conditions
         self.supply_pressure_pa = supply_pressure_bar * 1e5
@@ -50,9 +66,10 @@ class OxygenMakeupNode(Component):
         self.inlet_stream: Optional[Stream] = None
         self.outlet_stream: Optional[Stream] = None
         self.makeup_flow_kg_h: float = 0.0
+        self.vented_flow_kg_h: float = 0.0  # Track discarded O2
+        self._last_output_flow_kg_h: float = 0.0  # Exposed for downstream sync
         
         # Constants
-        # Use average Cp for mixing approximation (O2 dominated)
         self.CP_O2 = GasConstants.CP_O2_AVG 
 
     def initialize(self, dt: float, registry: Any) -> None:
@@ -71,57 +88,51 @@ class OxygenMakeupNode(Component):
         # 1. Measure Arriving Flow
         arriving_flow = 0.0
         arriving_temp = self.supply_temp_k
-        arriving_h = 0.0
         
         if self.inlet_stream:
             arriving_flow = self.inlet_stream.mass_flow_kg_h
             arriving_temp = self.inlet_stream.temperature_k
             
-        # 2. Calculate Makeup (Deficiency)
-        if arriving_flow >= self.target_flow_kg_h:
-            self.makeup_flow_kg_h = 0.0
-            # Clamp to target flow (Implied Venting of Excess)
-            # This ensures downstream units receive exactly the target supply
-            total_out = self.target_flow_kg_h
+        # 2. Apply Min/Max Logic
+        self.makeup_flow_kg_h = 0.0
+        self.vented_flow_kg_h = 0.0
+        
+        if arriving_flow < self.min_target_flow_kg_h:
+            # Below minimum: inject makeup
+            self.makeup_flow_kg_h = self.min_target_flow_kg_h - arriving_flow
+            total_out = self.min_target_flow_kg_h
+        elif arriving_flow > self.max_limit_flow_kg_h:
+            # Above maximum: vent excess
+            self.vented_flow_kg_h = arriving_flow - self.max_limit_flow_kg_h
+            total_out = self.max_limit_flow_kg_h
         else:
-            self.makeup_flow_kg_h = self.target_flow_kg_h - arriving_flow
-            total_out = self.target_flow_kg_h
+            # Within band: pass through
+            total_out = arriving_flow
+            
+        self._last_output_flow_kg_h = total_out
             
         if total_out <= 1e-9:
             self.outlet_stream = Stream(0.0)
             return
 
         # 3. Mixing Calculation (Enthalpy Balance)
-        # Determine mass contribution from each source
         if self.makeup_flow_kg_h > 0:
             mass_from_inlet = arriving_flow
         else:
-            mass_from_inlet = total_out # Only a portion of inlet is used
+            mass_from_inlet = total_out
             
         T_mix = ((mass_from_inlet * arriving_temp) + (self.makeup_flow_kg_h * self.supply_temp_k)) / total_out
-        
-        # Pressure:
-        # The node acts as a manifold. If supply is higher pressure, it dominates?
-        # Simplified: Output pressure = Supply Pressure (assuming regulated supply)
-        # OR Output pressure = Inlet Pressure (if pass through?)
-        # Let's assume the node regulates to `supply_pressure_bar` if makeup is active,
-        # or matches inlet if inlet is sufficient?
-        # For robustness: use supply_pressure_pa as the regulated downstream setpoint
         P_out = self.supply_pressure_pa
         
-        # Composition:
-        # Mix composition weighted by mass
-        # Supply Comp
-        supply_comp = {'O2': self.supply_purity, 'H2O': 1.0 - self.supply_purity} # Simplified impurity
-        
-        # Inlet Comp
+        # Composition
+        supply_comp = {'O2': self.supply_purity, 'H2O': 1.0 - self.supply_purity}
         inlet_comp = self.inlet_stream.composition if self.inlet_stream else {'O2': 1.0}
         
         final_comp = {}
         all_species = set(inlet_comp.keys()) | set(supply_comp.keys())
         
         for s in all_species:
-            m_s_in = arriving_flow * inlet_comp.get(s, 0.0)
+            m_s_in = min(mass_from_inlet, arriving_flow) * inlet_comp.get(s, 0.0)
             m_s_mk = self.makeup_flow_kg_h * supply_comp.get(s, 0.0)
             final_comp[s] = (m_s_in + m_s_mk) / total_out
             
@@ -140,12 +151,19 @@ class OxygenMakeupNode(Component):
         if port_name in ['outlet', 'o2_out']:
             return self.outlet_stream
         return None
+    
+    def get_output_mass_flow(self) -> float:
+        """Return the last computed output mass flow (kg/h) for downstream sync."""
+        return self._last_output_flow_kg_h
 
     def get_state(self) -> Dict[str, Any]:
         return {
             **super().get_state(),
-            'target_flow_kg_h': self.target_flow_kg_h,
+            'min_target_flow_kg_h': self.min_target_flow_kg_h,
+            'max_limit_flow_kg_h': self.max_limit_flow_kg_h,
             'makeup_flow_kg_h': self.makeup_flow_kg_h,
+            'vented_flow_kg_h': self.vented_flow_kg_h,
+            'output_flow_kg_h': self._last_output_flow_kg_h,
             'arriving_flow_kg_h': self.outlet_stream.mass_flow_kg_h - self.makeup_flow_kg_h if self.outlet_stream else 0.0
         }
 
@@ -154,3 +172,4 @@ class OxygenMakeupNode(Component):
             'inlet': {'type': 'input', 'resource_type': 'oxygen', 'units': 'kg/h'},
             'outlet': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'}
         }
+

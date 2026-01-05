@@ -66,7 +66,11 @@ class BiogasSource(Component):
         max_flow_rate_kg_h: float = 1000.0,
         methane_content: float = 0.60,
         pressure_bar: float = 5.0,
-        temperature_c: float = 25.0
+        temperature_c: float = 25.0,
+        # Proportional Control (Optional)
+        reference_component_id: str = None,
+        reference_ratio: float = None,
+        reference_max_flow_kg_h: float = None  # Max O2 flow for ratio calculation
     ):
         """
         Initialize the biogas source.
@@ -80,6 +84,13 @@ class BiogasSource(Component):
             pressure_bar (float): Supply pressure in bar gauge. Must exceed
                 ATR reactor pressure for flow. Default: 5.0.
             temperature_c (float): Supply temperature in Celsius. Default: 25.0.
+            reference_component_id (str): Optional. ID of the component to track
+                for proportional control (e.g., 'O2_Backup_Supply').
+            reference_ratio (float): Optional. Scale factor for output flow.
+                output_flow = reference_flow * reference_ratio.
+            reference_max_flow_kg_h (float): Optional. If reference_ratio is not
+                provided but this is, ratio is auto-calculated as
+                max_flow_rate_kg_h / reference_max_flow_kg_h.
         """
         super().__init__()
         self.component_id = component_id
@@ -87,6 +98,17 @@ class BiogasSource(Component):
         self.methane_content = methane_content
         self.pressure_bar = pressure_bar
         self.temperature_k = temperature_c + 273.15
+        
+        # Proportional control settings
+        self.reference_component_id = reference_component_id
+        self._reference_component = None  # Resolved at initialize
+        
+        if reference_ratio is not None:
+            self.reference_ratio = reference_ratio
+        elif reference_max_flow_kg_h is not None and reference_max_flow_kg_h > 0:
+            self.reference_ratio = max_flow_rate_kg_h / reference_max_flow_kg_h
+        else:
+            self.reference_ratio = None  # No proportional control
 
         # State variables
         self.biogas_output_kg_h = 0.0
@@ -104,6 +126,10 @@ class BiogasSource(Component):
         """
         super().initialize(dt, registry)
         
+        # Resolve reference component if proportional control is enabled
+        if self.reference_component_id and registry:
+            self._reference_component = registry.get(self.reference_component_id)
+        
         # Pre-allocate output stream to avoid object creation in inner loops
         self._output_stream = Stream(
             mass_flow_kg_h=0.0,
@@ -118,16 +144,23 @@ class BiogasSource(Component):
         """
         Execute one simulation timestep.
 
-        Calculates biogas output at a fixed 50% utilization of maximum
-        capacity. This represents steady-state digester operation.
+        If proportional control is enabled, output flow is scaled based on the
+        reference component's output. Otherwise, outputs at max capacity.
 
         Args:
             t (float): Current simulation time in hours.
         """
         super().step(t)
 
-        # Fixed utilization rate (stub for demand-driven logic) - Updated to 100%
-        self.biogas_output_kg_h = self.max_flow_rate_kg_h * 1.0
+        # Determine output flow
+        if self._reference_component and self.reference_ratio:
+            # Proportional control active
+            ref_flow = getattr(self._reference_component, 'get_output_mass_flow', lambda: 0.0)()
+            self.biogas_output_kg_h = min(ref_flow * self.reference_ratio, self.max_flow_rate_kg_h)
+        else:
+            # Fixed utilization rate (100%)
+            self.biogas_output_kg_h = self.max_flow_rate_kg_h
+            
         self.cumulative_biogas_kg += self.biogas_output_kg_h * self.dt
         
         # Update cached stream

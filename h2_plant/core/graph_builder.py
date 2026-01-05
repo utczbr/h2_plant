@@ -16,6 +16,7 @@ from h2_plant.components.control.valve import ThrottlingValve as Valve
 from h2_plant.components.external.biogas_source import BiogasSource
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 from h2_plant.components.water.makeup_mixer import MakeupMixer
+from h2_plant.components.atr.atr_makeup_mixer import ProportionalMakeupMixer
 from h2_plant.components.external.oxygen_makeup import OxygenMakeupNode
 from h2_plant.components.water.water_balance_tracker import WaterBalanceTracker
 from h2_plant.components.thermal.interchanger import Interchanger
@@ -398,6 +399,17 @@ class PlantGraphBuilder:
                 target_flow_kg_h=float(node.params.get("target_flow_kg_h", 100.0)),
                 makeup_temp_c=float(node.params.get("makeup_temp_c", 5.0)),
                 makeup_pressure_bar=float(node.params.get("makeup_pressure_bar", 1.0))
+            )
+
+        elif node.type == "ProportionalMakeupMixer":
+            return ProportionalMakeupMixer(
+                component_id=node.id,
+                max_flow_rate_kg_h=float(node.params.get("max_flow_rate_kg_h", 2331.95)),
+                makeup_temp_c=float(node.params.get("makeup_temp_c", 20.0)),
+                makeup_pressure_bar=float(node.params.get("makeup_pressure_bar", 15.0)),
+                reference_component_id=node.params.get("reference_component_id", None),
+                reference_ratio=node.params.get("reference_ratio", None),
+                reference_max_flow_kg_h=node.params.get("reference_max_flow_kg_h", None)
             )
 
         elif node.type == "Interchanger":

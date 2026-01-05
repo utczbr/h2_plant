@@ -193,6 +193,16 @@ def run_with_dispatch_strategy(
     )
     logger.info(f"Markdown report saved to: {report_path}")
 
+    # Export history to CSV
+    try:
+        import pandas as pd
+        csv_path = output_dir / "simulation_history.csv"
+        df_history = pd.DataFrame(history)
+        df_history.to_csv(csv_path, index=False)
+        logger.info(f"Simulation history exported to: {csv_path}")
+    except Exception as e:
+        logger.warning(f"Failed to export history CSV: {e}")
+
     logger.info("Simulation completed successfully")
     
     # Return history and metadata for graph generation (if called externally)

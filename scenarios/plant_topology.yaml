@@ -32,8 +32,8 @@ nodes:
         target_port: "hot_in"
         resource_type: "stream"
       - source_port: "o2_out"
-        target_name: "SOEC_O2_Drycooler_1"
-        target_port: "fluid_in"
+        target_name: "SOEC_O2_Interchanger_1"
+        target_port: "hot_in"
         resource_type: "stream"
 
   # 2. Heat Recovery (Interchanger)
@@ -47,6 +47,10 @@ nodes:
       - source_port: "hot_out"
         target_name: "SOEC_H2_DryCooler_1"
         target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "cold_out"
+        target_name: "SOEC_Interchanger_Drain_Combiner"
+        target_port: "inlet_1"
         resource_type: "stream"
 
 
@@ -401,8 +405,27 @@ nodes:
 
 
 
+
+
   # === New O2 Compression Train (4 Stages) ===
   
+  # Heat Recovery (O2 side)
+  - id: "SOEC_O2_Interchanger_1"
+    type: "Interchanger"
+    params:
+      min_approach_temp_k: 10.0
+      target_cold_out_temp_c: 80.0  # Lower than H2 side
+      process_step: 21
+    connections:
+      - source_port: "hot_out"
+        target_name: "SOEC_O2_Drycooler_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "cold_out"
+        target_name: "SOEC_Interchanger_Drain_Combiner"
+        target_port: "inlet_2"
+        resource_type: "stream"
+
   # Stage 1
   - id: "SOEC_O2_Drycooler_1"
     type: "DryCooler"
@@ -513,6 +536,45 @@ nodes:
       source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2"]
     connections:
       - source_port: "outlet"
+        target_name: "SOEC_Drain_Pump"
+        target_port: "water_in"
+        resource_type: "stream"
+  
+  - id: "SOEC_Drain_Pump"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "SOEC_Drain_Pump"
+      capacity_kg_h: 3600.0
+      target_pressure_pa: 100000.0  # 1 bar
+    connections:
+      - source_port: "water_out"
+        target_name: "SOEC_Interchanger_Splitter"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # Split drain flow: 62.9% to H2 Interchanger, 37.1% to O2 Interchanger
+  - id: "SOEC_Interchanger_Splitter"
+    type: "StreamSplitter"
+    params:
+      split_ratio: 0.629  # Fraction to Outlet 1 (H2 Interchanger cold side)
+    connections:
+      - source_port: "outlet_1"
+        target_name: "SOEC_H2_Interchanger_1"
+        target_port: "cold_in"
+        resource_type: "stream"
+      - source_port: "outlet_2"
+        target_name: "SOEC_O2_Interchanger_1"
+        target_port: "cold_in"
+        resource_type: "stream"
+
+  # Recombine interchanger cold outlets before makeup mixer
+  - id: "SOEC_Interchanger_Drain_Combiner"
+    type: "Mixer"
+    params:
+      volume_m3: 0.5
+      continuous_flow: true
+    connections:
+      - source_port: "outlet"
         target_name: "SOEC_Makeup_Mixer"
         target_port: "drain_in"
         resource_type: "stream"
@@ -550,18 +612,18 @@ nodes:
   # Water Out: To Boiler
   # (Syngas connections are handled in ATR section)
 
-  - id: "ATR_H2O_Boiler"
+  - id: "SOEC_Steam_Boiler"
     type: "ElectricBoiler"
     params:
       max_power_kw: 3000.0
       target_temp_c: 105.0 # Ensure 100% Steam at ~1 bar
     connections:
       - source_port: "fluid_out"
-        target_name: "ATR_H2O_Compressor_1"
+        target_name: "SOEC_Steam_Compressor_1"
         target_port: "inlet"
         resource_type: "stream"
 
-  - id: "ATR_H2O_Compressor_1"
+  - id: "SOEC_Steam_Compressor_1"
     type: "CompressorSingle"
     params:
       max_flow_kg_h: 4000.0
@@ -570,22 +632,22 @@ nodes:
       max_temp_c: 270.0
     connections:
       - source_port: "outlet"
-        target_name: "ATR_H2O_DryCooler"
+        target_name: "SOEC_Steam_Drycooler"
         target_port: "fluid_in"
         resource_type: "stream"
 
-  - id: "ATR_H2O_DryCooler"
+  - id: "SOEC_Steam_Drycooler"
     type: "DryCooler"
     params:
       target_temp_c: 140.0
       system_group: "SOEC_Steam_Loop"
     connections:
       - source_port: "fluid_out"
-        target_name: "ATR_H2O_Compressor_2"
+        target_name: "SOEC_Steam_Compressor_2"
         target_port: "inlet"
         resource_type: "stream"
       
-  - id: "ATR_H2O_Compressor_2"
+  - id: "SOEC_Steam_Compressor_2"
     type: "CompressorSingle"
     params:
       max_flow_kg_h: 4000.0
@@ -973,7 +1035,8 @@ nodes:
   - id: "O2_Backup_Supply"
     type: "OxygenMakeupNode"
     params:
-      target_flow_kg_h: 757.54 # Max O2 from regression
+      min_target_flow_kg_h: 0.0  # No minimum makeup required
+      max_limit_flow_kg_h: 757.54  # Vent excess above this
       supply_pressure_bar: 15.0
       supply_temperature_c: 25.0
       system_group: "O2_Header"
@@ -993,8 +1056,11 @@ nodes:
     params:
       pressure_bar: 3.0
       temperature_c: 25.0
-      max_flow_rate_kg_h: 1959.59 # Max Biogas from regression
+      max_flow_rate_kg_h: 1959.59  # Max Biogas from regression
       methane_content: 0.60
+      # Proportional control: sync to O2 flow
+      reference_component_id: "O2_Backup_Supply"
+      reference_max_flow_kg_h: 757.54  # Auto-calculates ratio
       system_group: "ATR_Unit"
       process_step: 1
     connections:
@@ -1122,11 +1188,14 @@ nodes:
         resource_type: "stream"
 
   - id: "ATR_Makeup_Mixer"
-    type: "MakeupMixer"
+    type: "ProportionalMakeupMixer"
     params:
-      target_flow_kg_h: 2331.95 # Max Steam from regression
+      max_flow_rate_kg_h: 2331.95  # Max Steam from regression
       makeup_pressure_bar: 15.0
       makeup_temp_c: 25.0
+      # Proportional control: sync to O2 flow
+      reference_component_id: "O2_Backup_Supply"
+      reference_max_flow_kg_h: 757.54  # Auto-calculates ratio
       system_group: "ATR_Water_Loop"
       process_step: 45
     connections:
@@ -1246,7 +1315,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "water_out"
-        target_name: "ATR_H2O_Boiler"
+        target_name: "SOEC_Steam_Boiler"
         target_port: "fluid_in"
         resource_type: "stream"
 

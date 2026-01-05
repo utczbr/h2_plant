@@ -76,6 +76,12 @@ def _get_topology_section(comp_id: str, comp_type: str) -> int:
     
     # Special Case: ATR Heat Recovery Loop components go to Section 1 (Feed)
     if "ATR_H2O_" in cid: return 1
+    if "SOEC_Steam_Loop_" in cid: return 1
+    if "SOEC_Steam_" in cid: return 1
+    
+    # Special Case: Interchanger drain loop components go to Section 1 (Feed)
+    if "SOEC_DRAIN_" in cid: return 1
+    if "SOEC_INTERCHANGER_" in cid: return 1
 
     # 0. ATR / WGS / Reformer (Highest Priority for this unit)
     if any(k in cid for k in ["ATR", "WGS", "SHIFT", "REFORM", "BIOGAS"]): return 8
