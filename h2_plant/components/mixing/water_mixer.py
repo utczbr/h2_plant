@@ -178,7 +178,8 @@ class WaterMixer(Component):
         if port_name in ('outlet', 'mixed_out', 'output'):
             return self.outlet_stream
 
-        logger.warning(f"{self.component_id}: Unknown output port '{port_name}'")
+        # Silently return None for unknown ports (polled by stream table)
+        # logger.warning(f"{self.component_id}: Unknown output port '{port_name}'")
         return None
 
     def step(self, t: float) -> None:

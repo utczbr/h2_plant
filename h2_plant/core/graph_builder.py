@@ -242,6 +242,13 @@ class PlantGraphBuilder:
                 **node.params
             )
 
+        elif node.type == "SyngasPSA":
+            from h2_plant.components.separation.psa_syngas import SyngasPSA
+            return SyngasPSA(
+                component_id=node.id,
+                **node.params
+            )
+
         elif node.type == "TSA Unit":
             from h2_plant.components.separation.tsa_unit import TSAUnit
             # Map params safely
@@ -310,7 +317,7 @@ class PlantGraphBuilder:
         elif node.type == "DryCooler":
             from h2_plant.components.cooling.dry_cooler import DryCooler
             comp_id = node.params.get('component_id', node.id)
-            target_temp_c = node.params.get('target_outlet_temp_c', None)
+            target_temp_c = node.params.get('target_outlet_temp_c', node.params.get('target_temp_c', None))
             if target_temp_c is not None:
                 target_temp_c = float(target_temp_c)
             return DryCooler(component_id=comp_id, target_outlet_temp_c=target_temp_c)

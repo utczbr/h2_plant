@@ -74,8 +74,13 @@ def _get_topology_section(comp_id: str, comp_type: str) -> int:
     cid = comp_id.upper()
     ctype = comp_type.upper()
     
+    # Special Case: ATR Heat Recovery Loop components go to Section 1 (Feed)
+    if "ATR_H2O_" in cid: return 1
+
     # 0. ATR / WGS / Reformer (Highest Priority for this unit)
     if any(k in cid for k in ["ATR", "WGS", "SHIFT", "REFORM", "BIOGAS"]): return 8
+    # Explicitly check for SyngasPSA type or ID if not caught above
+    if "SyngasPSA" in ctype or "ATR_PSA" in cid: return 8
     
     # 1. Storage & Distribution (High Priority)
     if "HP_" in cid: return 7
@@ -160,7 +165,7 @@ def print_stream_summary_table(
         # Get component output stream - prioritize by gas species mass (H2 + O2 + CH4)
         candidate_streams = []
         priority_ports = ['h2_out', 'syngas_out', 'purified_gas_out', 'hydrogen']
-        all_ports = ['outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water']
+        all_ports = ['outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'tail_gas_out', 'hot_out', 'water_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water', 'outlet_1', 'outlet_2']
         
         for port in all_ports:
             try:
