@@ -87,7 +87,7 @@ class DryCooler(Component):
         dc_effectiveness (float): Realized effectiveness $\varepsilon_{DC}$ [0-1].
     """
 
-    def __init__(self, component_id: str = "dry_cooler") -> None:
+    def __init__(self, component_id: str = "dry_cooler", **kwargs) -> None:
         """
         Initialize the DryCooler component.
 
@@ -97,7 +97,10 @@ class DryCooler(Component):
 
         Args:
             component_id (str): Unique identifier for this component instance.
+        Args:
+            component_id (str): Unique identifier for this component instance.
                 Used for logging and registry lookup. Default: "dry_cooler".
+            **kwargs: Configuration overrides (e.g., target_outlet_temp_c).
         """
         super().__init__()
         self.component_id = component_id
@@ -112,6 +115,9 @@ class DryCooler(Component):
         self.glycol_cp_j_kg_k = 0.0
         self.t_glycol_cold_c = DCC.T_REF_IN_TQC_DEFAULT
         self.t_glycol_hot_c = DCC.T_REF_IN_TQC_DEFAULT
+        
+        # Override target temperature if provided
+        self.target_outlet_temp_c = kwargs.get('target_outlet_temp_c', None)
 
         # TQC heat exchanger parameters
         self.tqc_area_m2 = 0.0
@@ -340,8 +346,18 @@ class DryCooler(Component):
         # ================================================================
         # Industrial Dry Coolers have min 5-10°C approach. If theoretical 
         # T_out violates this, we must back-calculate the achievable Q.
+        # Use user-defined target if available, otherwise physics limit
         MIN_APPROACH_K = 5.0
-        T_out_limit_k = T_air_in_k + MIN_APPROACH_K
+        phys_limit_k = T_air_in_k + MIN_APPROACH_K
+        
+        T_out_limit_k = phys_limit_k
+        if self.target_outlet_temp_c is not None:
+             # If user wants 50C, but physics says min is 30C (25 air + 5), 
+             # then limit is max(50, 30) = 50.
+             # If user wants 20C, but physics says min is 30C, 
+             # then limit is max(20, 30) = 30.
+             user_target_k = self.target_outlet_temp_c + 273.15
+             T_out_limit_k = max(user_target_k, phys_limit_k)
         
         if T_gas_out_k < T_out_limit_k:
             # Clamp T_out and recalculate Q to conserve energy

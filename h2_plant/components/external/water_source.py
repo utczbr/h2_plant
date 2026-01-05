@@ -63,9 +63,12 @@ class ExternalWaterSource(Component):
         if isinstance(mode, dict):
             config = mode
             mode = config.get('supply_mode', 'fixed_flow')
-            # mode_value in m³/h from GUI, convert to kg/h (approx 1000 kg/m³)
-            mode_value = float(config.get('mode_value', 100.0))
-            flow_rate_kg_h = mode_value * 1000.0  # m³/h -> kg/h
+            if 'flow_rate_kg_h' in config:
+                flow_rate_kg_h = float(config['flow_rate_kg_h'])
+            else:
+                # mode_value in m³/h from GUI, convert to kg/h (approx 1000 kg/m³)
+                mode_value = float(config.get('mode_value', 100.0))
+                flow_rate_kg_h = mode_value * 1000.0  # m³/h -> kg/h
             pressure_bar = float(config.get('pressure_bar', 5.0))
             cost_per_m3 = float(config.get('cost_per_m3', 2.0))
             temperature_c = float(config.get('temperature_c', 20.0))

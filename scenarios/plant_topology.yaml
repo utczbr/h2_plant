@@ -126,10 +126,6 @@ nodes:
         target_name: "SOEC_H2_Compressor_S1"
         target_port: "h2_in"
         resource_type: "stream"
-      - source_port: "drain"
-        target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_Cyclone_1"
-        resource_type: "stream"
 
 
 
@@ -200,10 +196,6 @@ nodes:
         target_name: "SOEC_H2_Compressor_S3"
         target_port: "h2_in"
         resource_type: "stream"
-      - source_port: "drain"
-        target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_Cyclone_2"
-        resource_type: "stream"
 
   - id: "SOEC_H2_Compressor_S3"
     type: "CompressorSingle"
@@ -241,10 +233,6 @@ nodes:
       - source_port: "outlet"
         target_name: "SOEC_H2_Compressor_S4"
         target_port: "h2_in"
-        resource_type: "stream"
-      - source_port: "drain"
-        target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_Cyclone_3"
         resource_type: "stream"
 
   - id: "SOEC_H2_Compressor_S4"
@@ -284,10 +272,6 @@ nodes:
         target_name: "SOEC_H2_Compressor_S5"
         target_port: "h2_in"
         resource_type: "stream"
-      - source_port: "drain"
-        target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_Cyclone_4"
-        resource_type: "stream"
 
   - id: "SOEC_H2_Compressor_S5"
     type: "CompressorSingle"
@@ -325,10 +309,6 @@ nodes:
       - source_port: "outlet"
         target_name: "SOEC_H2_Compressor_S6"
         target_port: "h2_in"
-        resource_type: "stream"
-      - source_port: "drain"
-        target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_Cyclone_5"
         resource_type: "stream"
 
   - id: "SOEC_H2_Compressor_S6"
@@ -393,10 +373,6 @@ nodes:
       - source_port: "outlet"
         target_name: "SOEC_H2_ElectricBoiler_PSA"
         target_port: "fluid_in"
-        resource_type: "stream"
-      - source_port: "drain"
-        target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_Coalescer_2"
         resource_type: "stream"
 
   - id: "SOEC_H2_ElectricBoiler_PSA"
@@ -538,7 +514,7 @@ nodes:
   - id: "SOEC_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2", "SOEC_H2_Cyclone_1", "SOEC_H2_Cyclone_2", "SOEC_H2_Cyclone_3", "SOEC_H2_Cyclone_4", "SOEC_H2_Cyclone_5", "SOEC_H2_Coalescer_2"]
+      source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2"]
     connections:
       - source_port: "outlet"
         target_name: "SOEC_Makeup_Mixer"
@@ -593,10 +569,31 @@ nodes:
   # PEM WATER RECIRCULATION LOOP
   # =================================================================================
 
-  - id: "PEM_Drain_Mixer"
+  - id: "PEM_H2_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["PEM_H2_KOD_1", "PEM_H2_KOD_2", "PEM_H2_KOD_3", "PEM_H2_Coalescer_1", "PEM_O2_KOD_1", "PEM_O2_KOD_2", "PEM_O2_Coalescer_1"]
+      source_ids: ["PEM_H2_KOD_1", "PEM_H2_KOD_2", "PEM_H2_KOD_3"]
+    connections:
+      - source_port: "outlet"
+        target_name: "PEM_Drains_Combiner"
+        target_port: "inlet_1"
+        resource_type: "stream"
+
+  - id: "PEM_O2_Drain_Mixer"
+    type: "DrainRecorderMixer"
+    params:
+      source_ids: ["PEM_O2_KOD_1", "PEM_O2_KOD_2"]
+    connections:
+      - source_port: "outlet"
+        target_name: "PEM_Drains_Combiner"
+        target_port: "inlet_2"
+        resource_type: "stream"
+
+  - id: "PEM_Drains_Combiner"
+    type: "Mixer"
+    params:
+      volume_m3: 0.5
+      continuous_flow: true
     connections:
       - source_port: "outlet"
         target_name: "PEM_Water_Return_Valve"
@@ -670,7 +667,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "PEM_Drain_Mixer"
+        target_name: "PEM_H2_Drain_Mixer"
         target_port: "PEM_H2_KOD_1"
         resource_type: "stream"
 
@@ -708,7 +705,7 @@ nodes:
         target_port: "inlet"
         resource_type: "gas_mixture"
       - source_port: "liquid_drain"
-        target_name: "PEM_Drain_Mixer"
+        target_name: "PEM_H2_Drain_Mixer"
         target_port: "PEM_H2_KOD_2"
         resource_type: "stream"
 
@@ -720,10 +717,6 @@ nodes:
       - source_port: "outlet"
         target_name: "PEM_H2_ElectricBoiler_1"
         target_port: "fluid_in"
-        resource_type: "stream"
-      - source_port: "drain"
-        target_name: "PEM_Drain_Mixer"
-        target_port: "PEM_H2_Coalescer_1"
         resource_type: "stream"
 
   - id: "PEM_H2_ElectricBoiler_1"
@@ -772,7 +765,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "PEM_Drain_Mixer"
+        target_name: "PEM_H2_Drain_Mixer"
         target_port: "PEM_H2_KOD_3"
         resource_type: "stream"
         resource_type: "stream"
@@ -818,7 +811,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "PEM_Drain_Mixer"
+        target_name: "PEM_O2_Drain_Mixer"
         target_port: "PEM_O2_KOD_1"
         resource_type: "stream"
 
@@ -857,7 +850,7 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
       - source_port: "liquid_drain"
-        target_name: "PEM_Drain_Mixer"
+        target_name: "PEM_O2_Drain_Mixer"
         target_port: "PEM_O2_KOD_2"
         resource_type: "stream"
 
@@ -869,10 +862,6 @@ nodes:
       - source_port: "outlet"
         target_name: "PEM_O2_ElectricBoiler"
         target_port: "fluid_in"
-        resource_type: "stream"
-      - source_port: "drain"
-        target_name: "PEM_Drain_Mixer"
-        target_port: "PEM_O2_Coalescer_1"
         resource_type: "stream"
 
 
@@ -923,12 +912,119 @@ nodes:
   - id: "O2_Backup_Supply"
     type: "OxygenMakeupNode"
     params:
-      target_flow_kg_h: 12000.0
+      target_flow_kg_h: 757.54 # Max O2 from regression
       supply_pressure_bar: 15.0
       supply_temperature_c: 25.0
       system_group: "O2_Header"
       process_step: 42
-    connections: []
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_SystemCompressor"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # =================================================================================
+  # BIOGAS SOURCE and ATR initial Unit
+  # =================================================================================
+
+  - id: "Biogas_Source"
+    type: "BiogasSource"
+    params:
+      pressure_bar: 3.0
+      temperature_c: 25.0
+      max_flow_rate_kg_h: 1959.59 # Max Biogas from regression
+      methane_content: 0.60
+      system_group: "ATR_Unit"
+      process_step: 1
+    connections:
+      - source_port: "out"
+        target_name: "Biogas_Compressor_1"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # Biogas Compression Train (3 bar -> 15 bar)
+  # Stage 1: 3.0 -> 5.2 bar
+  - id: "Biogas_Compressor_1"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 2000.0
+      inlet_pressure_bar: 3.0
+      outlet_pressure_bar: 5.2
+      isentropic_efficiency: 0.75
+      temperature_limited: true
+      max_temp_c: 120.0
+      system_group: "ATR_Unit"
+      process_step: 2
+    connections:
+      - source_port: "outlet"
+        target_name: "Biogas_Intercooler_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Biogas_Intercooler_1"
+    type: "DryCooler"
+    params:
+      component_id: "Biogas_Intercooler_1"
+      cooling_capacity_kw: 100.0
+      target_outlet_temp_c: 30.0 # Approximate ambient + 5-10C
+      system_group: "ATR_Unit"
+      process_step: 2
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Biogas_Compressor_2"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # Stage 2: 5.1 -> 8.8 bar
+  - id: "Biogas_Compressor_2"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 2000.0
+      inlet_pressure_bar: 5.1 # Assume 0.1 bar drop
+      outlet_pressure_bar: 8.8
+      isentropic_efficiency: 0.75
+      temperature_limited: true
+      max_temp_c: 120.0
+      system_group: "ATR_Unit"
+      process_step: 3
+    connections:
+      - source_port: "outlet"
+        target_name: "Biogas_Intercooler_2"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "Biogas_Intercooler_2"
+    type: "DryCooler"
+    params:
+      component_id: "Biogas_Intercooler_2"
+      cooling_capacity_kw: 5.0
+      target_outlet_temp_c: 62.0
+      system_group: "ATR_Unit"
+      process_step: 3
+    connections:
+      - source_port: "fluid_out"
+        target_name: "Biogas_Compressor_3"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # Stage 3: 8.7 -> 15.0 bar
+  - id: "Biogas_Compressor_3"
+    type: "CompressorSingle"
+    params:
+      max_flow_kg_h: 2000.0
+      inlet_pressure_bar: 8.7 # Assume 0.1 bar drop
+      outlet_pressure_bar: 15.0
+      isentropic_efficiency: 0.75
+      temperature_limited: true
+      max_temp_c: 120.0
+      system_group: "ATR_Unit"
+      process_step: 4
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_H01_Boiler"
+        target_port: "inlet"
+        resource_type: "stream"
+
 
   # =================================================================================
   # ATR WATER FEED SYSTEM
@@ -939,8 +1035,8 @@ nodes:
   - id: "ATR_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      # Sources will be added as Cyclones are defined in the ATR Biogas/Syngas trains
-      source_ids: [] 
+      # Source from Separator water output
+      source_ids: ["ATR_ProductSeparator", "ATR_Cyclone_1", "ATR_Cyclone_2"] 
       system_group: "ATR_Water_Loop"
       process_step: 43
     connections:
@@ -967,12 +1063,212 @@ nodes:
   - id: "ATR_Makeup_Mixer"
     type: "MakeupMixer"
     params:
-      target_flow_kg_h: 4000.0 # Estimated demand for 2000 kg/h CH4 (S/C ratio ~2.0)
+      target_flow_kg_h: 2331.95 # Max Steam from regression
       makeup_pressure_bar: 15.0
       makeup_temp_c: 25.0
       system_group: "ATR_Water_Loop"
       process_step: 45
-    connections: [] # Connect to ATR Steam Generator or Reactor later
+    connections:
+      - source_port: "water_out"
+        target_name: "ATR_H04_Boiler"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "ATR_Feed_Mixer"
+    type: "Mixer"
+    params:
+      volume_m3: 5.0
+      continuous_flow: true
+      system_group: "ATR_Unit"
+      process_step: 46
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Reactor"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "ATR_Reactor"
+    type: "ATR"
+    params:
+      max_flow_kg_h: 20000.0
+      system_group: "ATR_Unit"
+      process_step: 47
+    connections:
+      - source_port: "syngas_out"
+        target_name: "ATR_HTWGS_Block" # H08
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # =================================================================================
+  # ATR SURROGATE MODEL CHAIN
+  # =================================================================================
+
+  # --- Biogas Preheater (H01) ---
+  - id: "ATR_H01_Boiler"
+    type: "ATR_Boiler"
+    params:
+      component_id: "H01"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Feed_Mixer"
+        target_port: "inlet_1"
+        resource_type: "stream"
+
+  # --- Oxygen System Compressor (Power Tracking) ---
+  - id: "ATR_SystemCompressor"
+    type: "ATR_SystemCompressor"
+    params:
+      max_flow_kg_h: 757.54 # Clamping flow to regression max
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_H02_Boiler"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # --- Oxygen Preheater (H02) ---
+  - id: "ATR_H02_Boiler"
+    type: "ATR_Boiler"
+    params:
+      component_id: "H02"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Feed_Mixer"
+        target_port: "inlet_2"
+        resource_type: "stream"
+
+  # --- Steam/Mixed Feed Heater (H04) ---
+  - id: "ATR_H04_Boiler"
+    type: "ATR_Boiler"
+    params:
+      component_id: "H04"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Feed_Mixer"
+        target_port: "inlet_3"
+        resource_type: "stream"
+
+  # --- High Temperature Water Gas Shift (H08) ---
+  - id: "ATR_HTWGS_Block"
+    type: "ATR_HTWGS"
+    params:
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_LTWGS_Block" # H09
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # --- Low Temperature Water Gas Shift (H09) ---
+  - id: "ATR_LTWGS_Block"
+    type: "ATR_LTWGS"
+    params:
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Syngas_Cooler"
+        target_port: "syngas_in"
+        resource_type: "stream"
+
+  # --- Syngas Heat Recovery (Cooler) ---
+  - id: "ATR_Syngas_Cooler"
+    type: "ATRSyngasCooler"
+    params:
+      lookup_id: "Tin_H05"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "syngas_out"
+        target_name: "ATR_DryCooler"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "ATR_DryCooler"
+    type: "DryCooler"
+    params:
+      component_id: "ATR_DryCooler"
+      target_temp_c: 30.0
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "fluid_out"
+        target_name: "ATR_Cyclone_1"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "ATR_Cyclone_1"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      gas_species: "Syngas"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Chiller_1"
+        target_port: "fluid_in"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "ATR_Drain_Mixer"
+        target_port: "ATR_Cyclone_1"
+        resource_type: "stream"
+
+  - id: "ATR_Chiller_1"
+    type: "Chiller"
+    params:
+      target_temp_k: 277.15 # 4°C
+      cooling_capacity_kw: 5000.0
+      cop: 4.0
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "fluid_out"
+        target_name: "ATR_Cyclone_2"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "ATR_Cyclone_2"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      gas_species: "Syngas"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_Coalescer_1"
+        target_port: "inlet"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "ATR_Drain_Mixer"
+        target_port: "ATR_Cyclone_2"
+        resource_type: "stream"
+
+  - id: "ATR_Coalescer_1"
+    type: "Coalescer"
+    params:
+      gas_type: "Syngas"
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_PSA_1"
+        target_port: "input_stream"
+        resource_type: "stream"
+
+  - id: "ATR_PSA_1"
+    type: "PSA Unit"
+    params:
+      cycle_time_min: 10.0
+      adsorbent_material: "Zeolite 5A"
+      recovery_rate: 0.90 # 90% H2 recovery
+      purity_target: 0.9999
+      system_group: "ATR_Unit"
+    connections:
+      - source_port: "purified_gas_out"
+        target_name: "H2_Production_Mixer"
+        target_port: "inlet_3"
+        resource_type: "stream"
+
 
   # =================================================================================
   # H2 PRODUCTION MIXING (Combines SOEC and PEM Trains)
@@ -1134,102 +1430,6 @@ nodes:
       temperature_k: 298.15
     connections: []
 
-  # =================================================================================
-  # BIOGAS SOURCE and ATR initial Unit
-  # =================================================================================
 
-  - id: "Biogas_Source"
-    type: "BiogasSource"
-    params:
-      pressure_bar: 3.0
-      temperature_c: 25.0
-      max_flow_rate_kg_h: 2000.0
-      methane_content: 0.60
-      system_group: "ATR_Unit"
-      process_step: 1
-    connections:
-      - source_port: "out"
-        target_name: "Biogas_Compressor_1"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  # Biogas Compression Train (3 bar -> 15 bar)
-  # Stage 1: 3.0 -> 5.2 bar
-  - id: "Biogas_Compressor_1"
-    type: "CompressorSingle"
-    params:
-      max_flow_kg_h: 2000.0
-      inlet_pressure_bar: 3.0
-      outlet_pressure_bar: 5.2
-      isentropic_efficiency: 0.85
-      temperature_limited: true
-      max_temp_c: 120.0
-      system_group: "ATR_Unit"
-      process_step: 2
-    connections:
-      - source_port: "outlet"
-        target_name: "Biogas_Intercooler_1"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "Biogas_Intercooler_1"
-    type: "DryCooler"
-    params:
-      component_id: "Biogas_Intercooler_1"
-      cooling_capacity_kw: 100.0
-      target_outlet_temp_c: 30.0 # Approximate ambient + 5-10C
-      system_group: "ATR_Unit"
-      process_step: 2
-    connections:
-      - source_port: "fluid_out"
-        target_name: "Biogas_Compressor_2"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  # Stage 2: 5.1 -> 8.8 bar
-  - id: "Biogas_Compressor_2"
-    type: "CompressorSingle"
-    params:
-      max_flow_kg_h: 2000.0
-      inlet_pressure_bar: 5.1 # Assume 0.1 bar drop
-      outlet_pressure_bar: 8.8
-      isentropic_efficiency: 0.85
-      temperature_limited: true
-      max_temp_c: 120.0
-      system_group: "ATR_Unit"
-      process_step: 3
-    connections:
-      - source_port: "outlet"
-        target_name: "Biogas_Intercooler_2"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "Biogas_Intercooler_2"
-    type: "DryCooler"
-    params:
-      component_id: "Biogas_Intercooler_2"
-      cooling_capacity_kw: 100.0
-      target_outlet_temp_c: 30.0
-      system_group: "ATR_Unit"
-      process_step: 3
-    connections:
-      - source_port: "fluid_out"
-        target_name: "Biogas_Compressor_3"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  # Stage 3: 8.7 -> 15.0 bar
-  - id: "Biogas_Compressor_3"
-    type: "CompressorSingle"
-    params:
-      max_flow_kg_h: 2000.0
-      inlet_pressure_bar: 8.7 # Assume 0.1 bar drop
-      outlet_pressure_bar: 15.0
-      isentropic_efficiency: 0.85
-      temperature_limited: true
-      max_temp_c: 120.0
-      system_group: "ATR_Unit"
-      process_step: 4
-    connections: [] # Can be preserved or updated later to connect to H2_Storage_Tank or Mixer
 
       

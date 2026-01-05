@@ -130,7 +130,8 @@ class KnockOutDrum(Component):
         if diameter_m <= 0:
             raise ValueError(f"diameter_m must be positive, got {diameter_m}")
         if gas_species not in ('H2', 'O2'):
-            raise ValueError(f"gas_species must be 'H2' or 'O2', got {gas_species}")
+            logger.warning(f"KnockOutDrum: Non-standard gas species '{gas_species}'. Defaulting to H2-like properties.")
+            # raise ValueError(f"gas_species must be 'H2' or 'O2', got {gas_species}")
 
         self.diameter_m = diameter_m
         self.delta_p_bar = delta_p_bar
@@ -213,6 +214,7 @@ class KnockOutDrum(Component):
             C = HenryConstants.O2_DELTA_H_R_K
             MW = HenryConstants.O2_MOLAR_MASS_KG_MOL
         else:
+            # Fallback/No solubility model for this species
             return 0.0
             
         T0 = 298.15

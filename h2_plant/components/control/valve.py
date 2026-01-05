@@ -208,7 +208,7 @@ class ThrottlingValve(Component):
             Stream: Throttled stream at outlet conditions, or None if no flow.
         """
         if port_name == 'outlet':
-            return self.outlet_stream
+            return self.outlet_stream if self.outlet_stream else Stream(0.0)
         return None
 
     def get_state(self) -> Dict[str, Any]:

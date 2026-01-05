@@ -22,6 +22,7 @@ from typing import Dict, Any, Optional
 from h2_plant.core.component import Component
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.stream import Stream
+from h2_plant.optimization.numba_ops import solve_temperature_from_enthalpy_jit
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class Attemperator(Component):
         component_id: str,
         target_temp_k: float,
         max_water_flow_kg_h: float = 1000.0,
-        pressure_drop_bar: float = 0.5,
+        pressure_drop_bar: float = 0.0,
         min_superheat_delta_k: float = 5.0
     ):
         super().__init__()
@@ -114,7 +115,7 @@ class Attemperator(Component):
             sat_props = self.lut_manager.get_saturation_properties(P_out)
             T_sat = sat_props['T_sat_K']
             h_sat_vap = sat_props['h_g_Jkg']
-            h_sat_liq = sat_props['h_l_Jkg']
+            h_sat_liq = sat_props['h_f_Jkg']
         
         # Enforce Minimum Superheat (Target cannot be below T_sat + margin)
         safe_target_T = max(self.target_temp_k, T_sat + self.min_superheat_delta_k)
@@ -125,7 +126,11 @@ class Attemperator(Component):
         # Only inject if steam is hotter than target AND we have hydraulic head
         if s_in.temperature_k > safe_target_T and can_inject:
             # Get Enthalpies
-            h_s = s_in.specific_enthalpy_j_kg
+            h_s = 0.0
+            if self.lut_manager:
+                 h_s = self.lut_manager.lookup('H2O', 'H', P_out, s_in.temperature_k)
+            else:
+                 h_s = s_in.specific_enthalpy_j_kg
             
             # Estimate h_target at P_out, safe_target_T
             h_target = 0.0
@@ -140,7 +145,7 @@ class Attemperator(Component):
             if w_in:
                  w_h = w_in.specific_enthalpy_j_kg
                  if w_h == 0.0 and self.lut_manager:
-                      w_h = self.lut_manager.lookup('Water', 'H', w_in.pressure_pa, w_temp)
+                      w_h = self.lut_manager.lookup('H2O', 'H', w_in.pressure_pa, w_temp)
             
             if w_h == 0.0:
                 w_h = 4184.0 * (w_temp - 273.15) # Fallback Cp_liq * dT
@@ -174,17 +179,21 @@ class Attemperator(Component):
         # 5. Calculate Final State
         total_mass = s_in.mass_flow_kg_h + required_water_kg_h
         
-        # Determine water enthalpy for mixing
+        # Determine Enthalpies for Mixing (LUT Preferred)
+        h_s_mix = s_in.specific_enthalpy_j_kg
+        if self.lut_manager:
+              h_s_mix = self.lut_manager.lookup('H2O', 'H', P_out, s_in.temperature_k)
+        
         w_h_mix = 0.0
         if w_in:
              w_h_mix = w_in.specific_enthalpy_j_kg
-             if w_h_mix == 0.0: # If stream didn't have it set
-                  w_h_mix = 4184.0 * (w_temp - 273.15) # Approximate
-        else:
+             if w_h_mix == 0.0 and self.lut_manager:
+                  w_h_mix = self.lut_manager.lookup('H2O', 'H', w_in.pressure_pa, w_temp)
+        if w_h_mix == 0.0:
             w_h_mix = 4184.0 * (w_temp - 273.15)
 
         if total_mass > 0:
-            h_mix = (s_in.mass_flow_kg_h * s_in.specific_enthalpy_j_kg + 
+            h_mix = (s_in.mass_flow_kg_h * h_s_mix + 
                      required_water_kg_h * w_h_mix) / total_mass
             
             # Phase Stability Check
@@ -201,16 +210,17 @@ class Attemperator(Component):
                 T_final = safe_target_T # Initial guess
                 
                 if self.lut_manager:
-                    # Simple Newton Method
-                    T_curr = safe_target_T
-                    for _ in range(5):
-                        h_curr = self.lut_manager.lookup('H2O', 'H', P_out, T_curr)
-                        cp_curr = self.lut_manager.lookup('H2O', 'C', P_out, T_curr)
-                        if cp_curr < 100: cp_curr = 2000.0 # Sanity check
-                        err = h_mix - h_curr
-                        if abs(err) < 100: break
-                        T_curr += err / cp_curr
-                    T_final = T_curr
+                    # JIT Compiled Solver (Rigorous and Fast)
+                    # Solves T = f(h, P) using bilinear interpolation and Newton-Raphson
+                    T_final = solve_temperature_from_enthalpy_jit(
+                         h_target=h_mix,
+                         pressure_pa=P_out,
+                         T_guess=safe_target_T, 
+                         P_grid=self.lut_manager._pressure_grid,
+                         T_grid=self.lut_manager._temperature_grid,
+                         H_lut=self.lut_manager._luts['H2O']['H'],
+                         C_lut=self.lut_manager._luts['H2O']['C']
+                    )
                 
                 self.outlet_superheat_k = T_final - T_sat
                 phase = 'gas'
@@ -221,8 +231,7 @@ class Attemperator(Component):
                 temperature_k=T_final,
                 pressure_pa=P_out,
                 composition={'H2O': 1.0},
-                phase=phase,
-                specific_enthalpy_j_kg=h_mix
+                phase=phase
             )
             
             # Consume inputs

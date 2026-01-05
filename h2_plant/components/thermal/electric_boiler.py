@@ -264,10 +264,10 @@ class ElectricBoiler(Component):
                                  h_target = sat_props['h_g_Jkg']
                              else:
                                  # Superheated
-                                 h_target = self.lut.lookup('Water', 'H', P_op, self.target_temp_k)
+                                 h_target = self.lut.lookup('H2O', 'H', P_op, self.target_temp_k)
                         else:
-                             # Target is Liquid
-                             h_target = self.lut.lookup('Water', 'H', P_op, self.target_temp_k)
+                             # Assume subcooled liquid if no LUT? No, just lookup
+                             h_target = self.lut.lookup('H2O', 'H', P_op, self.target_temp_k)
                         
                         h_in = inflow.specific_enthalpy_j_kg
                         Q_needed_w = m_dot_kg_s * (h_target - h_in)

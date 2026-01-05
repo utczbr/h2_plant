@@ -162,9 +162,13 @@ def run_with_dispatch_strategy(
         targets = [conn.target_name for conn in node.connections]
         connection_map[node.id] = targets
     
+    from h2_plant.reporting.stream_table import print_stream_summary_table
     topo_order = [node.id for node in context.topology.nodes]
     components_dict = {cid: comp for cid, comp in registry.list_components()}
-    # print_stream_summary_table(components_dict, topo_order, connection_map) # Legacy signature incompatibility
+    try:
+        print_stream_summary_table(components_dict, topo_order)
+    except Exception as e:
+        logger.error(f"Failed to print stream summary: {e}", exc_info=True)
 
     # Extract component metadata for visualization grouping
     component_metadata = {}

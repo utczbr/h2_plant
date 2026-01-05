@@ -263,7 +263,7 @@ def run_scenario(scenario: dict) -> dict:
             targets = [conn.target_name for conn in node.connections]
             connection_map[node.id] = targets
     
-    profile_data = print_stream_summary_table(components, topo_order, connection_map)
+    profile_data = print_stream_summary_table(components, topo_order)
 
     # 10. Save History and Generate Graphs
     output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")

@@ -54,6 +54,17 @@ class Stream:
             for k in self.composition:
                 self.composition[k] /= total_fraction
         
+    def copy(self) -> 'Stream':
+        """Create a deep copy of the stream."""
+        return Stream(
+            mass_flow_kg_h=self.mass_flow_kg_h,
+            temperature_k=self.temperature_k,
+            pressure_pa=self.pressure_pa,
+            composition=self.composition.copy(),
+            phase=self.phase,
+            extra=self.extra.copy()
+        )
+
     def _cache_composition_arrays(self) -> None:
         """Compute canonical array representations using JIT optimization."""
         if self._arrays_cached:
@@ -329,7 +340,7 @@ class Stream:
                         lut_mgr = registry.get('LUT_MANAGER')
                         if lut_mgr and 'H2O' in self.composition:
                             # Lookup water density at T, P
-                            return lut_mgr.lookup('Water', 'D', self.pressure_pa, self.temperature_k)
+                            return lut_mgr.lookup('H2O', 'D', self.pressure_pa, self.temperature_k)
                 except ImportError:
                      pass # Registry not available (standalone mode)
             except Exception:

@@ -69,7 +69,8 @@ class PSA(Component):
         cycle_time_min: float = 5.0,
         purity_target: float = 0.9999,
         recovery_rate: float = 0.90,
-        power_consumption_kw: float = 10.0
+        power_consumption_kw: float = 10.0,
+        **kwargs
     ):
         """
         Initialize the PSA unit configuration.
@@ -83,8 +84,9 @@ class PSA(Component):
             recovery_rate (float): Hydrogen recovery ratio (Yield).
                 Yield = (Moles H2 Product) / (Moles H2 Feed).
             power_consumption_kw (float): Base electrical load for control system.
+            **kwargs: Additional configuration parameters.
         """
-        super().__init__()
+        super().__init__(**kwargs)
         self.component_id = component_id
         self.num_beds = num_beds
         self.cycle_time_min = cycle_time_min

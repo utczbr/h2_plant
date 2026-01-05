@@ -1,0 +1,75 @@
+nodes:
+  - id: "watersource_1"
+    type: "ExternalWaterSource"
+    params:
+      flow_rate_kg_h: 1000.0
+      temperature_c: 25.0
+      pressure_bar: 1.0
+    connections:
+      - source_port: "water_out"
+        target_name: "electric_boiler"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "electric_boiler"
+    type: "ElectricBoiler"
+    params:
+      max_power_kw: 2000.0
+      target_temp_c: 105.0 # Superheated steam (Saturation at 1 atm is ~100C)
+    connections:
+      - source_port: "fluid_out"
+        target_name: "compressor_1"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "compressor_1"
+    type: "CompressorSingle"
+    params:
+      outlet_pressure_bar: 2.3
+      max_temp_c: 270.0
+      temperature_limited: True
+    connections:
+      - source_port: "outlet"
+        target_name: "drycooler"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "drycooler"
+    type: "DryCooler"
+    params:
+      target_temp_c: 30.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "compressor_2"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "compressor_2"
+    type: "CompressorSingle"
+    params:
+      outlet_pressure_bar: 5
+      max_temp_c: 270.0
+      temperature_limited: True
+    connections:
+      - source_port: "outlet"
+        target_name: "atemperador"
+        target_port: "steam_in"
+        resource_type: "stream"
+
+  - id: "watersource_2"
+    type: "ExternalWaterSource"
+    params:
+      flow_rate_kg_h: 200.0
+      temperature_c: 25.0
+      pressure_bar: 1.0
+    connections:
+      - source_port: "water_out"
+        target_name: "atemperador"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "atemperador"
+    type: "Attemperator"
+    params:
+      target_temp_k: 152.0
+    connections: []

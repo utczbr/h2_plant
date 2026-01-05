@@ -457,7 +457,7 @@ class MultiComponentMixer(Component):
                 break
                 
             # Clamp physics
-            T = max(50.0, min(T, 5000.0))
+            T = max(275.0, min(T, 5000.0))
             
         self.temperature_k = T
         
@@ -538,5 +538,8 @@ class MultiComponentMixer(Component):
         return {
             'inlet_1': {'type': 'input', 'resource_type': 'gas', 'units': 'kg/h'},
             'inlet_2': {'type': 'input', 'resource_type': 'gas', 'units': 'kg/h'},
+            'inlet_3': {'type': 'input', 'resource_type': 'gas', 'units': 'kg/h'},
+            'inlet_4': {'type': 'input', 'resource_type': 'gas', 'units': 'kg/h'},
+            'inlet_5': {'type': 'input', 'resource_type': 'gas', 'units': 'kg/h'},
             'outlet': {'type': 'output', 'resource_type': 'gas', 'units': 'kg/h'}
         }

@@ -793,6 +793,64 @@ Storage Tank & Ideal gas accumulation & Eq.~\ref{eq:tank-dynamics} \\
 
 The following subsections detail the physics models for specific component categories. All components inherit the conservation laws from Section~\ref{sec:conservation} and property calculations from Section~\ref{sec:property-framework}.
 
+\subsubsection{Biogas Source}
+The Biogas Source model represents an external feed of raw biogas, typically from anaerobic digestion. It provides a pressure-driven flow with a composition characterized by the methane-to-carbon dioxide ratio.
+
+\begin{equation}
+    \dot{m}_{out} = \min(\dot{m}_{demand}, \dot{m}_{capacity})
+\end{equation}
+
+The composition vector is defined by the methane fraction $y_{CH4}$ (typically 0.60):
+\begin{equation}
+    \mathbf{x}_{biogas} = \{ x_{CH4}, x_{CO2}, x_{H2O}, \ldots \}
+\end{equation}
+where mass fractions are derived from molar inputs. The source model acts as the boundary condition for the Green Hydrogen / Biogas Hybrid pathway.
+
+\subsubsection{Autothermal Reforming (ATR) & WGS}
+The Autothermal Reformer (ATR) combines partial oxidation and steam methane reforming in a single vessel. The physics model solves the equilibrium composition based on Gibbs free energy minimization or conversion extent.
+
+\begin{itemize}
+    \item \textbf{Partial Oxidation (Exothermic)}:
+    \begin{equation}
+        CH_4 + \frac{1}{2}O_2 \rightarrow CO + 2H_2 \quad (\Delta H < 0)
+    \end{equation}
+    \item \textbf{Steam Reforming (Endothermic)}:
+    \begin{equation}
+        CH_4 + H_2O \rightleftharpoons CO + 3H_2 \quad (\Delta H > 0)
+    \end{equation}
+\end{itemize}
+
+The Water Gas Shift (WGS) reactor follows the ATR to maximize hydrogen yield by converting CO:
+\begin{equation}
+    CO + H_2O \rightleftharpoons CO_2 + H_2 \quad (\Delta H = -41.1 \text{ kJ/mol})
+\end{equation}
+
+Both reactors integrate stiff ODEs for species conservation along the reactor length coordinate $z$:
+\begin{equation}
+    \frac{dF_i}{dz} = \eta \cdot r_i \cdot A_c
+\end{equation}
+where $F_i$ is the molar flow rate of species $i$, $\eta$ is the effectiveness factor, and $r_i$ is the kinetic rate.
+
+\subsubsection{Attemperator (Desuperheater)}
+The Attemperator controls steam temperature by injecting atomized liquid water directly into the superheated steam flow. The model solves the adiabatic mass and energy balance to determine the required water injection rate $\dot{m}_{inj}$.
+
+\textbf{Mass Balance}:
+\begin{equation}
+    \dot{m}_{out} = \dot{m}_{steam} + \dot{m}_{inj}
+\end{equation}
+
+\textbf{Energy Balance}:
+\begin{equation}
+    \dot{m}_{out} h_{out}(P, T_{target}) = \dot{m}_{steam} h_{steam} + \dot{m}_{inj} h_{water}
+\end{equation}
+
+Solving for injection rate:
+\begin{equation}
+    \dot{m}_{inj} = \dot{m}_{steam} \frac{h_{steam} - h_{target}}{h_{target} - h_{water}}
+\end{equation}
+
+The model includes thermodynamic safety checks to prevent saturation (wet steam) formation and hydraulic checks to ensure $P_{water} > P_{steam}$.
+
 \subsubsection{Caloric Property Integration}
 
 Enthalpy is computed by integrating the Shomate $C_p$ polynomial (Eq.~\ref{eq:shomate-caloric}) from reference temperature $T_{ref}$:

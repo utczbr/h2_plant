@@ -128,7 +128,8 @@ class HydrogenMultiCyclone(Component):
         if not (0 < vane_angle_deg < 90):
             raise ValueError(f"vane_angle_deg must be in (0, 90), got {vane_angle_deg}")
         if gas_species not in ('H2', 'O2'):
-            raise ValueError(f"gas_species must be 'H2' or 'O2', got {gas_species}")
+            logger.warning(f"HydrogenMultiCyclone: Non-standard gas species '{gas_species}'. Defaulting to H2-like properties.")
+            # raise ValueError(f"gas_species must be 'H2' or 'O2', got {gas_species}")
             
         # Standardize geometry to SI Units (Layer 3 Standard)
         self.D_element_m = element_diameter_mm / 1000.0
@@ -678,5 +679,8 @@ class HydrogenMultiCyclone(Component):
         # Fallback reference values (Perry's Handbook at ~300K)
         if self.gas_species == 'H2':
             return 8.4e-6  # Pa·s
-        else:  # O2
+        elif self.gas_species == 'O2':
             return 20.4e-6  # Pa·s
+        else:
+            # Default to H2-like for Syngas/Unknown
+            return 8.4e-6

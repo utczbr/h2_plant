@@ -24,6 +24,15 @@ from h2_plant.components.water.water_pump import WaterPumpThermodynamic
 from h2_plant.optimization.lut_manager import LUTManager
 from h2_plant.core.component_ids import ComponentID
 
+# ATR Components
+from h2_plant.components.reforming.atr_thermal_components import Boiler as ATR_Boiler
+from h2_plant.components.reforming.atr_thermal_components import HeatExchanger as ATR_HeatExchanger
+from h2_plant.components.reforming.atr_thermal_components import HTWGS as ATR_HTWGS
+from h2_plant.components.reforming.atr_thermal_components import LTWGS as ATR_LTWGS
+from h2_plant.components.reforming.atr_system_components import ATRSystemCompressor, ATRProductSeparator
+from h2_plant.components.reforming.atr_recovery import ATRSyngasCooler
+
+
 # Passive Components (Placeholder implementations for now)
 class PassiveComponent(Component):
     def initialize(self, dt, registry): super().initialize(dt, registry)
@@ -253,6 +262,31 @@ class PlantGraphBuilder:
             # ATRReactor requires max_flow_kg_h
             max_flow = float(node.params.get('max_flow_kg_h', 1000.0))
             return ATRReactor(node.id, max_flow_kg_h=max_flow)
+
+        elif node.type == "ATR_Boiler":
+            params = node.params or {}
+            lookup_id = params.get('lookup_id', params.get('component_id', None))
+            return ATR_Boiler(node.id, lookup_id=lookup_id)
+
+        elif node.type == "ATR_HeatExchanger":
+            lookup_id = node.params.get('lookup_id', None) if node.params else None
+            return ATR_HeatExchanger(node.id, lookup_id=lookup_id)
+
+        elif node.type == "ATR_HTWGS":
+            return ATR_HTWGS(node.id)
+
+        elif node.type == "ATR_LTWGS":
+            return ATR_LTWGS(node.id)
+
+        elif node.type == "ATR_SystemCompressor":
+            return ATRSystemCompressor(node.id)
+
+        elif node.type == "ATR_ProductSeparator":
+            return ATRProductSeparator(node.id)
+
+        elif node.type == "ATRSyngasCooler":
+            lookup_id = node.params.get('lookup_id', "Tin_H05")
+            return ATRSyngasCooler(node.id, lookup_id=lookup_id)
             
         elif node.type == "WaterPurifier":
             from h2_plant.components.water.water_purifier import WaterPurifier
@@ -276,7 +310,19 @@ class PlantGraphBuilder:
         elif node.type == "DryCooler":
             from h2_plant.components.cooling.dry_cooler import DryCooler
             comp_id = node.params.get('component_id', node.id)
-            return DryCooler(component_id=comp_id)
+            target_temp_c = node.params.get('target_outlet_temp_c', None)
+            if target_temp_c is not None:
+                target_temp_c = float(target_temp_c)
+            return DryCooler(component_id=comp_id, target_outlet_temp_c=target_temp_c)
+
+        elif node.type == "DryCoolerSimplified":
+            from h2_plant.components.cooling.dry_cooler_simplified import DryCoolerSimplified
+            return DryCoolerSimplified(
+                component_id=node.id,
+                target_temp_k=float(node.params.get('target_temp_k', 313.15)),
+                pressure_drop_bar=float(node.params.get('pressure_drop_bar', 0.05)),
+                fan_specific_power_kw_per_mw=float(node.params.get('fan_specific_power_kw_per_mw', 15.0))
+            )
             
         elif node.type == "Chiller":
             from h2_plant.components.thermal.chiller import Chiller
@@ -330,7 +376,7 @@ class PlantGraphBuilder:
             from h2_plant.components.external.oxygen_source import ExternalOxygenSource
             return ExternalOxygenSource(config=node.params)
 
-        elif node.type == "WaterSource":
+        elif node.type == "WaterSource" or node.type == "ExternalWaterSource":
             from h2_plant.components.external.water_source import ExternalWaterSource
             return ExternalWaterSource(node.params)
 
@@ -368,6 +414,7 @@ class PlantGraphBuilder:
                  eta_m=eta_m
              )
 
+        elif node.type == "BiogasSource":
             return BiogasSource(
                 component_id=node.id,
                 pressure_bar=float(node.params.get('pressure_bar', 5.0)),
@@ -393,6 +440,10 @@ class PlantGraphBuilder:
                 pressure_drop_bar=float(node.params.get('pressure_drop_bar', 0.5)),
                 min_superheat_delta_k=float(node.params.get('min_superheat_delta_k', 5.0))
             )
+
+        elif node.type == "StreamSplitter":
+            from h2_plant.components.mixing.stream_splitter import StreamSplitter
+            return StreamSplitter(node.params, component_id=node.id)
 
         elif node.type == "WaterBalanceTracker":
             return WaterBalanceTracker()

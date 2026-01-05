@@ -126,8 +126,8 @@ class BiogasSource(Component):
         """
         super().step(t)
 
-        # Fixed utilization rate (stub for demand-driven logic)
-        self.biogas_output_kg_h = self.max_flow_rate_kg_h * 0.5
+        # Fixed utilization rate (stub for demand-driven logic) - Updated to 100%
+        self.biogas_output_kg_h = self.max_flow_rate_kg_h * 1.0
         self.cumulative_biogas_kg += self.biogas_output_kg_h * self.dt
         
         # Update cached stream

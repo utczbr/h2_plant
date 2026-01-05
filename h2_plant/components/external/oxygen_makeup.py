@@ -80,7 +80,9 @@ class OxygenMakeupNode(Component):
         # 2. Calculate Makeup (Deficiency)
         if arriving_flow >= self.target_flow_kg_h:
             self.makeup_flow_kg_h = 0.0
-            total_out = arriving_flow # Pass through excess
+            # Clamp to target flow (Implied Venting of Excess)
+            # This ensures downstream units receive exactly the target supply
+            total_out = self.target_flow_kg_h
         else:
             self.makeup_flow_kg_h = self.target_flow_kg_h - arriving_flow
             total_out = self.target_flow_kg_h
@@ -90,12 +92,13 @@ class OxygenMakeupNode(Component):
             return
 
         # 3. Mixing Calculation (Enthalpy Balance)
-        # H_mix = (m_arr * H_arr + m_mk * H_mk) / m_total
-        # H approx = Cp * (T - T_ref)
-        # Therefore: T_mix = (m_arr * T_arr + m_mk * T_mk) / m_total (assuming constant Cp)
-        
-        # This constant Cp assumption is valid for O2 mixing with O2 at similar conditions
-        T_mix = ((arriving_flow * arriving_temp) + (self.makeup_flow_kg_h * self.supply_temp_k)) / total_out
+        # Determine mass contribution from each source
+        if self.makeup_flow_kg_h > 0:
+            mass_from_inlet = arriving_flow
+        else:
+            mass_from_inlet = total_out # Only a portion of inlet is used
+            
+        T_mix = ((mass_from_inlet * arriving_temp) + (self.makeup_flow_kg_h * self.supply_temp_k)) / total_out
         
         # Pressure:
         # The node acts as a manifold. If supply is higher pressure, it dominates?

@@ -19,7 +19,8 @@ MW_SPECIES = {
     'H2O_liq': 18.015e-3,
     'N2': 28.0e-3,
     'CO2': 44.0e-3,
-    'CH4': 16.0e-3,
+    'CH4': 16.04e-3,
+    'CO': 28.01e-3,
 }
 
 def mass_frac_to_mole_frac(composition: dict) -> dict:
@@ -148,33 +149,31 @@ def print_stream_summary_table(
     """
     Print consolidated stream summary table.
     """
-    print("\n" + "="*145)
-    print(f"{'Component':<18} | {'T_out':>7} | {'P_out':>9} | {'H2%':>9} | {'H2 kg/h':>8} | {'H2O':>9} | {'H2O kg/h':>9} | {'O2':>9} | {'O2 kg/h':>8} | {'Total':>9} | {'%Liq':>8} | {'%Vap':>8}")
-    print("-" * 145)
-
     # Group components by section
     sections = {i: [] for i in range(1, 9)}
     
     # Sort components into sections based on ID/Type rules
-    # We use the passed topo_order to maintain flow order *within* sections
     for cid in topo_order:
         comp = components.get(cid)
         if not comp: continue
         
         # Get component output stream - prioritize by gas species mass (H2 + O2 + CH4)
-        # This ensures gas streams are shown over water-dominated drain streams
         candidate_streams = []
-        for port in ['outlet', 'h2_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out', 'liquid_drain', 'drain']:
+        priority_ports = ['h2_out', 'syngas_out', 'purified_gas_out', 'hydrogen']
+        all_ports = ['outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'hot_out', 'water_out', 'steam_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water']
+        
+        for port in all_ports:
             try:
                 s = comp.get_output(port)
                 if s and s.mass_flow_kg_h > 1e-6:
-                    # Calculate gas species mass (H2 + O2 + CH4)
                     gas_mass_frac = (
                         s.composition.get('H2', 0.0) + 
                         s.composition.get('O2', 0.0) + 
-                        s.composition.get('CH4', 0.0)
+                        s.composition.get('CH4', 0.0) +
+                        s.composition.get('CO', 0.0)
                     )
-                    gas_mass_kg_h = s.mass_flow_kg_h * gas_mass_frac
+                    priority_boost = 1000.0 if port in priority_ports else 1.0
+                    gas_mass_kg_h = s.mass_flow_kg_h * gas_mass_frac * priority_boost
                     candidate_streams.append((gas_mass_kg_h, s))
             except: pass
         
@@ -185,7 +184,7 @@ def print_stream_summary_table(
         else:
             stream = None
             
-        if not stream: continue # Skip components with no flow
+        if not stream: continue
         
         sec_idx = _get_topology_section(cid, type(comp).__name__)
         sections[sec_idx].append((cid, stream))
@@ -195,8 +194,23 @@ def print_stream_summary_table(
         comps = sections[i]
         if not comps: continue
         
-        print(f"{SECTION_HEADERS[i]}")
-        print("-" * 145)
+        print(f"\n{SECTION_HEADERS[i]}")
+        
+        # Determine format based on section
+        # Format A: Sections 1-7 (Electroylsis/Compression)
+        # Format B: Section 8 (ATR)
+        is_atr = (i == 8)
+        
+        if is_atr:
+            # Format B Header: Component | T_out | P_out | H2% | H2O% | O2% | CH4 | CO | CO2 | N2 | Total kg/h
+            print("-" * 145)
+            print(f"{'Component':<20} | {'T_out':>7} | {'P_out':>9} | {'H2%':>7} | {'H2O%':>7} | {'O2%':>7} | {'CH4':>7} | {'CO':>7} | {'CO2':>7} | {'N2':>7} | {'Total kg/h':>10}")
+            print("-" * 145)
+        else:
+            # Format A Header: Component | T_out | P_out | H2% | H2 kg/h | H2O% | H2O kg/h | O2% | O2 kg/h | Total | H2O %Liq | H2O %Vap
+            print("-" * 155)
+            print(f"{'Component':<20} | {'T_out':>7} | {'P_out':>9} | {'H2%':>7} | {'H2 kg/h':>9} | {'H2O%':>7} | {'H2O kg/h':>9} | {'O2%':>7} | {'O2 kg/h':>9} | {'Total':>10} | {'%H2O(L)':>7} | {'%H2O(V)':>7}")
+            print("-" * 155)
         
         for cid, stream in comps:
             # 1. Properties
@@ -221,21 +235,37 @@ def print_stream_summary_table(
             
             mol_h2 = mole_fracs.get('H2', 0.0)
             mol_o2 = mole_fracs.get('O2', 0.0)
-            # Total molar water handles vapor+liquid as species
-            mol_h2o_vap = mole_fracs.get('H2O', 0.0)
-            mol_h2o_liq = mole_fracs.get('H2O_liq', 0.0)
-            mol_h2o_total = mol_h2o_vap + mol_h2o_liq
+            mol_h2o_total = mole_fracs.get('H2O', 0.0) + mole_fracs.get('H2O_liq', 0.0)
             
-            # 4. Phase Fractions (Mass based)
-            # %Liq is mass fraction of H2O_liq in total stream (assuming only H2O condenses)
-            pct_liq = mass_h2o_liq * 100.0
-            pct_vap = 100.0 - pct_liq
+            # 4. Phase Partitioning of Water
+            # Calculate % of WATER that is Liquid vs Vapor
+            if mass_h2o_total > 1e-9:
+                pct_h2o_liq = (mass_h2o_liq / mass_h2o_total) * 100.0
+            else:
+                pct_h2o_liq = 0.0
+            pct_h2o_vap = 100.0 - pct_h2o_liq
             
-            # 5. Formatting
+            # Formatting helpers
             h2_str = _format_ppm_pct(mol_h2)
             h2o_str = _format_ppm_pct(mol_h2o_total)
             o2_str = _format_ppm_pct(mol_o2)
             
-            print(f"{cid:<18} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>9} | {kg_h_h2:>8.3f} | {h2o_str:>9} | {kg_h_h2o:>9.4f} | {o2_str:>9} | {kg_h_o2:>8.5f} | {total_kg_h:>9.2f} | {pct_liq:>7.3f}% | {pct_vap:>7.3f}%")
+            if is_atr:
+                # Format B Rows
+                ch4_str = _format_ppm_pct(mole_fracs.get('CH4', 0.0))
+                co_str = _format_ppm_pct(mole_fracs.get('CO', 0.0))
+                co2_str = _format_ppm_pct(mole_fracs.get('CO2', 0.0))
+                n2_str = _format_ppm_pct(mole_fracs.get('N2', 0.0))
+                
+                print(f"{cid:<20} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>7} | {h2o_str:>7} | {o2_str:>7} | {ch4_str:>7} | {co_str:>7} | {co2_str:>7} | {n2_str:>7} | {total_kg_h:>10.2f}")
+            
+            else:
+                # Format A Rows
+                # Component | T_out | P_out | H2% | H2 kg/h | H2O% | H2O kg/h | O2% | O2 kg/h | Total | H2O %Liq | H2O %Vap
+                
+                print(f"{cid:<20} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>7} | {kg_h_h2:>9.2f} | {h2o_str:>7} | {kg_h_h2o:>9.2f} | {o2_str:>7} | {kg_h_o2:>9.2f} | {total_kg_h:>10.2f} | {pct_h2o_liq:>7.1f}% | {pct_h2o_vap:>7.1f}%")
         
-        print("-" * 145)
+        if is_atr:
+             print("-" * 145)
+        else:
+             print("-" * 155)
