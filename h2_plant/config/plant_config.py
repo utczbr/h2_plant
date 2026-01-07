@@ -305,12 +305,28 @@ class SimulationConfig:
     start_hour: int = 0
     checkpoint_interval_hours: int = 168  # Weekly
     
+    # Dispatch Strategy Selection
+    # Options: REFERENCE_HYBRID (default), SOEC_ONLY, ECONOMIC_SPOT
+    dispatch_strategy: str = "REFERENCE_HYBRID"
+    
+    # File paths (set via loader)
+    energy_price_file: Optional[str] = None
+    wind_data_file: Optional[str] = None
+    
     def validate(self) -> None:
         """Validate simulation configuration."""
         if self.timestep_hours <= 0:
             raise ValueError(f"Timestep must be positive, got {self.timestep_hours}")
         if self.duration_hours <= 0:
             raise ValueError(f"Duration must be positive, got {self.duration_hours}")
+        
+        # Validate dispatch strategy
+        valid_strategies = ["SOEC_ONLY", "REFERENCE_HYBRID", "ECONOMIC_SPOT"]
+        if self.dispatch_strategy.upper() not in valid_strategies:
+            raise ValueError(
+                f"Invalid dispatch_strategy '{self.dispatch_strategy}'. "
+                f"Must be one of: {valid_strategies}"
+            )
 
 
 @dataclass

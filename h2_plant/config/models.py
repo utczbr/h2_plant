@@ -61,6 +61,10 @@ class EconomicsConfig(BaseModel):
     h2_price_eur_kg: float
     ppa_price_eur_mwh: float
     arbitrage_enabled: bool = True
+    guaranteed_power_mw: float = 0.0
+    arbitrage_threshold_eur_mwh: Optional[float] = None
+    h2_non_rfnbo_price_eur_kg: float = 2.0
+    p_grid_max_mw: float = 30.0
 
 # --- MASTER CONTEXT ---
 

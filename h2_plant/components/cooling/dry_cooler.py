@@ -119,8 +119,11 @@ class DryCooler(Component):
         self.t_glycol_hot_c = DCC.T_REF_IN_TQC_DEFAULT
         
         # Override target temperature if provided
-        # Override target temperature if provided (support both naming conventions)
         self.target_outlet_temp_c = kwargs.get('target_outlet_temp_c', kwargs.get('target_temp_c', None))
+        
+        # Scaling factor based on design capacity (Baseline = 100 kW)
+        self.design_capacity_kw = kwargs.get('design_capacity_kw', 100.0)
+        self.scaling_factor = self.design_capacity_kw / 100.0
 
         # TQC heat exchanger parameters
         self.tqc_area_m2 = 0.0
@@ -185,16 +188,16 @@ class DryCooler(Component):
 
         if h2_frac > o2_frac:
             self.fluid_type = "H2"
-            self.tqc_area_m2 = DCC.AREA_H2_TQC_M2
-            self.dc_area_m2 = DCC.AREA_H2_DC_M2
-            self.glycol_flow_kg_s = DCC.M_DOT_REF_H2
-            self.dc_air_flow_kg_s = DCC.MDOT_AIR_DESIGN_H2_KG_S
+            self.tqc_area_m2 = DCC.AREA_H2_TQC_M2 * self.scaling_factor
+            self.dc_area_m2 = DCC.AREA_H2_DC_M2 * self.scaling_factor
+            self.glycol_flow_kg_s = DCC.M_DOT_REF_H2 * self.scaling_factor
+            self.dc_air_flow_kg_s = DCC.MDOT_AIR_DESIGN_H2_KG_S * self.scaling_factor
         else:
             self.fluid_type = "O2"
-            self.tqc_area_m2 = DCC.AREA_O2_TQC_M2
-            self.dc_area_m2 = DCC.AREA_O2_DC_M2
-            self.glycol_flow_kg_s = DCC.M_DOT_REF_O2
-            self.dc_air_flow_kg_s = DCC.MDOT_AIR_DESIGN_O2_KG_S
+            self.tqc_area_m2 = DCC.AREA_O2_TQC_M2 * self.scaling_factor
+            self.dc_area_m2 = DCC.AREA_O2_DC_M2 * self.scaling_factor
+            self.glycol_flow_kg_s = DCC.M_DOT_REF_O2 * self.scaling_factor
+            self.dc_air_flow_kg_s = DCC.MDOT_AIR_DESIGN_O2_KG_S * self.scaling_factor
 
     def step(self, t: float) -> None:
         """

@@ -15,12 +15,16 @@ from h2_plant.control.dispatch import (
     DispatchResult,
     DispatchStrategy as BaseDispatchStrategy,
     ReferenceHybridStrategy,
-    SoecOnlyStrategy
+    SoecOnlyStrategy,
+    EconomicSpotDispatchStrategy
 )
+from h2_plant.core.enums import DispatchStrategyEnum
 
 if TYPE_CHECKING:
     from h2_plant.core.component_registry import ComponentRegistry
     from h2_plant.config.plant_config import SimulationContext
+from h2_plant.components.electrolysis.soec_operator import SOECOperator
+from h2_plant.components.storage.detailed_tank import DetailedTankArray
 
 # Import specific component types for type checking
 from h2_plant.components.thermal.chiller import Chiller
@@ -35,6 +39,9 @@ from h2_plant.components.cooling.dry_cooler import DryCooler
 from h2_plant.components.thermal.heat_exchanger import HeatExchanger
 from h2_plant.components.thermal.electric_boiler import ElectricBoiler
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
+from h2_plant.components.storage.h2_tank import TankArray
+from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
+from h2_plant.components.storage.detailed_tank import DetailedTankArray
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +71,35 @@ class StreamRecorder:
     # Specific component metric arrays (optional)
     extra_metric_arrs: List[Tuple[str, np.ndarray]] = field(default_factory=list)
 
+    def record(self, step_idx: int):
+        stream = getattr(self.component, self.stream_attr, None)
+        if stream:
+            self.temp_arr[step_idx] = stream.T_C
+            self.press_arr[step_idx] = stream.P_bar
+            self.flow_arr[step_idx] = stream.mass_flow_kg_h
+            self.h2o_frac_arr[step_idx] = stream.h2o_mass_fraction
+            
+            # Mole fractions
+            mole_fractions = stream.mole_fractions_dict()
+            self.mole_arrs[0][step_idx] = mole_fractions.get('H2', 0.0)
+            self.mole_arrs[1][step_idx] = mole_fractions.get('O2', 0.0)
+            self.mole_arrs[2][step_idx] = mole_fractions.get('N2', 0.0)
+            self.mole_arrs[3][step_idx] = mole_fractions.get('H2O', 0.0)
+            self.mole_arrs[4][step_idx] = mole_fractions.get('CH4', 0.0)
+            self.mole_arrs[5][step_idx] = mole_fractions.get('CO2', 0.0)
+        else:
+            # If stream is None (e.g., component not active or no outlet), record zeros
+            self.temp_arr[step_idx] = 0.0
+            self.press_arr[step_idx] = 0.0
+            self.flow_arr[step_idx] = 0.0
+            self.h2o_frac_arr[step_idx] = 0.0
+            for arr in self.mole_arrs:
+                arr[step_idx] = 0.0
+
+        # Record extra metrics
+        for obj_attr, arr in self.extra_metric_arrs:
+            arr[step_idx] = getattr(self.component, obj_attr, 0.0)
+
 
 class EngineDispatchStrategy(ABC):
     @abstractmethod
@@ -85,10 +121,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._context: Optional['SimulationContext'] = None
         self._inner_strategy: Optional[BaseDispatchStrategy] = None
         self._state = IntegratedDispatchState()
+        
+        # Strategy override (set by runner for CLI/config selection)
+        self._strategy_override: Optional[str] = None
 
         # Component references
         self._soec = None
         self._pem = None
+        self._atr = None
         
         # Performance: Pre-bound recorders
         self._recorders: List[StreamRecorder] = []
@@ -114,13 +154,28 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # Detect topology
         self._soec = self._find_soec(registry)
         self._pem = self._find_pem(registry)
+        self._atr = self._find_atr(registry)
         
-        if self._soec and not self._pem:
-            logger.info("Topology detected: SOEC Only. Using SoecOnlyStrategy.")
-            self._inner_strategy = SoecOnlyStrategy()
+        # Strategy selection: CLI/config override > topology auto-detection
+        if self._strategy_override:
+            strategy_name = self._strategy_override.upper()
+            if strategy_name == "SOEC_ONLY":
+                logger.info(f"Using strategy (config/CLI): SoecOnlyStrategy")
+                self._inner_strategy = SoecOnlyStrategy()
+            elif strategy_name == "ECONOMIC_SPOT":
+                logger.info(f"Using strategy (config/CLI): EconomicSpotDispatchStrategy")
+                self._inner_strategy = EconomicSpotDispatchStrategy()
+            else:  # REFERENCE_HYBRID or default
+                logger.info(f"Using strategy (config/CLI): ReferenceHybridStrategy")
+                self._inner_strategy = ReferenceHybridStrategy()
         else:
-            logger.info("Topology detected: Hybrid. Using ReferenceHybridStrategy.")
-            self._inner_strategy = ReferenceHybridStrategy()
+            # Auto-detect based on topology
+            if self._soec and not self._pem:
+                logger.info("Topology detected: SOEC Only. Using SoecOnlyStrategy.")
+                self._inner_strategy = SoecOnlyStrategy()
+            else:
+                logger.info("Topology detected: Hybrid. Using ReferenceHybridStrategy.")
+                self._inner_strategy = ReferenceHybridStrategy()
 
         # Cache component capacities
         if self._soec:
@@ -140,6 +195,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             'h2_kg': np.zeros(total_steps, dtype=np.float64),
             'H2_soec_kg': np.zeros(total_steps, dtype=np.float64),
             'H2_pem_kg': np.zeros(total_steps, dtype=np.float64),
+            'H2_atr_kg': np.zeros(total_steps, dtype=np.float64),
             'cumulative_h2_kg': np.zeros(total_steps, dtype=np.float64),
             'steam_soec_kg': np.zeros(total_steps, dtype=np.float64),
             'H2O_soec_out_kg': np.zeros(total_steps, dtype=np.float64),
@@ -153,7 +209,22 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             'compressor_power_kw': np.zeros(total_steps, dtype=np.float64),
             'sell_decision': np.zeros(total_steps, dtype=np.int8),
             # Specific PEM Impurity
-            'PEM_o2_impurity_ppm_mol': np.zeros(total_steps, dtype=np.float64)
+            'PEM_o2_impurity_ppm_mol': np.zeros(total_steps, dtype=np.float64),
+            
+            # --- STORAGE CONTROL HISTORY (APC) ---
+            'storage_soc': np.zeros(total_steps, dtype=np.float64),
+            'storage_dsoc_per_h': np.zeros(total_steps, dtype=np.float64),
+            'storage_zone': np.zeros(total_steps, dtype=np.int8),
+            'storage_action_factor': np.zeros(total_steps, dtype=np.float64),
+            'storage_time_to_full_h': np.zeros(total_steps, dtype=np.float64),
+            
+            # --- RFNBO CLASSIFICATION (Economic Spot Dispatch) ---
+            'h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+            'h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+            'cumulative_h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+            'cumulative_h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+            'spot_purchased_mw': np.zeros(total_steps, dtype=np.float64),
+            'spot_threshold_eur_mwh': np.zeros(total_steps, dtype=np.float64)
         }
 
         # 2. Identify Components & Pre-Bind Arrays
@@ -166,8 +237,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             for i in range(num_modules):
                 self._history[f"soec_module_powers_{i+1}"] = np.zeros(total_steps, dtype=np.float64)
 
+        # 3. Storage Controller Setup (APC)
+        self._setup_storage_controller(registry)
+
         self._state = IntegratedDispatchState()
-        logger.info(f"Initialized HybridArbitrageEngineStrategy with {total_steps} steps")
+        logger.info(f"Initialized HybridArbitrageEngineStrategy with {total_steps} steps and Storage APC")
 
     def _prebind_recorders(self, registry: 'ComponentRegistry', total_steps: int) -> None:
         """
@@ -179,14 +253,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             Chiller: ('outlet_stream', [('cooling_load_kw', 'cooling_load_kw'), ('electrical_power_kw', 'electrical_power_kw')]),
             Coalescer: ('output_stream', [('delta_p_bar', 'delta_p_bar'), ('drain_flow_kg_h', 'drain_flow_kg_h')]),
             DeoxoReactor: ('output_stream', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol'), ('peak_temp_c', 'peak_temp_c')]),
-            PSA: ('purified_gas_out', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol')]), # Note: PSA returns stream via method, need handling
+            PSA: ('product_outlet', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol')]), 
             KnockOutDrum: ('_gas_outlet_stream', [('water_removed_kg_h', 'water_removed_kg_h')]),
             HydrogenMultiCyclone: ('_outlet_stream', [('pressure_drop_mbar', 'pressure_drop_mbar')]),
             CompressorSingle: ('outlet', [('power_kw', 'power_kw')]),
-            DryCooler: ('outlet_stream', [('heat_rejected_kw', 'heat_rejected_kw'), ('fan_power_kw', 'fan_power_kw')]),
-            HeatExchanger: ('output_stream', [('heat_removed_kw', 'heat_removed_kw')]),
-            ElectricBoiler: ('fluid_out', [('power_input_kw', 'power_input_kw')]),
-            Interchanger: ('hot_out', [('q_transferred_kw', 'q_transferred_kw')])
+            DryCooler: ('outlet_stream', [('heat_rejected_kw', 'dc_duty_kw'), ('fan_power_kw', 'fan_power_kw')]),
+            ElectricBoiler: ('_output_stream', [('power_input_kw', 'power_kw')]),
+            Interchanger: ('hot_out', [('q_transferred_kw', 'q_transferred_kw')]),
+            DetailedTankArray: ('h2_out', [('inventory_kg', 'total_mass_kg'), ('avg_pressure_bar', 'avg_pressure_bar')])
         }
 
         # Also add SOEC Cluster if it has a stream
@@ -197,8 +271,28 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
              self._alloc_stream_history(cid, total_steps)
              # SOEC stream is often constructed on fly, handled specially in loop
         
+        self._detailed_tank_recorders = []  # List of (component, pressure_matrix, mass_matrix)
+
         for cid, comp in registry.list_components():
             ctype = type(comp)
+            
+            # Special Matrix Recording for DetailedTankArray
+            if isinstance(comp, DetailedTankArray):
+                n_tanks = comp.n_tanks
+                # Allocate (Time, Tank) matrices
+                p_matrix_key = f"{cid}_tank_pressures_bar"
+                m_matrix_key = f"{cid}_tank_masses_kg"
+                
+                self._history[p_matrix_key] = np.zeros((total_steps, n_tanks), dtype=np.float32)
+                self._history[m_matrix_key] = np.zeros((total_steps, n_tanks), dtype=np.float32)
+                
+                self._detailed_tank_recorders.append((
+                    comp, 
+                    self._history[p_matrix_key],
+                    self._history[m_matrix_key]
+                ))
+            
+            # Special handling for inheritance or if exact type in map
             
             # Special handling for inheritance or if exact type in map
             config = None
@@ -250,6 +344,165 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         for sp in ['H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2']:
             self._history[f"{cid}_outlet_{sp}_molf"] = np.zeros(total_steps, dtype=np.float64)
 
+    # =========================================================================
+    # STORAGE FEEDBACK CONTROL (APC)
+    # =========================================================================
+
+    def _setup_storage_controller(self, registry: 'ComponentRegistry') -> None:
+        """Initialize storage references and control parameters."""
+        self._storage_components = []
+        
+        # Scan registry for storage components
+        for cid, comp in registry.list_components():
+            if isinstance(comp, (TankArray, H2StorageTankEnhanced, DetailedTankArray)):
+                self._storage_components.append(comp)
+
+        # Calculate Total System Capacity (Max Mass in kg)
+        total_cap = 0.0
+        self._storage_info = []  # List of (component, max_capacity_kg)
+        
+        for comp in self._storage_components:
+            cap = 0.0
+            if isinstance(comp, TankArray):
+                cap = comp.n_tanks * comp.capacity_kg
+            elif isinstance(comp, H2StorageTankEnhanced):
+                # Calculate max mass via Ideal Gas Law at max pressure: m = PV/RT
+                try:
+                    V = comp.volume_m3
+                    P_max = comp.max_pressure_bar * 1e5
+                    R = getattr(comp.accumulator, 'R', 4124.0)  # H2 specific gas constant
+                    T = getattr(comp.accumulator, 'T', 298.15)
+                    cap = (P_max * V) / (R * T)
+                except Exception:
+                    cap = 0.0
+            elif isinstance(comp, DetailedTankArray):
+                # Calculate max mass via Ideal Gas Law at max pressure
+                try:
+                    V = comp.volume_per_tank_m3
+                    n = comp.n_tanks
+                    P_max = comp.max_pressure_bar * 1e5
+                    R = 4124.0 # H2
+                    T = 293.15 # 20C (Approx ambient)
+                    cap = n * (P_max * V) / (R * T)
+                except Exception:
+                    cap = 0.0
+            
+            if cap > 0:
+                self._storage_info.append((comp, cap))
+                total_cap += cap
+        
+        self._storage_total_capacity_kg = total_cap
+        
+        # Control Parameters (Tuning)
+        self._ctrl_params = {
+            'SOC_LOW': 0.60,         # < 60%: Normal Operation
+            'SOC_HIGH': 0.80,        # 60-80%: Attention (Start linear reduction)
+            'SOC_CRITICAL': 0.95,    # > 95%: Critical (Hard Stop)
+            'HYSTERESIS': 0.02,      # 2% deadband to prevent chatter
+            'MAX_RATE_H': 0.20,      # If filling > 20%/hour, trigger alert early
+            'MIN_ACTION_FACTOR': 0.1 # Minimum turndown before shutdown (10%)
+        }
+        
+        # Runtime State
+        self._ctrl_state = {
+            'prev_soc': 0.0,
+            'current_zone': 0,  # 0: Normal, 1: Attention, 2: Alert, 3: Critical
+            'time_to_full_h': 999.0
+        }
+        
+        if self._storage_components:
+            logger.info(f"Storage APC: Found {len(self._storage_components)} tanks, "
+                       f"total capacity = {total_cap:.1f} kg")
+        else:
+            logger.warning("Storage APC: No storage components found in registry")
+
+    def _get_aggregate_soc(self) -> Tuple[float, float]:
+        """Calculate Plant-Wide State of Charge (0.0 to 1.0) and current mass."""
+        if self._storage_total_capacity_kg <= 0:
+            return 0.0, 0.0
+
+        current_mass = 0.0
+        for comp, _ in self._storage_info:
+            # Use unified interface or direct access
+            if hasattr(comp, 'get_inventory_kg'):
+                current_mass += comp.get_inventory_kg()
+            elif hasattr(comp, 'get_total_mass'): # DetailedTankArray
+                current_mass += comp.get_total_mass()
+            elif hasattr(comp, 'masses'):  # TankArray direct
+                current_mass += np.sum(comp.masses)
+            elif hasattr(comp, 'mass_kg'):  # Enhanced direct
+                current_mass += comp.mass_kg
+
+        soc = current_mass / self._storage_total_capacity_kg
+        return min(max(soc, 0.0), 1.0), current_mass
+
+    def _determine_zone(self, soc: float) -> int:
+        """
+        Determine control zone with hysteresis (Schmitt Trigger).
+        Zones: 0 (Normal), 1 (Attention), 2 (Alert), 3 (Critical)
+        """
+        p = self._ctrl_params
+        current_zone = self._ctrl_state['current_zone']
+        
+        # Thresholds
+        z1_thresh = p['SOC_LOW']
+        z2_thresh = p['SOC_HIGH']
+        z3_thresh = p['SOC_CRITICAL']
+        hyst = p['HYSTERESIS']
+
+        new_zone = current_zone
+
+        # Transition Logic (Upward is instant, Downward requires hysteresis)
+        if soc >= z3_thresh:
+            new_zone = 3
+        elif soc >= z2_thresh:
+            if current_zone == 3 and soc > (z3_thresh - hyst):
+                new_zone = 3  # Stick to 3
+            else:
+                new_zone = 2
+        elif soc >= z1_thresh:
+            if current_zone == 2 and soc > (z2_thresh - hyst):
+                new_zone = 2  # Stick to 2
+            else:
+                new_zone = 1
+        else:
+            if current_zone == 1 and soc > (z1_thresh - hyst):
+                new_zone = 1  # Stick to 1
+            else:
+                new_zone = 0
+            
+        return new_zone
+
+    def _calculate_action_factor(self, zone: int, soc: float, dsoc_dt: float) -> float:
+        """
+        Calculate power scaling factor (0.0 to 1.0).
+        Includes derivative action for fast filling.
+        """
+        p = self._ctrl_params
+        
+        # 1. Base Factor based on Zone
+        factor = 1.0
+        
+        if zone == 0:  # Normal
+            factor = 1.0
+        elif zone == 1:  # Attention (Linear reduction 1.0 -> 0.7)
+            # Normalize soc within the zone
+            norm = (soc - p['SOC_LOW']) / (p['SOC_HIGH'] - p['SOC_LOW'])
+            factor = 1.0 - (0.3 * norm)
+        elif zone == 2:  # Alert (Aggressive reduction 0.7 -> 0.0)
+            norm = (soc - p['SOC_HIGH']) / (p['SOC_CRITICAL'] - p['SOC_HIGH'])
+            factor = 0.7 * (1.0 - norm)
+        elif zone == 3:  # Critical
+            factor = 0.0
+
+        # 2. Derivative Action (Fast fill protection)
+        # If filling very fast, artificially reduce factor to slow down
+        if dsoc_dt > p['MAX_RATE_H']:
+            rate_penalty = (dsoc_dt - p['MAX_RATE_H']) * 2.0  # Tuning scalar
+            factor = max(0.0, factor - rate_penalty)
+
+        return max(0.0, min(1.0, factor))
+
     def decide_and_apply(self, t: float, prices: np.ndarray, wind: np.ndarray) -> None:
         """
         Make dispatch decision and apply setpoints.
@@ -261,9 +514,18 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             return
 
         minute = int(round(t * 60))
-        P_offer = wind[step_idx]
+        
+        # Grid Firming: Ensure minimum guaranteed power
+        # If wind < guaranteed, grid supplements up to guaranteed amount
+        guaranteed_mw = getattr(self._context.economics, 'guaranteed_power_mw', 0.0)
+        wind_mw = wind[step_idx]
+        P_offer = max(wind_mw, guaranteed_mw)
+        
         current_price = prices[step_idx]
-        P_future = wind[min(step_idx + 60, len(wind) - 1)]
+        
+        # Future offer also respects firming
+        wind_fut = wind[min(step_idx + 60, len(wind) - 1)]
+        P_future = max(wind_fut, guaranteed_mw)
 
         soec_kwh_kg = getattr(self._context.physics.soec_cluster, 'kwh_per_kg', 37.5)
         pem_kwh_kg = getattr(self._context.physics.pem_system, 'kwh_per_kg', 50.0)
@@ -279,7 +541,10 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             pem_h2_kwh_kg=pem_kwh_kg,
             ppa_price_eur_mwh=getattr(self._context.economics, 'ppa_price_eur_mwh', 50.0),
             h2_price_eur_kg=getattr(self._context.economics, 'h2_price_eur_kg', 9.6),
-            arbitrage_threshold_eur_mwh=getattr(self._context.economics, 'arbitrage_threshold_eur_mwh', None)
+            arbitrage_threshold_eur_mwh=getattr(self._context.economics, 'arbitrage_threshold_eur_mwh', None),
+            # RFNBO / Economic Spot parameters
+            h2_non_rfnbo_price_eur_kg=getattr(self._context.economics, 'h2_non_rfnbo_price_eur_kg', 2.0),
+            p_grid_max_mw=getattr(self._context.economics, 'p_grid_max_mw', 30.0)
         )
 
         d_state = DispatchState(
@@ -290,17 +555,100 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         result = self._inner_strategy.decide(d_input, d_state)
         self._state.force_sell = result.state_update.get('force_sell', False)
 
+        # =====================================================================
+        # STORAGE FEEDBACK CONTROL (APC) - Closed Loop
+        # =====================================================================
+        
+        # A. Calculate System State
+        soc, current_mass = self._get_aggregate_soc()
+        prev_soc = self._ctrl_state['prev_soc']
+        
+        # B. Calculate Derivative (dSOC/dt in 1/hour)
+        dsoc_dt = (soc - prev_soc) / dt if dt > 0 else 0.0
+        
+        # C. Calculate Time to Full (hours)
+        if dsoc_dt > 0.001:
+            self._ctrl_state['time_to_full_h'] = (1.0 - soc) / dsoc_dt
+        else:
+            self._ctrl_state['time_to_full_h'] = 99.0
+
+        # D. Determine Zone and Action
+        zone = self._determine_zone(soc)
+        self._ctrl_state['current_zone'] = zone
+        self._ctrl_state['prev_soc'] = soc
+        
+        action_factor = self._calculate_action_factor(zone, soc, dsoc_dt)
+
+        # E. Modulate Power (Apply action factor to reduce production)
+        P_soec_final = result.P_soec * action_factor
+        P_pem_final = result.P_pem * action_factor
+        
+        # If in Critical Zone (3), force_sell to True (Safety Sell)
+        if zone == 3:
+            self._state.force_sell = True
+
+        # =====================================================================
+        # APPLY FINAL SETPOINTS (After APC modulation)
+        # =====================================================================
+
         if self._soec:
-            self._soec.receive_input('power_in', result.P_soec, 'electricity')
+            self._soec.receive_input('power_in', P_soec_final, 'electricity')
 
         if self._pem:
             # NOTE: Water supply is handled by the topology (PEM_Water_Pump).
             # DO NOT add hardcoded water here - it causes double delivery!
-            self._pem.set_power_input_mw(result.P_pem)
+            self._pem.set_power_input_mw(P_pem_final)
 
+        # Record dispatch data
         self._history['minute'][step_idx] = minute
         self._history['P_offer'][step_idx] = P_offer
+        
+        # Record Storage APC data
+        self._history['storage_soc'][step_idx] = soc
+        self._history['storage_dsoc_per_h'][step_idx] = dsoc_dt
+        self._history['storage_zone'][step_idx] = zone
+        self._history['storage_action_factor'][step_idx] = action_factor
+        self._history['storage_time_to_full_h'][step_idx] = self._ctrl_state['time_to_full_h']
         self._history['spot_price'][step_idx] = current_price
+        
+        # Record RFNBO classification metrics
+        # For ECONOMIC_SPOT: get from result.state_update
+        # For other strategies: ALL H2 is RFNBO (100% renewable-powered)
+        dt = self._context.simulation.timestep_hours
+        
+        if 'h2_rfnbo_kg' in result.state_update:
+            # EconomicSpotDispatchStrategy returns RFNBO metrics directly
+            h2_rfnbo = result.state_update.get('h2_rfnbo_kg', 0.0)
+            h2_non_rfnbo = result.state_update.get('h2_non_rfnbo_kg', 0.0)
+            spot_purchased = result.state_update.get('spot_purchased_mw', 0.0)
+            spot_threshold = result.state_update.get('spot_threshold_eur_mwh', 0.0)
+        else:
+            # Non-ECONOMIC_SPOT: all H2 is RFNBO (renewable-powered only)
+            # Calculate H2 production from power allocation
+            h2_soec = (P_soec_final * dt * 1000) / soec_kwh_kg if soec_kwh_kg > 0 else 0.0
+            h2_pem = (P_pem_final * dt * 1000) / pem_kwh_kg if pem_kwh_kg > 0 else 0.0
+            h2_rfnbo = h2_soec + h2_pem
+            h2_non_rfnbo = 0.0  # No grid power used
+            spot_purchased = 0.0
+            spot_threshold = 0.0
+        
+        self._history['h2_rfnbo_kg'][step_idx] = h2_rfnbo
+        self._history['h2_non_rfnbo_kg'][step_idx] = h2_non_rfnbo
+        self._history['spot_purchased_mw'][step_idx] = spot_purchased
+        self._history['spot_threshold_eur_mwh'][step_idx] = spot_threshold
+        
+        # Update cumulative RFNBO metrics
+        if step_idx > 0:
+            self._history['cumulative_h2_rfnbo_kg'][step_idx] = (
+                self._history['cumulative_h2_rfnbo_kg'][step_idx - 1] + h2_rfnbo
+            )
+            self._history['cumulative_h2_non_rfnbo_kg'][step_idx] = (
+                self._history['cumulative_h2_non_rfnbo_kg'][step_idx - 1] + h2_non_rfnbo
+            )
+        else:
+            self._history['cumulative_h2_rfnbo_kg'][step_idx] = h2_rfnbo
+            self._history['cumulative_h2_non_rfnbo_kg'][step_idx] = h2_non_rfnbo
+        
         self._state.step_idx = step_idx
 
     def record_post_step(self) -> None:
@@ -362,6 +710,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             self._history['O2_pem_kg'][step_idx] = getattr(self._pem, 'o2_output_kg', 0.0)
             self._history['pem_V_cell'][step_idx] = getattr(self._pem, 'V_cell', 0.0)
 
+        # ATR Logic
+        h2_atr = 0.0
+        if self._atr:
+            # h2_production_kmol_h -> kg/step
+            prod_kmol_h = getattr(self._atr, 'h2_production_kmol_h', 0.0)
+            dt = self._context.simulation.timestep_hours
+            h2_atr = prod_kmol_h * 2.016 * dt
+
         # Global Power and Component Logic
         P_bop_kw = 0.0
         # Check compressors and tanks if not already cached
@@ -400,7 +756,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         P_total_consumed = P_soec_actual + P_pem_actual + P_bop_mw
         P_offer = self._history['P_offer'][step_idx]
         P_sold_corrected = max(0.0, P_offer - P_total_consumed)
-        total_h2 = h2_soec + h2_pem
+        total_h2 = h2_soec + h2_pem + h2_atr
         self._state.cumulative_h2_kg += total_h2
 
         # Fast Array Writes
@@ -410,6 +766,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['h2_kg'][step_idx] = total_h2
         self._history['H2_soec_kg'][step_idx] = h2_soec
         self._history['H2_pem_kg'][step_idx] = h2_pem
+        self._history['H2_atr_kg'][step_idx] = h2_atr
         self._history['cumulative_h2_kg'][step_idx] = self._state.cumulative_h2_kg
         self._history['steam_soec_kg'][step_idx] = steam_soec
         self._history['P_bop_mw'][step_idx] = P_bop_mw
@@ -462,6 +819,12 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 val = getattr(rec.component, attr_name, 0.0)
                 metric_arr[step_idx] = val
 
+        # 3. DetailedTankArray Matrix Recording
+        for comp, p_matrix, m_matrix in self._detailed_tank_recorders:
+            # Efficiently grab data from tanks
+            p_matrix[step_idx, :] = [t.pressure_pa / 1e5 for t in comp.tanks]
+            m_matrix[step_idx, :] = [t.mass_kg for t in comp.tanks]
+
         self._state.step_idx += 1
 
     def get_history(self) -> Dict[str, np.ndarray]:
@@ -476,6 +839,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
     def _find_pem(self, registry):
         for _, comp in registry.list_components():
             if hasattr(comp, 'V_cell') or comp.__class__.__name__ == 'DetailedPEMElectrolyzer': return comp
+        return None
+
+    def _find_atr(self, registry):
+        for _, comp in registry.list_components():
+            if 'ATR' in comp.__class__.__name__: return comp
         return None
 
     def print_summary(self):

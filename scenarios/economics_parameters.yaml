@@ -10,3 +10,18 @@ guaranteed_power_mw: 10.0
 # Optional: Set explicit threshold (EUR/MWh). If set, overrides calculated threshold.
 # Calculated default: PPA + (1000/η) × H2_price ≈ 306 EUR/MWh for SOEC
 # arbitrage_threshold_eur_mwh: 300.0
+
+# =============================================================================
+# ECONOMIC SPOT DISPATCH PARAMETERS (RFNBO Compliance)
+# =============================================================================
+# When ECONOMIC_SPOT strategy is selected, these control spot grid purchases
+# for non-RFNBO hydrogen production.
+
+# Non-RFNBO H2 selling price (EUR/kg)
+# Used to calculate spot purchase threshold: threshold = h2_non_rfnbo / pem_efficiency
+# At 2.0 EUR/kg and 50 kWh/kg PEM efficiency: threshold = 40 EUR/MWh
+h2_non_rfnbo_price_eur_kg: 2.0
+
+# Maximum grid power for spot purchases (MW)
+# Limits non-RFNBO production capacity
+p_grid_max_mw: 30.0

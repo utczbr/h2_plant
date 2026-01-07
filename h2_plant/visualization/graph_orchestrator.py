@@ -74,7 +74,10 @@ class GraphOrchestrator:
 
             # Storage
             'storage_levels': storage.plot_tank_levels,
-            'compressor_power': storage.plot_compressor_power
+            'compressor_power': storage.plot_compressor_power,
+            'storage_apc': storage.plot_apc,
+            'storage_inventory': storage.plot_inventory,
+            'storage_pressure_heatmap': storage.plot_pressure_heatmap
         }
         
         # Register legacy handlers (prefixed with 'legacy_')

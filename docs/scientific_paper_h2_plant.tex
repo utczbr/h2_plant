@@ -50,7 +50,7 @@
 
 \title{\textbf{Simulation Framework for Dual-Path Industrial Hydrogen Production v2.0: \\ Architecture, Physics, and High-Frequency Optimization}}
 \author{Technical Engineering Team}
-\date{December 2025}
+\date{January 2026}
 
 \begin{document}
 
@@ -831,6 +831,27 @@ Both reactors integrate stiff ODEs for species conservation along the reactor le
 \end{equation}
 where $F_i$ is the molar flow rate of species $i$, $\eta$ is the effectiveness factor, and $r_i$ is the kinetic rate.
 
+
+\paragraph{Proportional ATR Supply Control}
+The ATR unit operates under \textbf{Proportional Supply Control}, where oxygen, biogas, and makeup water feeds are synchronized to a reference component (\texttt{O2\_Backup\_Supply}). Each supply calculates its setpoint as:
+
+\begin{equation}
+    \dot{m}_{feed} = \dot{m}_{ref} \times \frac{\dot{m}_{max,feed}}{\dot{m}_{max,ref}}
+\end{equation}
+
+This ensures stoichiometric balance is maintained across all ATR feeds dynamically, preventing carbon deposition or oxygen starvation during load transients. The \texttt{ProportionalMakeupMixer} extends the standard mixer with this logic.
+
+\paragraph{ATR Hydrogen Compression Train}
+Following PSA purification, the ATR-derived hydrogen stream (typically at $\sim$15 bar) is compressed to match the SOEC/PEM trains at 39.64 bar before entering the production mixer. The train consists of:
+
+\begin{enumerate}
+    \item \texttt{ATR\_H2\_Compressor\_1}: Adiabatic compression with 135$^\circ$C temperature limit
+    \item \texttt{ATR\_H2\_Drycooler}: Intercooling to 40$^\circ$C
+    \item \texttt{ATR\_H2\_Compressor\_2}: Final stage to target pressure
+\end{enumerate}
+
+This two-stage arrangement with intercooling minimizes compression work while respecting material temperature limits.
+
 \subsubsection{Attemperator (Desuperheater)}
 The Attemperator controls steam temperature by injecting atomized liquid water directly into the superheated steam flow. The model solves the adiabatic mass and energy balance to determine the required water injection rate $\dot{m}_{inj}$.
 
@@ -937,6 +958,15 @@ Production is governed by specific energy consumption maps $E_{spec}(t_{age})$ d
 \end{equation}
 
 Thermal gating logic prevents load changes until stack temperature stabilizes, capturing the high thermal inertia of the modules.
+
+\paragraph{Lifecycle-Based Degradation Reset}
+Both PEM and SOEC models implement a \textbf{Lifecycle Reset} mechanism configurable via the \texttt{lifecycle} parameter (hours). When cumulative operating time exceeds this value, the degradation model resets to Beginning-of-Life (BOL) performance, simulating stack replacement:
+
+\begin{equation}
+    t_{eff} = t_{op} \mod \tau_{lifecycle}
+\end{equation}
+
+where $t_{op}$ is cumulative operating hours and $\tau_{lifecycle}$ is the configured lifecycle (e.g., 43,800 hours = 5 years). This enables long-horizon simulations (25+ years) with automatic stack replacement cycles without restarting the simulation.
 
 \subsubsection{Balance of Plant (Water Systems)}
 \label{sec:water-systems}
@@ -1217,6 +1247,21 @@ where:
 \end{itemize}
 
 This ensures physical realism by preventing temperature crossovers, modeling the finite surface area of real recuperators.
+
+\\paragraph{Interchanger Cold-Side Connections}
+Version 2.1 introduces \\textbf{Active Heat Recovery} on both SOEC exhaust trains. The water recirculation loop now incorporates:
+
+\\begin{enumerate}
+    \\item \\texttt{SOEC_Drain_Pump}: Pressurizes drain water to 1 bar
+    \\item \\texttt{SOEC_Interchanger_Splitter}: Divides flow (62.9\\% H$_2$ / 37.1\\% O$_2$)
+    \\item Two parallel interchangers: \\texttt{SOEC_H2_Interchanger_1} and \\texttt{SOEC_O2_Interchanger_1}
+    \\item \\texttt{SOEC_Interchanger_Drain_Combiner}: Recombines heated water for makeup
+\\end{enumerate}
+
+This configuration recovers waste heat from both cathode (H$_2$/H$_2$O) and anode (O$_2$) exhaust streams, pre-heating feedwater and reducing steam generator load.
+
+\\paragraph{H2 Production Cooler}
+Prior to high-pressure compression, the combined hydrogen stream from all production pathways (SOEC, PEM, ATR) passes through the \\texttt{H2_Production_Cooler}. This DryCooler normalizes the temperature to 40$^\\circ$C, ensuring:
 
 \paragraph{Centralized Heat Management (Virtual Heat Bus)}
 The \texttt{ThermalManager} acts as a plant-wide supervisor, abstracting individual heat streams into a unified energy pool. It maximizes thermal efficiency ($\eta_{recovery}$) by continuously matching aggregate supply with process demand:

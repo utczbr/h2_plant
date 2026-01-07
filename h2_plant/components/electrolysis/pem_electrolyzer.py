@@ -142,6 +142,14 @@ class DetailedPEMElectrolyzer(Component):
         # Electrochemical State Variables
         # ====================================================================
         self.t_op_h = 0.0
+        # Lifecycle reset parameter (default: infinite/100 years)
+        # Passed via dictionary config
+        if isinstance(config, dict):
+            self.lifecycle_h = config.get('lifecycle', 876000.0)
+        # Passed via Pydantic model (if attribute exists, otherwise default)
+        else:
+            self.lifecycle_h = getattr(config, 'lifecycle', 876000.0)
+            
         self.P_consumed_W = 0.0
         self.m_H2_kg_s = 0.0
         self.m_H2O_kg_s = 0.0
@@ -414,7 +422,9 @@ class DetailedPEMElectrolyzer(Component):
             # ================================================================
             if self.use_polynomials and self.polynomial_list:
                 # Polynomial lookup: O(1) complexity
-                month_index = int(self.t_op_h / self.H_MES)
+                # Apply lifecycle reset for polynomial aging
+                effective_t_op_h = self.t_op_h % self.lifecycle_h
+                month_index = int(effective_t_op_h / self.H_MES)
                 if month_index >= len(self.polynomial_list):
                     month_index = len(self.polynomial_list) - 1
                 poly_object = self.polynomial_list[month_index]
@@ -701,7 +711,10 @@ class DetailedPEMElectrolyzer(Component):
         Returns:
             float: Degradation overpotential in V (always ≥ 0).
         """
-        V_cell_degraded = np.interp(t_op_h, self.t_op_h_table, self.v_cell_table)
+        
+        # Apply lifecycle reset logic for degradation lookup
+        effective_t_op_h = t_op_h % self.lifecycle_h
+        V_cell_degraded = np.interp(effective_t_op_h, self.t_op_h_table, self.v_cell_table)
         U_deg = np.maximum(0.0, V_cell_degraded - self.V_CELL_BOL_NOM)
         return float(U_deg)
 
@@ -713,7 +726,7 @@ class DetailedPEMElectrolyzer(Component):
         to give the actual operating voltage.
 
         Args:
-            j_op (float): Operating current density in A/cm².
+            j_op (float): Operating current density in A/cm^2.
             T (float): Operating temperature in K.
 
         Returns:

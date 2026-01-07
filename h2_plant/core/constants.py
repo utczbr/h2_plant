@@ -22,6 +22,11 @@ class GasConstants:
     # Specific Heat Ratios (Cp/Cv) for Adiabatic Calculations
     GAMMA_H2: Final[float] = 1.41 # Diatomic ideal gas approx
     
+    # Specific heat at constant volume (J/(kg·K))
+    # Cp = 14300, Gamma = 1.41 => Cv = Cp/Gamma = 14300/1.41 = ~10142
+    # Using slightly more precise value from literature for ambient H2
+    CV_H2: Final[float] = 10183.0
+    
     # Average Specific Heat Capacities (Isobaric)
     # Used for simplified thermal models (e.g., fallback in Chiller)
     CP_H2_AVG: Final[float] = 14300.0  # Hydrogen (J/(kg·K))
@@ -167,6 +172,10 @@ class EconomicConstants:
     ENERGY_PRICE_AVERAGE: Final[float] = 60.0 # EUR/MWh
     H2_SELLING_PRICE: Final[float] = 5.0      # EUR/kg
     NG_PRICE_TYPICAL: Final[float] = 3.5      # EUR/MMBtu or equivalent unit
+    
+    # Economic Spot Dispatch Parameters
+    H2_NON_RFNBO_PRICE: Final[float] = 2.0    # EUR/kg non-certified H2
+    P_GRID_MAX_MW: Final[float] = 30.0        # Maximum grid connection capacity (MW)
 
 class SimulationDefaults:
     """Global simulation constraints and tolerances."""

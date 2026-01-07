@@ -102,6 +102,9 @@ class MetricsCollector:
             'demand': {
                 'current_demand_kg_h': [],
                 'cumulative_demand_kg': []
+            },
+            'compression': {
+                'total_energy_kwh': []
             }
         }
         
@@ -224,6 +227,15 @@ class MetricsCollector:
         else:
             self.timeseries['demand']['current_demand_kg_h'].append(0.0)
             self.timeseries['demand']['cumulative_demand_kg'].append(self.timeseries['demand']['cumulative_demand_kg'][-1] if self.timeseries['demand']['cumulative_demand_kg'] else 0.0)
+            
+        # Compression
+        total_comp_step = 0.0
+        for cid, state in component_states.items():
+             if ('compressor' in cid.lower() or 'compression' in cid.lower()) and state:
+                 total_comp_step += state.get('compression_work_kwh', 0.0)
+        
+        prev_comp = self.timeseries['compression']['total_energy_kwh'][-1] if self.timeseries['compression']['total_energy_kwh'] else 0.0
+        self.timeseries['compression']['total_energy_kwh'].append(prev_comp + total_comp_step)
             
     def downsample(self, target_points: int = 5000) -> None:
         """

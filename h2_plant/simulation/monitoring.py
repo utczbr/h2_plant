@@ -103,7 +103,8 @@ class MonitoringSystem:
             'total_storage_kg': [],
             'total_demand_kg': [],
             'energy_price_mwh': [],
-            'total_cost': []
+            'total_cost': [],
+            'total_compression_energy_kwh': []
         }
 
         self.component_metrics: Dict[str, Dict[str, List]] = {}
@@ -112,6 +113,12 @@ class MonitoringSystem:
         self.total_demand_kg = 0.0
         self.total_energy_kwh = 0.0
         self.total_cost = 0.0
+        self.total_compression_energy_kwh = 0.0
+        
+        # RFNBO Classification Metrics
+        self.h2_rfnbo_total_kg = 0.0
+        self.h2_non_rfnbo_total_kg = 0.0
+        self.spot_purchases_mwh = 0.0
 
     def initialize(self, registry: ComponentRegistry) -> None:
         """
@@ -191,6 +198,15 @@ class MonitoringSystem:
                 total_cost = max(total_cost, state.get('cumulative_cost', 0.0))
         self.timeseries['total_cost'].append(total_cost)
         self.total_cost = total_cost
+        
+        # Aggregate Compression Energy
+        comp_energy_step = sum(
+            s.get('compression_work_kwh', 0.0) 
+            for c, s in states.items() 
+            if ('compressor' in c.lower() or 'compression' in c.lower()) and s is not None
+        )
+        self.total_compression_energy_kwh += comp_energy_step
+        self.timeseries['total_compression_energy_kwh'].append(self.total_compression_energy_kwh)
 
         # Record flows and component-specific metrics
         for comp_id, state in states.items():
@@ -310,7 +326,17 @@ class MonitoringSystem:
                 - total_cost: Cumulative cost.
                 - average_cost_per_kg: Production cost efficiency.
                 - demand_fulfillment_rate: Demand satisfaction ratio.
+                - h2_rfnbo_kg: RFNBO-certified H₂ total.
+                - h2_non_rfnbo_kg: Non-certified H₂ total.
+                - rfnbo_compliance_pct: RFNBO compliance percentage.
         """
+        # Calculate RFNBO compliance
+        total_h2_classified = self.h2_rfnbo_total_kg + self.h2_non_rfnbo_total_kg
+        rfnbo_compliance = (
+            (self.h2_rfnbo_total_kg / total_h2_classified * 100) 
+            if total_h2_classified > 0 else 100.0
+        )
+        
         summary = {
             'total_production_kg': self.total_production_kg,
             'total_demand_kg': self.total_demand_kg,
@@ -322,7 +348,12 @@ class MonitoringSystem:
             'demand_fulfillment_rate': (
                 self.total_production_kg / self.total_demand_kg
                 if self.total_demand_kg > 0 else 0.0
-            )
+            ),
+            # RFNBO Classification
+            'h2_rfnbo_kg': self.h2_rfnbo_total_kg,
+            'h2_non_rfnbo_kg': self.h2_non_rfnbo_total_kg,
+            'rfnbo_compliance_pct': rfnbo_compliance,
+            'spot_purchases_mwh': self.spot_purchases_mwh
         }
         return summary
 

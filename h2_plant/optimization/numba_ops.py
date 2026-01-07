@@ -2691,3 +2691,138 @@ def _compute_T_out_for_P_jit(
 
 # =============================================================================
 
+
+@njit(cache=True)
+def distribute_mass_and_energy(
+    total_mass: float,
+    T_in: float,
+    states: npt.NDArray[np.int32],
+    masses: npt.NDArray[np.float64],
+    temperatures: npt.NDArray[np.float64],
+    capacities: npt.NDArray[np.float64],
+    gamma: float = 1.41
+) -> Tuple[npt.NDArray[np.float64], npt.NDArray[np.float64], float]:
+    """
+    Distribute mass and update temperatures based on enthalpy addition.
+    
+    Energy Balance:
+    Enthalpy of incoming gas converts to internal energy increase of tank gas.
+    U_final = U_initial + H_added
+    (m+dm)*Cv*T_new = m*Cv*T_old + dm*Cp*T_in
+    T_new = (m*T_old + dm*(Cp/Cv)*T_in) / (m+dm)
+    Since gamma = Cp/Cv:
+    T_new = (m*T_old + dm*gamma*T_in) / (m+dm)
+    
+    Args:
+        total_mass: Mass to add (kg)
+        T_in: Temperature of incoming stream (K)
+        states: Tank state array
+        masses: Tank mass array
+        temperatures: Tank temperature array
+        capacities: Tank capacity array
+        gamma: Heat capacity ratio (Cp/Cv)
+        
+    Returns:
+        (updated_masses, updated_temperatures, overflow_mass)
+    """
+    remaining = total_mass
+    
+    # Iterate tanks
+    for i in range(len(masses)):
+        if remaining <= 0:
+            break
+
+        if not (states[i] == TankState.IDLE or states[i] == TankState.EMPTY):
+            continue
+
+        available_capacity = capacities[i] - masses[i]
+        mass_to_add = min(remaining, available_capacity)
+
+        if mass_to_add > 0:
+            m_old = masses[i]
+            T_old = temperatures[i]
+            
+            # Energy Balance (Adiabatic mixing)
+            if m_old > 0:
+                numerator = (m_old * T_old) + (mass_to_add * gamma * T_in)
+                denom = m_old + mass_to_add
+                T_new = numerator / denom
+            else:
+                # Filling empty tank: Gas cools due to Joule-Thomson expansion?
+                # Simplified assumption: Gas enters at stagnation enthalpy -> T_new = gamma * T_in
+                # Real filling of Type IV tanks can reach 85C easily.
+                # Here we assume the gas "compresses" itself into the volume.
+                T_new = gamma * T_in
+                
+                # Sanity clamp for numerical stability (e.g. max 500K)
+                if T_new > 500.0:
+                    T_new = 500.0
+            
+            # Update State
+            masses[i] += mass_to_add
+            temperatures[i] = T_new
+            remaining -= mass_to_add
+
+            if masses[i] >= capacities[i] * 0.99:
+                states[i] = TankState.FULL
+
+    return masses, temperatures, remaining
+
+
+@njit(cache=True)
+def apply_heat_loss_batch(
+    temperatures: npt.NDArray[np.float64],
+    masses: npt.NDArray[np.float64],
+    T_amb: float,
+    dt_seconds: float,
+    UA: float,
+    Cv: float
+) -> None:
+    """
+    Apply Newton's Law of Cooling (Thermal Relaxation).
+    
+    Differential equation: m*Cv*(dT/dt) = -UA*(T - T_amb)
+    Solution: T(t) = T_amb + (T_init - T_amb) * exp(-t/tau)
+    Time constant tau = (m * Cv) / UA
+    
+    Args:
+        temperatures: Tank temperature array (modified in-place)
+        masses: Tank mass array
+        T_amb: Ambient temperature (K)
+        dt_seconds: Time step duration (s)
+        UA: Overall heat transfer coefficient (W/K)
+        Cv: Isochoric specific heat (J/kgK)
+    """
+    for i in range(len(temperatures)):
+        if masses[i] > 1e-6: # Avoid division by zero
+            # Exponential decay solution is stable for large dt
+            tau = (masses[i] * Cv) / UA
+            # Check for very small tau (fast cooling) to avoid underflow/instability
+            if tau < 1e-9:
+                 temperatures[i] = T_amb
+            else:
+                decay = np.exp(-dt_seconds / tau)
+                temperatures[i] = T_amb + (temperatures[i] - T_amb) * decay
+        else:
+            # Empty tank equilibrates instantly (simplified)
+            temperatures[i] = T_amb
+
+
+@njit(cache=True)
+def batch_pressure_update_vector_T(
+    masses: np.ndarray,
+    volumes: np.ndarray,
+    pressures: np.ndarray,
+    temperatures: np.ndarray,
+    gas_constant: float
+) -> None:
+    """
+    Update pressures using ideal gas law with PER-TANK temperature.
+    P[i] = (m[i] / V[i]) * R * T[i]
+    """
+    for i in range(len(masses)):
+        if volumes[i] > 0:
+            density = masses[i] / volumes[i]
+            pressures[i] = density * gas_constant * temperatures[i]
+        else:
+            pressures[i] = 0.0

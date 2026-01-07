@@ -38,6 +38,8 @@ class FlowType(IntEnum):
         WATER_MASS: Water/steam mass flows (kg).
         COMPRESSION_WORK: Compression energy consumption (kWh).
         CO2_EMISSIONS: Carbon dioxide emissions (kg).
+        HYDROGEN_RFNBO: Green certified hydrogen (kg).
+        HYDROGEN_NON_RFNBO: Non-certified hydrogen (kg).
     """
     ELECTRICAL_ENERGY = 0
     HYDROGEN_MASS = 1
@@ -47,6 +49,8 @@ class FlowType(IntEnum):
     WATER_MASS = 5
     COMPRESSION_WORK = 6
     CO2_EMISSIONS = 7
+    HYDROGEN_RFNBO = 8      # Green certified H2 (renewable powered)
+    HYDROGEN_NON_RFNBO = 9  # Non-certified H2 (grid powered)
 
 
 @dataclass

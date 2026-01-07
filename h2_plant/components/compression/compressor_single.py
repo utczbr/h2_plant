@@ -82,6 +82,86 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# OFF-DESIGN PERFORMANCE CONFIGURATION
+# =============================================================================
+
+from dataclasses import dataclass
+from enum import Enum, auto
+
+
+class CompressorType(Enum):
+    """
+    Compressor Machine Type - determines which physics model is used.
+    
+    CENTRIFUGAL: Dynamic compression (kinetic energy conversion).
+        - Used for: Steam MRV, Oxygen, Air compressors
+        - Off-design: Surge/Choke limits based on corrected flow
+        - Reference: ASME GT2023-87110
+    
+    RECIPROCATING: Positive displacement (volumetric).
+        - Used for: Hydrogen, Biogas compressors
+        - Off-design: Volumetric efficiency vs pressure ratio
+        - Reference: Int. J. Hydrogen Energy 2024
+    """
+    CENTRIFUGAL = auto()
+    RECIPROCATING = auto()
+
+
+@dataclass
+class CompressorMapConfig:
+    """
+    Configuration for off-design performance physics.
+    
+    This dataclass unifies parameters for both Centrifugal and Reciprocating
+    compressor models. The `type` field determines which physics engine is used.
+    
+    Attributes:
+        type (CompressorType): Machine type - CENTRIFUGAL or RECIPROCATING.
+        
+        --- VFD Parameters (Both Types) ---
+        allow_variable_speed (bool): Enable VFD speed control.
+        min_speed_ratio (float): Minimum RPM as fraction of design (e.g., 0.40 = 40%).
+        max_speed_ratio (float): Maximum RPM as fraction of design (e.g., 1.05 = 105%).
+        
+        --- Centrifugal Specifics ---
+        design_polytropic_eff (float): Peak polytropic efficiency at design point.
+        surge_margin (float): Minimum allowable corrected flow fraction.
+        choke_margin (float): Maximum allowable corrected flow fraction.
+        curve_shape_k (float): Steepness of efficiency parabola.
+        
+        --- Reciprocating Specifics ---
+        clearance_volume_fraction (float): Clearance volume as fraction of stroke (C).
+        valve_loss_factor (float): Pressure drop losses across valves.
+        mechanical_loss_factor (float): Friction losses in crank/piston.
+    
+    References:
+        [1] ASME GT2023-87110: Off-Design Performance of Hydrogen Compressors
+        [2] Int. J. Hydrogen Energy 2024: Volumetric Efficiency in H2 Reciprocating
+        [3] API 617: Centrifugal Compressors
+        [4] API 618: Reciprocating Compressors
+    """
+    # Machine Type
+    type: CompressorType = CompressorType.CENTRIFUGAL
+    
+    # VFD Parameters (shared)
+    allow_variable_speed: bool = True
+    min_speed_ratio: float = 0.40
+    max_speed_ratio: float = 1.05
+    
+    # Centrifugal Specifics
+    design_polytropic_eff: float = 0.78
+    surge_margin: float = 0.20
+    choke_margin: float = 1.30
+    curve_shape_k: float = 2.5
+    
+    # Reciprocating Specifics
+    # eta_vol = 1 - C * (PR^(1/gamma) - 1) - valve_losses
+    clearance_volume_fraction: float = 0.10   # 10% clearance (typical)
+    valve_loss_factor: float = 0.05           # Valve pressure drop losses
+    mechanical_loss_factor: float = 0.04      # Crank/piston friction
+
+
+# =============================================================================
 # FLUID STRATEGY SELECTION
 # =============================================================================
 
@@ -154,7 +234,8 @@ class CompressorSingle(Component):
         electrical_efficiency: float = 0.93,
         max_temp_c: Optional[float] = None,
         temperature_limited: bool = False,
-        max_pressure_bar: float = 1000.0
+        max_pressure_bar: float = 1000.0,
+        map_config: Optional[CompressorMapConfig] = None
     ):
         """
         Configure the single-stage compressor.
@@ -190,8 +271,27 @@ class CompressorSingle(Component):
         self.inlet_temperature_c = inlet_temperature_c
         self.inlet_temperature_k = inlet_temperature_c + 273.15
         self.isentropic_efficiency = isentropic_efficiency
+        self.design_isentropic_eff = isentropic_efficiency  # Original design efficiency
+        self.current_isentropic_eff = isentropic_efficiency  # Dynamic (updated each step)
+        self.current_polytropic_eff = 0.0  # Computed from map
         self.mechanical_efficiency = mechanical_efficiency
         self.electrical_efficiency = electrical_efficiency
+        
+        # Design point for corrected flow calculation
+        self.design_flow_kg_h = max_flow_kg_h
+        self.design_inlet_p_bar = inlet_pressure_bar
+        self.design_inlet_t_k = inlet_temperature_c + 273.15
+        
+        # Off-design performance map configuration
+        self.use_performance_map = map_config is not None
+        self.map_config = map_config or CompressorMapConfig()
+        
+        # Surge/Choke event counters
+        self.surge_events = 0
+        self.choke_events = 0
+        
+        # Reciprocating compressor telemetry
+        self.current_volumetric_eff = 1.0  # η_vol (only used for RECIPROCATING type)
         
         # Temperature limiting
         self.max_temp_c = max_temp_c
@@ -345,14 +445,69 @@ class CompressorSingle(Component):
 
         if self.transfer_mass_kg > 0:
             self.mode = CompressorMode.LP_TO_HP
+            
+            # Calculate raw mass flow rate for performance map lookup
+            raw_mass_flow_rate = (self.transfer_mass_kg / self.dt) if self.dt > 0 else 0.0
 
-            max_transfer = self.max_flow_kg_h * self.dt
-            self.actual_mass_transferred_kg = min(self.transfer_mass_kg, max_transfer)
+            # ============================================================
+            # OFF-DESIGN PERFORMANCE (if map_config was provided)
+            # ============================================================
+            eta_poly, limited_flow_rate, is_surge, is_choke = self._update_off_design_performance(
+                raw_mass_flow_rate
+            )
+            
+            # Track surge/choke events
+            if is_surge:
+                self.surge_events += 1
+                if self.surge_events % 10 == 0:
+                    logger.warning(
+                        f"Compressor {self.component_id} in SURGE! "
+                        f"Flow: {raw_mass_flow_rate:.1f} kg/h"
+                    )
+            
+            if is_choke:
+                self.choke_events += 1
+                if self.choke_events == 1:
+                    logger.warning(
+                        f"Compressor {self.component_id} at CHOKE limit! "
+                        f"Clamping flow to {limited_flow_rate:.1f} kg/h"
+                    )
+                # Enforce choke limit on mass transfer
+                self.actual_mass_transferred_kg = min(limited_flow_rate * self.dt, self.transfer_mass_kg)
+            else:
+                max_transfer = self.max_flow_kg_h * self.dt
+                self.actual_mass_transferred_kg = min(self.transfer_mass_kg, max_transfer)
 
+            # ============================================================
+            # DYNAMIC EFFICIENCY UPDATE
+            # ============================================================
+            if self.use_performance_map:
+                # Get pressure ratio for conversion
+                pr = max(1.0, self.target_outlet_pressure_bar / max(0.1, self.actual_inlet_pressure_bar))
+                gamma = self._get_fluid_gamma()
+                
+                # Store polytropic and convert to isentropic
+                self.current_polytropic_eff = eta_poly
+                self.current_isentropic_eff = self._convert_poly_to_isentropic(eta_poly, pr, gamma)
+                
+                # Temporarily apply dynamic efficiency for thermodynamic calculation
+                original_eff = self.isentropic_efficiency
+                self.isentropic_efficiency = self.current_isentropic_eff
+            else:
+                self.current_isentropic_eff = self.design_isentropic_eff
+                original_eff = None  # No need to restore
+
+            # ============================================================
+            # THERMODYNAMIC CALCULATION
+            # ============================================================
             if self.outlet_pressure_bar <= self.actual_inlet_pressure_bar:
                 self._calculate_trivial_pass_through()
             else:
                 self._calculate_compression()
+            
+            # Restore design efficiency if we modified it
+            if self.use_performance_map and original_eff is not None:
+                self.isentropic_efficiency = original_eff
 
             # Check for discharge temperature limit (warning only, not enforced)
             if self.max_temp_c is not None and self.outlet_temperature_c > self.max_temp_c:
@@ -395,6 +550,175 @@ class CompressorSingle(Component):
         self.outlet_temperature_isentropic_c = self.inlet_temperature_c
         self.actual_outlet_pressure_bar = self.actual_inlet_pressure_bar
         self.actual_outlet_pressure_pa = self.actual_inlet_pressure_pa
+
+    # =========================================================================
+    # OFF-DESIGN PERFORMANCE MAP METHODS
+    # =========================================================================
+
+    def _update_off_design_performance(self, mass_flow_rate_kg_h: float) -> Tuple[float, float, bool, bool]:
+        """
+        Calculate dynamic efficiency and operating limits based on compressor type.
+        
+        Routes to the appropriate physics model:
+        - CENTRIFUGAL: Corrected flow, surge/choke limits, polytropic efficiency map
+        - RECIPROCATING: Volumetric efficiency, clearance volume, pressure ratio limits
+        
+        Args:
+            mass_flow_rate_kg_h: Actual mass flow rate [kg/h]
+        
+        Returns:
+            Tuple: (isentropic_eff, limited_mass_flow_kg_h, is_surge, is_choke)
+        """
+        if not self.use_performance_map or mass_flow_rate_kg_h < 1e-6:
+            return self.design_isentropic_eff, mass_flow_rate_kg_h, False, False
+
+        # Route to appropriate physics model
+        if self.map_config.type == CompressorType.RECIPROCATING:
+            return self._calc_reciprocating_performance(mass_flow_rate_kg_h)
+        else:
+            return self._calc_centrifugal_performance(mass_flow_rate_kg_h)
+
+    def _calc_centrifugal_performance(self, mass_flow_rate_kg_h: float) -> Tuple[float, float, bool, bool]:
+        """
+        Centrifugal compressor off-design physics (corrected flow, surge/choke).
+        
+        Physics Model (Ref: ASME GT2023-87110):
+            1. Corrected Flow: m_corr = m_act * sqrt(T_in/T_des) / (P_in/P_des)
+            2. Surge: m_corr_norm < surge_margin
+            3. Choke: m_corr_norm > choke_margin (flow clamped)
+            4. Polytropic Efficiency: η_p = η_peak * [1 - k * (m_norm - 1)²]
+        
+        Returns:
+            Tuple: (polytropic_eff, limited_mass_flow_kg_h, is_surge, is_choke)
+        """
+        # 1. Calculate Corrected Mass Flow
+        theta = (self.inlet_temperature_k / self.design_inlet_t_k)
+        delta = max(1e-3, self.actual_inlet_pressure_bar / self.design_inlet_p_bar)
+        
+        m_corr = mass_flow_rate_kg_h * np.sqrt(theta) / delta
+        m_corr_norm = m_corr / self.design_flow_kg_h
+
+        # 2. Check Surge / Choke Limits
+        is_surge = False
+        is_choke = False
+        limit_mass_flow = mass_flow_rate_kg_h
+
+        if m_corr_norm < self.map_config.surge_margin:
+            is_surge = True
+        elif m_corr_norm > self.map_config.choke_margin:
+            is_choke = True
+            m_corr_limit = self.map_config.choke_margin * self.design_flow_kg_h
+            limit_mass_flow = m_corr_limit * delta / np.sqrt(theta)
+
+        # 3. Calculate Polytropic Efficiency (Parabolic fit)
+        penalty = self.map_config.curve_shape_k * (m_corr_norm - 1.0)**2
+        eta_poly = self.map_config.design_polytropic_eff * (1.0 - penalty)
+        eta_poly = max(0.20, eta_poly)
+
+        return eta_poly, limit_mass_flow, is_surge, is_choke
+
+    def _calc_reciprocating_performance(self, req_flow_kg_h: float) -> Tuple[float, float, bool, bool]:
+        """
+        Reciprocating (positive displacement) compressor off-design physics.
+        
+        Physics Model (Ref: Int. J. Hydrogen Energy 2024):
+            1. Volumetric Efficiency: η_vol = 1 - C * (PR^(1/γ) - 1) - valve_losses
+            2. Capacity scales with η_vol, inlet density, and RPM
+            3. No aerodynamic surge (PD machine), but capacity-limited at high PR
+        
+        Args:
+            req_flow_kg_h: Requested mass flow rate [kg/h]
+        
+        Returns:
+            Tuple: (isentropic_eff, max_flow_capacity_kg_h, is_surge=False, is_capacity_limited)
+        """
+        # 1. Pressure Ratio
+        p_in = max(0.1, self.actual_inlet_pressure_bar)
+        p_out = max(p_in, self.target_outlet_pressure_bar)
+        pr = p_out / p_in
+        
+        # 2. Get Gas Properties (gamma)
+        gamma = self._get_fluid_gamma()
+        
+        # 3. Calculate Volumetric Efficiency
+        # η_vol = 1 - C * (PR^(1/γ) - 1) - valve_losses
+        C = self.map_config.clearance_volume_fraction
+        
+        if pr < 1.0:
+            pr = 1.0
+        
+        re_expansion = (pr**(1.0/gamma)) - 1.0
+        eta_vol = 1.0 - C * re_expansion - self.map_config.valve_loss_factor
+        eta_vol = max(0.0, eta_vol)  # Cannot be negative (deadhead)
+        
+        # Store for telemetry
+        self.current_volumetric_eff = eta_vol
+        
+        # 4. Calculate Maximum Capacity at this PR
+        # Capacity = Design_Flow * (η_vol / η_vol_design) * density_correction * speed_factor
+        pr_design = self.outlet_pressure_bar / max(0.1, self.design_inlet_p_bar) if hasattr(self, 'outlet_pressure_bar') else pr
+        eta_vol_design = 1.0 - C * ((pr_design**(1.0/gamma)) - 1.0) - self.map_config.valve_loss_factor
+        eta_vol_design = max(0.01, eta_vol_design)  # Protect against div/0
+        
+        # Density correction (recip moves volume, not mass)
+        density_correction = (p_in / self.design_inlet_p_bar) * (self.design_inlet_t_k / self.inlet_temperature_k)
+        
+        # VFD speed range
+        max_rpm_factor = self.map_config.max_speed_ratio
+        
+        max_possible_flow = self.design_flow_kg_h * (eta_vol / eta_vol_design) * density_correction * max_rpm_factor
+        
+        # 5. Check if capacity-limited
+        is_capacity_limited = req_flow_kg_h > max_possible_flow
+        limit_flow = max_possible_flow
+        
+        # 6. Isentropic Efficiency (relatively flat for recip, slight degradation at high PR)
+        pr_design_ref = self.outlet_pressure_bar / self.design_inlet_p_bar if hasattr(self, 'outlet_pressure_bar') else 5.0
+        pr_deviation = abs(pr - pr_design_ref)
+        eta_is = self.design_isentropic_eff * (1.0 - 0.01 * pr_deviation)
+        eta_is = max(0.50, min(0.90, eta_is))  # Recip efficiency bounds
+        
+        # Reciprocating compressors don't surge (no aerodynamic instability)
+        return eta_is, limit_flow, False, is_capacity_limited
+
+    def _convert_poly_to_isentropic(self, eta_poly: float, pressure_ratio: float, gamma: float = 1.41) -> float:
+        """
+        Convert Polytropic Efficiency to Isentropic Efficiency.
+        
+        This is required because the thermodynamic calculations use isentropic
+        efficiency, but performance maps are typically expressed in polytropic
+        efficiency (which is more stable across pressure ratios).
+        
+        Formula (Ref: ASME GT2023-87110):
+            η_is = (PR^((k-1)/k) - 1) / (PR^((k-1)/(k·η_p)) - 1)
+        
+        Args:
+            eta_poly: Polytropic efficiency [0-1]
+            pressure_ratio: Discharge/Suction pressure ratio
+            gamma: Ratio of specific heats (k = Cp/Cv)
+        
+        Returns:
+            float: Isentropic efficiency [0-1]
+        """
+        if pressure_ratio <= 1.0 + 1e-4:
+            return 1.0  # Trivial case: no compression
+            
+        k_term = (gamma - 1.0) / gamma
+        num = pressure_ratio**k_term - 1.0
+        den = pressure_ratio**(k_term / eta_poly) - 1.0
+        
+        if abs(den) < 1e-9:
+            return eta_poly  # Avoid division by zero
+        return num / den
+
+    def _get_fluid_gamma(self) -> float:
+        """Get gamma (Cp/Cv) for the dominant fluid species."""
+        strategy, fluid_id, mix_const = self._determine_fluid_strategy()
+        if strategy == FluidStrategy.LUT and fluid_id in FLUID_REF_DATA:
+            return FLUID_REF_DATA[fluid_id][3]  # gamma from reference data
+        elif mix_const and 'gamma' in mix_const:
+            return mix_const['gamma']
+        return 1.41  # Default H2 gamma
 
     def _determine_fluid_strategy(self) -> Tuple[FluidStrategy, str, Dict[str, float]]:
         """

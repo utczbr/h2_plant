@@ -53,7 +53,7 @@ visualization:
           variable: "water_consumption"
 
     production_cumulative:
-      enabled: true
+      enabled: false  # Merged into unified legacy_cumulative_h2
       plots:
         - title: "Cumulative H2 Production"
           components: ["PEM", "SOEC_Cluster"]
@@ -105,7 +105,33 @@ visualization:
         - title: "Arbitrage Opportunity"
           components: []
 
-    # 4. SOEC OPERATIONS
+    # 4. RFNBO COMPLIANCE (Economic Spot Dispatch)
+    # ----------------------------------------------------------------------
+    rfnbo_compliance_stacked:
+      enabled: true
+      plots:
+        - title: "RFNBO vs Non-RFNBO H2 Production"
+          components: []
+    
+    rfnbo_spot_analysis:
+      enabled: true
+      plots:
+        - title: "Spot Price vs Purchase Threshold"
+          components: []
+    
+    rfnbo_pie:
+      enabled: true
+      plots:
+        - title: "RFNBO Compliance Breakdown"
+          components: []
+    
+    cumulative_rfnbo:
+      enabled: false  # Merged into unified legacy_cumulative_h2
+      plots:
+        - title: "Cumulative RFNBO Production"
+          components: []
+
+    # 5. SOEC OPERATIONS
     # ----------------------------------------------------------------------
     soec_modules_time_series:
       enabled: true
@@ -133,6 +159,27 @@ visualization:
         - title: "H2 Tank Levels"
           components: ["H2_Storage_Tank"]
     
+    storage_apc:
+      enabled: true
+      plots:
+        - title: "Storage APC Control"
+          description: "State of Charge, control zones, and power modulation factor"
+          components: ["H2_Storage_Tank"]
+    
+    storage_inventory:
+      enabled: true
+      plots:
+        - title: "Storage Inventory Percentage"
+          description: "Total hydrogen inventory as percentage of estimated capacity"
+          components: ["LP_Storage_Tank"]
+    
+    storage_pressure_heatmap:
+      enabled: true
+      plots:
+        - title: "Tank Pressure Distribution"
+          description: "Per-tank average pressure heatmap (requires matrix data)"
+          components: ["LP_Storage_Tank"]
+    
     compressor_power:
       enabled: true
       plots:
@@ -148,10 +195,14 @@ visualization:
     thermal_load_breakdown:
       enabled: true
       plots:
-        - title: "H2 Train Cooling Load (SOEC & PEM)"
-          components: ["SOEC_H2_Interchanger_1", "SOEC_H2_DryCooler_1", "SOEC_H2_Chiller_1", "SOEC_H2_Intercooler_1", "SOEC_H2_Intercooler_2", "SOEC_H2_Intercooler_3", "SOEC_H2_Intercooler_4", "SOEC_H2_Intercooler_5", "SOEC_H2_Intercooler_6", "SOEC_H2_Chiller_2", "PEM_H2_DryCooler_1", "PEM_H2_Chiller_1", "PEM_H2_Chiller_2"]
-        - title: "O2 Train Cooling Load (SOEC & PEM)"
-          components: ["SOEC_O2_Drycooler_1", "SOEC_O2_Drycooler_2", "SOEC_O2_Drycooler_3", "SOEC_O2_Drycooler_4", "SOEC_O2_Drycooler_5", "PEM_O2_Drycooler_1", "PEM_O2_Chiller_1"]
+        - title: "SOEC H2 Train Cooling Load"
+          components: ["SOEC_H2_Interchanger_1", "SOEC_H2_DryCooler_1", "SOEC_H2_Chiller_1", "SOEC_H2_Intercooler_1", "SOEC_H2_Intercooler_2", "SOEC_H2_Intercooler_3", "SOEC_H2_Intercooler_4", "SOEC_H2_Intercooler_5", "SOEC_H2_Intercooler_6", "SOEC_H2_Chiller_2", "SOEC_H2_ElectricBoiler_PSA"]
+        - title: "PEM H2 Train Cooling Load"
+          components: ["PEM_H2_DryCooler_1", "PEM_H2_Chiller_1", "PEM_H2_ElectricBoiler_1", "PEM_H2_Chiller_2", "PEM_H2_ElectricBoiler_2"]
+        - title: "SOEC O2 Train Cooling Load"
+          components: ["SOEC_O2_Interchanger_1", "SOEC_O2_Drycooler_1", "SOEC_O2_Drycooler_2", "SOEC_O2_Drycooler_3", "SOEC_O2_Drycooler_4"]
+        - title: "PEM O2 Train Cooling Load"
+          components: ["PEM_O2_Drycooler_1", "PEM_O2_Chiller_1", "PEM_O2_ElectricBoiler"]
     
     water_removal_bar:
       enabled: true
@@ -202,6 +253,21 @@ visualization:
             - "SOEC_H2_ElectricBoiler_PSA"
             - "SOEC_H2_PSA_1"
 
+        - title: "PEM H2 Train - Temperature Profile"
+          components: 
+            - "PEM_Electrolyzer"
+            - "PEM_H2_KOD_1"
+            - "PEM_H2_DryCooler_1"
+            - "PEM_H2_Chiller_1"
+            - "PEM_H2_KOD_2"
+            - "PEM_H2_Coalescer_1"
+            - "PEM_H2_ElectricBoiler_1"
+            - "PEM_H2_Deoxo_1"
+            - "PEM_H2_Chiller_2"
+            - "PEM_H2_KOD_3"
+            - "PEM_H2_ElectricBoiler_2"
+            - "PEM_H2_PSA_1"
+
     pressure_profile:
       enabled: true
       plots:
@@ -236,6 +302,21 @@ visualization:
             - "SOEC_H2_ElectricBoiler_PSA"
             - "SOEC_H2_PSA_1"
             
+        - title: "PEM H2 Train - Pressure Profile"
+          components: 
+            - "PEM_Electrolyzer"
+            - "PEM_H2_KOD_1"
+            - "PEM_H2_DryCooler_1"
+            - "PEM_H2_Chiller_1"
+            - "PEM_H2_KOD_2"
+            - "PEM_H2_Coalescer_1"
+            - "PEM_H2_ElectricBoiler_1"
+            - "PEM_H2_Deoxo_1"
+            - "PEM_H2_Chiller_2"
+            - "PEM_H2_KOD_3"
+            - "PEM_H2_ElectricBoiler_2"
+            - "PEM_H2_PSA_1"
+            
     flow_profile:
       enabled: true
       plots:
@@ -269,6 +350,21 @@ visualization:
             - "SOEC_H2_Coalescer_2"
             - "SOEC_H2_ElectricBoiler_PSA"
             - "SOEC_H2_PSA_1"
+
+        - title: "PEM H2 Train - Flow & Composition Profile"
+          components: 
+            - "PEM_Electrolyzer"
+            - "PEM_H2_KOD_1"
+            - "PEM_H2_DryCooler_1"
+            - "PEM_H2_Chiller_1"
+            - "PEM_H2_KOD_2"
+            - "PEM_H2_Coalescer_1"
+            - "PEM_H2_ElectricBoiler_1"
+            - "PEM_H2_Deoxo_1"
+            - "PEM_H2_Chiller_2"
+            - "PEM_H2_KOD_3"
+            - "PEM_H2_ElectricBoiler_2"
+            - "PEM_H2_PSA_1"
 
     # 7.2 O2 TRAIN PROFILE (Example of keeping combined if desired, or reuse process_train_profile)
     # process_train_profile: # Re-enable for other trains if needed
@@ -337,7 +433,8 @@ visualization:
     legacy_cumulative_h2:
       enabled: true
       plots:
-        - title: "Cumulative H2"
+        - title: "Cumulative H2 Production (Unified)"
+          description: "Unified graph: PEM/SOEC/ATR sources + RFNBO compliance overlay"
           components: []
     
     legacy_cumulative_energy:

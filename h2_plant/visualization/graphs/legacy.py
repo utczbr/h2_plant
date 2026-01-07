@@ -161,6 +161,12 @@ try:
     plot_water_vapor = _wrap_legacy(sg.create_water_vapor_tracking_figure, "Water Vapor")
     plot_total_mass_flow = _wrap_legacy(sg.create_total_mass_flow_figure, "Total Mass Flow")
     
+    # RFNBO Compliance (Economic Spot Dispatch)
+    plot_rfnbo_compliance_stacked = _wrap_legacy(sg.create_rfnbo_compliance_stacked_figure, "RFNBO Compliance")
+    plot_rfnbo_spot_analysis = _wrap_legacy(sg.create_rfnbo_spot_analysis_figure, "RFNBO Spot Analysis")
+    plot_rfnbo_pie = _wrap_legacy(sg.create_rfnbo_pie_figure, "RFNBO Compliance Pie")
+    plot_cumulative_rfnbo = _wrap_legacy(sg.create_cumulative_rfnbo_figure, "Cumulative RFNBO")
+    
     # Stacked Properties (Process Train) - SPECIAL HANDLERS
     # These need to pass component list to build metadata
     def _wrap_stacked_properties(func, train_tag: str):
@@ -258,6 +264,12 @@ LEGACY_HANDLERS = {
     # Flow Tracking
     'legacy_water_vapor': plot_water_vapor,
     'legacy_total_mass_flow': plot_total_mass_flow,
+    
+    # RFNBO Compliance (Economic Spot Dispatch)
+    'rfnbo_compliance_stacked': plot_rfnbo_compliance_stacked,
+    'rfnbo_spot_analysis': plot_rfnbo_spot_analysis,
+    'rfnbo_pie': plot_rfnbo_pie,
+    'cumulative_rfnbo': plot_cumulative_rfnbo,
     
     # Stacked Properties
     'legacy_h2_stacked': plot_h2_stacked,

@@ -90,8 +90,10 @@ def _get_topology_section(comp_id: str, comp_type: str) -> int:
     
     # 1. Storage & Distribution (High Priority)
     if "HP_" in cid: return 7
+    if "LP_Compressor" in cid or "LP_Intercooler" in cid: return 7
+    if "Truck_Station" in cid or "DischargeStation" in ctype: return 7
     if any(k in cid for k in ["STORAGE", "TANK", "GRID", "CONSUMER"]): return 7
-    if any(k in ctype for k in ["TANK", "STORAGE"]): return 7
+    if any(k in ctype for k in ["TANK", "STORAGE", "DETAILEDTANK"]): return 7
     
     # 2. Specific Train Prefixes (Explicit O2/H2 Paths)
     # Check O2 first to distinguish from generic SOEC/PEM
@@ -170,8 +172,8 @@ def print_stream_summary_table(
         
         # Get component output stream - prioritize by gas species mass (H2 + O2 + CH4)
         candidate_streams = []
-        priority_ports = ['h2_out', 'syngas_out', 'purified_gas_out', 'hydrogen']
-        all_ports = ['outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'tail_gas_out', 'hot_out', 'water_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water', 'outlet_1', 'outlet_2']
+        priority_ports = ['inventory', 'h2_out', 'syngas_out', 'purified_gas_out', 'hydrogen']
+        all_ports = ['inventory', 'outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'tail_gas_out', 'hot_out', 'water_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water', 'outlet_1', 'outlet_2']
         
         for port in all_ports:
             try:

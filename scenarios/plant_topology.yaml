@@ -25,6 +25,7 @@ nodes:
       steam_input_ratio_kg_per_kg_h2: 11.0 
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
+      lifecycle: 43800  # 5 years lifecycle for degradation reset
       process_step: 10
     connections:
       - source_port: "h2_out"
@@ -767,7 +768,8 @@ nodes:
       max_power_mw: 5.0
       use_polynomials: True
       water_excess_factor: 0.02 
-      out_pressure_pa: 4000000.0 # 40 bar 
+      out_pressure_pa: 4000000.0 # 40 bar
+      lifecycle: 43800  # 5 years lifecycle for degradation reset 
     connections:
       - source_port: "h2_out"
         target_name: "PEM_H2_KOD_1"
@@ -1035,8 +1037,8 @@ nodes:
   - id: "O2_Backup_Supply"
     type: "OxygenMakeupNode"
     params:
-      min_target_flow_kg_h: 0.0  # No minimum makeup required
-      max_limit_flow_kg_h: 757.54  # Vent excess above this
+      min_target_flow_kg_h: 229.45  # Minimum O2 for ATR operation (from regression table min)
+      max_limit_flow_kg_h: 757.54  # Vent excess above max ATR capacity
       supply_pressure_bar: 15.0
       supply_temperature_c: 25.0
       system_group: "O2_Header"
@@ -1057,10 +1059,12 @@ nodes:
       pressure_bar: 3.0
       temperature_c: 25.0
       max_flow_rate_kg_h: 1959.59  # Max Biogas from regression
+      min_flow_rate_kg_h: 593.54  # Min Biogas from regression (at O2=229.45)
       methane_content: 0.60
       # Proportional control: sync to O2 flow
       reference_component_id: "O2_Backup_Supply"
-      reference_max_flow_kg_h: 757.54  # Auto-calculates ratio
+      reference_min_flow_kg_h: 229.45  # Min O2 for scaling ratio
+      reference_max_flow_kg_h: 757.54  # Max O2 for scaling ratio
       system_group: "ATR_Unit"
       process_step: 1
     connections:
@@ -1191,11 +1195,13 @@ nodes:
     type: "ProportionalMakeupMixer"
     params:
       max_flow_rate_kg_h: 2331.95  # Max Steam from regression
+      min_flow_rate_kg_h: 706.32  # Min Steam from regression (at O2=229.45)
       makeup_pressure_bar: 15.0
       makeup_temp_c: 25.0
       # Proportional control: sync to O2 flow
       reference_component_id: "O2_Backup_Supply"
-      reference_max_flow_kg_h: 757.54  # Auto-calculates ratio
+      reference_min_flow_kg_h: 229.45  # Min O2 for scaling ratio
+      reference_max_flow_kg_h: 757.54  # Max O2 for scaling ratio
       system_group: "ATR_Water_Loop"
       process_step: 45
     connections:
@@ -1387,13 +1393,51 @@ nodes:
     params:
       cycle_time_min: 10.0
       recovery_rate: 0.90 # 90% H2 recovery
-      purity_target: 0.9999
+      purity_target: 0.999
       power_consumption_kw: 25.0
       bed_length_m: 2.5
       bed_diameter_m: 1.0
       system_group: "ATR_Unit"
     connections:
       - source_port: "purified_gas_out"
+        target_name: "ATR_H2_Compressor_1"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # ATR H2 Compression Train (15 bar -> 40 bar)
+  - id: "ATR_H2_Compressor_1"
+    type: "CompressorSingle"
+    params:
+      outlet_pressure_bar: 39.64
+      max_temp_c: 135.0
+      temperature_limited: true
+      max_flow_kg_h: 1500.0  # Approx PSA output
+    connections:
+      - source_port: "outlet"
+        target_name: "ATR_H2_Drycooler"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "ATR_H2_Drycooler"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+      component_id: "ATR_H2_Drycooler"
+    connections:
+      - source_port: "fluid_out"
+        target_name: "ATR_H2_Compressor_2"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "ATR_H2_Compressor_2"
+    type: "CompressorSingle"
+    params:
+      outlet_pressure_bar: 39.64
+      max_temp_c: 135.0
+      temperature_limited: true
+      max_flow_kg_h: 1500.0
+    connections: 
+      - source_port: "outlet"
         target_name: "H2_Production_Mixer"
         target_port: "inlet_3"
         resource_type: "stream"
@@ -1411,7 +1455,17 @@ nodes:
       process_step: 400
     connections:
       - source_port: "outlet"
-        target_name: "HP_Compressor_S1"
+        target_name: "H2_Production_Cooler"
+        target_port: "fluid_in"
+        resource_type: "gas"
+
+  - id: "H2_Production_Cooler"
+    type: "DryCooler"
+    params:
+      target_temp_c: 40.0
+    connections:
+      - source_port: "fluid_out"
+        target_name: "LP_Compressor_S1"
         target_port: "h2_in"
         resource_type: "gas"
 
@@ -1421,144 +1475,168 @@ nodes:
   # Limit: 135ºC
   # =================================================================================
 
-  # --- Stage 1 (40.0 → 66.3 bar) ---
-  - id: "HP_Compressor_S1"
+  # --- Stage 1 (40.0 → 70.0 bar) ---
+  - id: "LP_Compressor_S1"
     type: "CompressorSingle"
     params:
       max_flow_kg_h: 520.0 # Pro-rated for combined flow (400 SOEC + 120 PEM approx)
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 40.0
-      outlet_pressure_bar: 66.3
+      outlet_pressure_bar: 70.0
     connections:
       - source_port: "outlet"
-        target_name: "HP_DryCooler_S1"
+        target_name: "LP_Intercooler_1"
         target_port: "fluid_in"
-        resource_type: "stream"
+        resource_type: "gas"
 
-  - id: "HP_DryCooler_S1"
+  - id: "LP_Intercooler_1"
     type: "DryCooler"
-    params: 
-      target_temp_c: 40.0
+    params:
+      design_capacity_kw: 500.0
+      target_out_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
-        target_name: "HP_Compressor_S2"
+        target_name: "LP_Storage_Tank"
         target_port: "h2_in"
         resource_type: "gas"
 
-  # --- Stage 2 (66.3 → 109.9 bar) ---
+  # =================================================================================
+  # HYDROGEN STORAGE (70 bar)
+  # =================================================================================
+
+  - id: "LP_Storage_Tank"
+    type: "DetailedTank"
+    params:
+      n_tanks: 30
+      volume_per_tank_m3: 2000000000000000000000000000000000000000000000000000000000000000.0 # From HP spec, assumed consistent
+      max_pressure_bar: 70.0
+      initial_pressure_bar: 1.0
+      min_discharge_pressure_bar: 30.0
+      ambient_temp_k: 298.15
+    connections:
+      - source_port: "h2_out"
+        target_name: "HP_Compressor_S2"
+        target_port: "inlet"
+        resource_type: "gas"
+
+  # =================================================================================
+  # HP COMPRESSION TRAIN (500 bar)
+  # =================================================================================
+
   - id: "HP_Compressor_S2"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
+      max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 66.3
-      outlet_pressure_bar: 109.9
+      inlet_pressure_bar: 30.0
+      outlet_pressure_bar: 60.0 # Balanced Stage 1/4
     connections:
       - source_port: "outlet"
-        target_name: "HP_DryCooler_S2"
+        target_name: "HP_Intercooler_2"
         target_port: "fluid_in"
-        resource_type: "stream"
+        resource_type: "gas"
 
-  - id: "HP_DryCooler_S2"
+  - id: "HP_Intercooler_2"
     type: "DryCooler"
-    params: 
-      target_temp_c: 40.0
+    params:
+      design_capacity_kw: 500.0
+      target_out_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
         target_name: "HP_Compressor_S3"
-        target_port: "h2_in"
+        target_port: "inlet"
         resource_type: "gas"
 
-  # --- Stage 3 (109.9 → 182.1 bar) ---
   - id: "HP_Compressor_S3"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
+      max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 109.9
-      outlet_pressure_bar: 182.1
+      inlet_pressure_bar: 60.0 
+      outlet_pressure_bar: 125.0 # Balanced Stage 2/4
     connections:
       - source_port: "outlet"
-        target_name: "HP_DryCooler_S3"
+        target_name: "HP_Intercooler_3"
         target_port: "fluid_in"
-        resource_type: "stream"
+        resource_type: "gas"
 
-  - id: "HP_DryCooler_S3"
+  - id: "HP_Intercooler_3"
     type: "DryCooler"
-    params: 
-      target_temp_c: 40.0
+    params:
+      design_capacity_kw: 500.0
+      target_out_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
         target_name: "HP_Compressor_S4"
-        target_port: "h2_in"
+        target_port: "inlet"
         resource_type: "gas"
 
-  # --- Stage 4 (182.1 → 301.8 bar) ---
   - id: "HP_Compressor_S4"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
+      max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 182.1
-      outlet_pressure_bar: 301.8
+      inlet_pressure_bar: 125.0 
+      outlet_pressure_bar: 250.0 # Balanced Stage 3/4
     connections:
       - source_port: "outlet"
-        target_name: "HP_DryCooler_S4"
+        target_name: "HP_Intercooler_4"
         target_port: "fluid_in"
-        resource_type: "stream"
+        resource_type: "gas"
 
-  - id: "HP_DryCooler_S4"
+  - id: "HP_Intercooler_4"
     type: "DryCooler"
-    params: 
-      target_temp_c: 40.0
+    params:
+      design_capacity_kw: 500.0 # Revert to reasonable sizing
+      target_out_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
         target_name: "HP_Compressor_S5"
-        target_port: "h2_in"
+        target_port: "inlet"
         resource_type: "gas"
-
-  # --- Stage 5 (301.8 → 500.0 bar) ---
+  
   - id: "HP_Compressor_S5"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
-      max_temp_c: 135.0
+      max_flow_kg_h: 720.0
+      max_temp_c: 135.0 # Lower limit for final stage
       temperature_limited: true
-      inlet_pressure_bar: 301.8
-      outlet_pressure_bar: 500.0
+      inlet_pressure_bar: 250.0 
+      outlet_pressure_bar: 500.0 # Final Stage 4/4
     connections:
       - source_port: "outlet"
-        target_name: "HP_DryCooler_S5"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "HP_DryCooler_S5"
-    type: "DryCooler"
-    params: 
-      target_temp_c: 40.0
-    connections:
-      - source_port: "fluid_out"
-        target_name: "H2_Storage_Tank"
+        target_name: "Truck_Station_1"
         target_port: "h2_in"
         resource_type: "gas"
 
+
   # =================================================================================
-  # HYDROGEN STORAGE (500 bar)
+  # TRUCK DISCHARGE STATION
+  # Event-driven with isentropic compression energy calculation
   # =================================================================================
 
-  - id: "H2_Storage_Tank"
-    type: "Tank"
+  - id: "Truck_Station_1"
+    type: "DischargeStation"
     params:
-      n_tanks: 10
-      capacity_kg: 1000.0  # 10000 kg total (10 ton)
-      max_pressure_bar: 500.0
-      temperature_k: 298.15
-    connections: []
-
-
-
-      
+      station_id: 1
+      n_stations: 5  # Simulating 5 identical truck bays
+      truck_capacity_kg: 280.0    # Reference: 280kg
+      delivery_pressure_bar: 500.0
+      max_fill_rate_kg_min: 90.0  # Reference: 90 kg/min
+      min_fill_rate_kg_min: 35.0  # Simulation of lower demand/night shift
+      h_in_day_max: 12.0         # ~770 minutes operating at max rate
+      valves_close_time_min: 5.0  # Time to close valves
+      arrival_probability: 0.3    # Ignored when h_in_day_max is set
+      isen_efficiency: 0.65       # Reference: 0.65
+      mech_efficiency: 0.90       # Reference: 0.90
+      cooldown_minutes: 180.0     # Reference: 3 hours
+    connections:
+      # Feedback loop: Demand Signal flows back to Tank
+      - source_port: "demand_signal"
+        target_name: "LP_Storage_Tank"
+        target_port: "demand_signal"
+        resource_type: "signal"

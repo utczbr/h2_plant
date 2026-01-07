@@ -393,19 +393,37 @@ def plot_power_breakdown_pie(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot power consumption breakdown as pie chart."""
     _check_dependencies()
     
-    pem_energy = data['pem'].get('cumulative_energy_kwh', [0])[-1] if data['pem'].get('cumulative_energy_kwh') else 0
-    soec_energy = data['soec'].get('cumulative_energy_kwh', [0])[-1] if data['soec'].get('cumulative_energy_kwh') else 0
+    pem_energy = data['pem'].get('cumulative_energy_kwh', [0])[-1] if data.get('pem') and data['pem'].get('cumulative_energy_kwh') else 0
+    soec_energy = data['soec'].get('cumulative_energy_kwh', [0])[-1] if data.get('soec') and data['soec'].get('cumulative_energy_kwh') else 0
+    comp_energy = data['compression'].get('total_energy_kwh', [0])[-1] if data.get('compression') and data['compression'].get('total_energy_kwh') else 0
+    
+    values = [pem_energy, soec_energy, comp_energy]
+    labels = ['PEM', 'SOEC', 'Compression']
+    colors = ['#1f77b4', '#ff7f0e', '#9467bd']
+    
+    # Filter out zero values
+    plot_data = [(l, v, c) for l, v, c in zip(labels, values, colors) if v > 0]
+    if plot_data:
+        plot_labels, plot_values, plot_colors = zip(*plot_data)
+    else:
+        plot_labels, plot_values, plot_colors = [], [], []
     
     fig = go.Figure(data=[go.Pie(
-        labels=['PEM', 'SOEC'],
-        values=[pem_energy, soec_energy],
-        marker=dict(colors=['#1f77b4', '#ff7f0e']),
+        labels=plot_labels,
+        values=plot_values,
+        marker=dict(colors=plot_colors),
         textinfo='label+percent',
         textposition='inside'
     )])
     
+    total_energy_kwh = sum(values)
+    legend_title = f"Total: {total_energy_kwh:.2f} kWh"
+    if total_energy_kwh > 1000:
+        legend_title = f"Total: {total_energy_kwh/1000.0:.2f} MWh"
+    
     fig.update_layout(
         title=kwargs.get('title', 'Total Energy Consumption Breakdown'),
+        legend=dict(title=legend_title),
         template='plotly_white'
     )
     

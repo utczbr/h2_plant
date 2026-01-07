@@ -162,6 +162,15 @@ class SOECOperator(Component):
             # UPDATE: Default pressure to 1.0 bar. Check config first.
             self.out_pressure_pa = config.get("out_pressure_pa", 100000.0)
 
+        # Lifecycle parameter for degradation reset (hours)
+        if isinstance(config, dict):
+             self.lifecycle_h = config.get("lifecycle", 876000.0) # default ~100 years
+        else:
+             self.lifecycle_h = getattr(config, "lifecycle", 876000.0)
+
+        # Initialize accumulated hours based on starting degradation year
+        self.accumulated_hours = self.degradation_year * 8760.0
+
         # Initialize module states
         self._initialize_state()
 
@@ -385,6 +394,33 @@ class SOECOperator(Component):
 
         if self.rotation_enabled and (int(prev_minute / 60) < int(self.current_minute / 60)):
             self._update_virtual_map()
+        
+        # === Dynamic Degradation Update ===
+        # Advance fleet absolute age
+        self.accumulated_hours += self.dt
+        
+        # Calculate effective age for degradation (Modulo Lifecycle)
+        effective_hours = self.accumulated_hours % self.lifecycle_h
+        effective_year = effective_hours / 8760.0
+        
+        # Re-interpolate performance factors
+        self.current_efficiency_kwh_kg = float(
+            self._interpolate(effective_year, DEG_YEARS, DEG_EFFICIENCY_KWH_KG)
+        )
+        cap_percent = float(
+             self._interpolate(effective_year, DEG_YEARS, DEG_CAPACITY_FACTOR)
+        )
+        new_capacity_factor = cap_percent / 100.0
+        
+        # If capacity changed, update limits
+        if abs(new_capacity_factor - self.current_capacity_factor) > 1e-6:
+            self.current_capacity_factor = new_capacity_factor
+            self.effective_max_module_power = self.max_nominal_power * self.current_capacity_factor
+            self.uniform_module_max_limit = self.effective_max_module_power * self.optimal_limit_ratio
+            
+            # Simple approach: Update all active modules
+            active_mask = self.real_states != 0
+            self.real_limits[active_mask] = self.uniform_module_max_limit
 
         # Execute power distribution
         self._simulate_step(clamped_reference)

@@ -306,7 +306,7 @@ class GraphCatalog:
             description='Pie chart showing power distribution',
             function=pg.plot_power_breakdown_pie,
             library=GraphLibrary.PLOTLY,
-            data_required=['pem.cumulative_energy_kwh', 'soec.cumulative_energy_kwh'],
+            data_required=['pem.cumulative_energy_kwh', 'soec.cumulative_energy_kwh', 'compression.total_energy_kwh'],
             priority=GraphPriority.MEDIUM,
             category='economics',
             enabled=True
@@ -554,6 +554,19 @@ class GraphCatalog:
             data_required=['history'],
             priority=GraphPriority.MEDIUM,
             category='legacy',
+            enabled=True
+        ))
+        
+        # Storage APC (Advanced Process Control)
+        self.register(GraphMetadata(
+            graph_id='storage_apc',
+            title='Storage APC Control',
+            description='State of Charge, control zones, and power modulation factor',
+            function=sg.create_storage_apc_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['storage_soc', 'storage_zone', 'storage_action_factor'],
+            priority=GraphPriority.HIGH,
+            category='storage',
             enabled=True
         ))
         

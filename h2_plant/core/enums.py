@@ -106,3 +106,18 @@ class SystemMode(IntEnum):
     LOW_DEMAND = 3   # Low-demand mode (optimize efficiency)
     EMERGENCY_STOP = 4  # Emergency shutdown
     MAINTENANCE = 5  # Maintenance mode
+
+
+class DispatchStrategyEnum(IntEnum):
+    """
+    Strategy for dispatch power allocation between electrolyzers.
+    
+    Used by dispatch framework to select allocation logic.
+    
+    Examples:
+        strategy = create_dispatch_strategy(DispatchStrategyEnum.ECONOMIC_SPOT)
+        result = strategy.decide(inputs, state)
+    """
+    SOEC_ONLY = 0        # Single SOEC electrolyzer dispatch
+    REFERENCE_HYBRID = 1  # Hybrid SOEC/PEM with arbitrage
+    ECONOMIC_SPOT = 2    # Economic spot purchase for non-RFNBO H2

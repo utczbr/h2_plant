@@ -49,6 +49,8 @@ class DispatchInput:
         pem_max_power_mw (float): PEM electrolyzer maximum power (MW).
         soec_h2_kwh_kg (float): SOEC energy efficiency (kWh/kg H₂).
         pem_h2_kwh_kg (float): PEM energy efficiency (kWh/kg H₂).
+        h2_non_rfnbo_price_eur_kg (float): Non-certified H2 price (EUR/kg).
+        p_grid_max_mw (float): Maximum grid connection capacity (MW).
     """
     minute: int
     P_offer: float
@@ -61,6 +63,8 @@ class DispatchInput:
     ppa_price_eur_mwh: float = 50.0 # Default
     h2_price_eur_kg: float = 9.6    # Default
     arbitrage_threshold_eur_mwh: Optional[float] = None  # Explicit override
+    h2_non_rfnbo_price_eur_kg: float = 2.0  # EUR/kg non-certified H2
+    p_grid_max_mw: float = 30.0  # Maximum grid connection (MW)
 
 
 @dataclass
@@ -316,3 +320,136 @@ class SoecOnlyStrategy(DispatchStrategy):
             P_sold=P_sold,
             state_update={'force_sell': force_sell}
         )
+
+
+class EconomicSpotDispatchStrategy(DispatchStrategy):
+    """
+    Economic spot dispatch with RFNBO protection.
+    
+    Principles:
+    1. Allocate all renewable power (P_offer) to SOEC + PEM (RFNBO-compliant)
+    2. Purchase spot grid power for PEM only if economically viable
+    3. Classify H2 as RFNBO (renewable) vs non-RFNBO (grid-powered)
+    
+    Decision Rule:
+        If spot_price < h2_non_rfnbo_price / pem_efficiency:
+            Purchase spot power for additional PEM production
+    
+    Attributes:
+        h2_rfnbo_kg (float): Accumulated RFNBO-certified hydrogen (kg).
+        h2_non_rfnbo_kg (float): Accumulated non-certified hydrogen (kg).
+    
+    Example:
+        >>> strategy = EconomicSpotDispatchStrategy()
+        >>> result = strategy.decide(inputs, state)
+        >>> print(f"RFNBO: {result.state_update['h2_rfnbo_kg']:.2f} kg")
+    """
+    
+    def __init__(self):
+        self.h2_rfnbo_kg: float = 0.0
+        self.h2_non_rfnbo_kg: float = 0.0
+        self.e_rfnbo_used_mwh: float = 0.0
+        self.e_spot_purchased_mwh: float = 0.0
+    
+    def decide(self, inputs: DispatchInput, state: DispatchState) -> DispatchResult:
+        """
+        Calculate dispatch setpoints with economic spot evaluation.
+        
+        Steps:
+        1. Allocate P_RFNBO = min(P_SOEC + P_PEM_renewable, P_offer)
+        2. Evaluate spot margin: spot_price < h2_non_rfnbo / eta_pem
+        3. If profitable, add P_PEM_spot = min(P_PEM_available, P_grid_max)
+        4. Classify H2: RFNBO (from renewable) vs non-RFNBO (from grid)
+        
+        Args:
+            inputs (DispatchInput): Current power offer, prices, and constraints.
+            state (DispatchState): Previous SOEC power and state.
+        
+        Returns:
+            DispatchResult: Power allocation with RFNBO classification.
+        """
+        # Time parameters
+        dt = 1.0 / 60.0  # 1 minute in hours
+        minute_of_hour = inputs.minute % 60
+        
+        # Economic parameters
+        h2_non_rfnbo_price = inputs.h2_non_rfnbo_price_eur_kg
+        pem_mwh_per_kg = inputs.pem_h2_kwh_kg / 1000.0  # Convert kWh/kg to MWh/kg
+        p_grid_max = inputs.p_grid_max_mw
+        
+        # Step 1: RFNBO-compliant allocation (renewable power only)
+        # Prioritize SOEC, then PEM for renewable power
+        P_soec_target = min(inputs.P_offer, inputs.soec_capacity_mw)
+        
+        # Apply ramp-down in final 15 minutes (existing logic)
+        if minute_of_hour >= 45:
+            P_soec_fut = min(inputs.P_future_offer, inputs.soec_capacity_mw)
+            if P_soec_target > P_soec_fut:
+                P_soec_target = P_soec_fut
+        
+        P_soec = P_soec_target
+        P_offer_remaining = inputs.P_offer - P_soec
+        
+        # Allocate remaining renewable to PEM (RFNBO-compliant)
+        P_pem_rfnbo = min(P_offer_remaining, inputs.pem_max_power_mw)
+        P_offer_surplus = P_offer_remaining - P_pem_rfnbo
+
+        # Step 2: Economic evaluation for spot purchase
+        # Threshold: spot_price < h2_price / efficiency (EUR/MWh)
+        # At 2.0 EUR/kg and 0.050 MWh/kg: threshold = 40 EUR/MWh
+        spot_threshold = h2_non_rfnbo_price / pem_mwh_per_kg if pem_mwh_per_kg > 0 else 0.0
+        P_pem_spot = 0.0
+        
+        if inputs.current_price < spot_threshold:
+            # Economically viable: purchase spot power for PEM
+            P_pem_available = inputs.pem_max_power_mw - P_pem_rfnbo
+            P_pem_spot = min(P_pem_available, p_grid_max)
+        
+        # Step 3: Total power allocation
+        P_pem_total = P_pem_rfnbo + P_pem_spot
+        
+        # Step 4: Hydrogen classification
+        soec_mwh_per_kg = inputs.soec_h2_kwh_kg / 1000.0
+        
+        # Calculate H2 from each source (per timestep)
+        H2_soec = (P_soec * dt * 1000) / inputs.soec_h2_kwh_kg if inputs.soec_h2_kwh_kg > 0 else 0.0
+        H2_pem_rfnbo = (P_pem_rfnbo * dt * 1000) / inputs.pem_h2_kwh_kg if inputs.pem_h2_kwh_kg > 0 else 0.0
+        H2_pem_spot = (P_pem_spot * dt * 1000) / inputs.pem_h2_kwh_kg if inputs.pem_h2_kwh_kg > 0 else 0.0
+        
+        # Classify
+        H2_rfnbo = H2_soec + H2_pem_rfnbo
+        H2_non_rfnbo = H2_pem_spot
+        
+        # Update internal tracking (cumulative)
+        self.h2_rfnbo_kg += H2_rfnbo
+        self.h2_non_rfnbo_kg += H2_non_rfnbo
+        self.e_rfnbo_used_mwh += (P_soec + P_pem_rfnbo) * dt
+        self.e_spot_purchased_mwh += P_pem_spot * dt
+        
+        # Return dispatch result
+        return DispatchResult(
+            P_soec=P_soec,
+            P_pem=P_pem_total,
+            P_sold=P_offer_surplus,  # Excess renewable sold
+            state_update={
+                'force_sell': False,
+                'h2_rfnbo_kg': H2_rfnbo,
+                'h2_non_rfnbo_kg': H2_non_rfnbo,
+                'spot_purchased_mw': P_pem_spot,
+                'spot_threshold_eur_mwh': spot_threshold
+            }
+        )
+    
+    def reset(self):
+        """Reset accumulated counters."""
+        self.h2_rfnbo_kg = 0.0
+        self.h2_non_rfnbo_kg = 0.0
+        self.e_rfnbo_used_mwh = 0.0
+        self.e_spot_purchased_mwh = 0.0
+    
+    def get_rfnbo_compliance_pct(self) -> float:
+        """Calculate RFNBO compliance percentage."""
+        total = self.h2_rfnbo_kg + self.h2_non_rfnbo_kg
+        if total <= 0:
+            return 100.0
+        return (self.h2_rfnbo_kg / total) * 100.0

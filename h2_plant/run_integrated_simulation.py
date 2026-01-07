@@ -36,7 +36,8 @@ _component_metadata: Dict[str, Dict[str, Any]] = {}
 def run_with_dispatch_strategy(
     scenarios_dir: str,
     hours: Optional[int] = None,
-    output_dir: Optional[Path] = None
+    output_dir: Optional[Path] = None,
+    strategy: Optional[str] = None
 ) -> Dict[str, np.ndarray]:
     """
     Run simulation using SimulationEngine with integrated DispatchStrategy.
@@ -64,6 +65,9 @@ def run_with_dispatch_strategy(
             Default: from configuration.
         output_dir (Path, optional): Output directory for results.
             Default: <scenarios_dir>/simulation_output.
+        strategy (str, optional): Dispatch strategy override.
+            Options: SOEC_ONLY, REFERENCE_HYBRID, ECONOMIC_SPOT.
+            Default: from simulation_config.yaml (REFERENCE_HYBRID).
 
     Returns:
         Dict[str, np.ndarray]: Dictionary of NumPy arrays containing
@@ -77,6 +81,7 @@ def run_with_dispatch_strategy(
     from h2_plant.core.graph_builder import PlantGraphBuilder
     from h2_plant.core.component_registry import ComponentRegistry
     from h2_plant.simulation.engine import SimulationEngine
+    from h2_plant.core.enums import DispatchStrategyEnum
     from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
     from h2_plant.data.price_loader import EnergyPriceLoader
     from h2_plant.config.plant_config import ConnectionConfig
@@ -125,8 +130,19 @@ def run_with_dispatch_strategy(
     )
     total_steps = len(prices)
 
-    # Create dispatch strategy
+    # Determine dispatch strategy (CLI > config > default)
+    strategy_name = (strategy or 
+                     getattr(context.simulation, 'dispatch_strategy', None) or 
+                     'REFERENCE_HYBRID').upper()
+    
+    logger.info(f"Using dispatch strategy: {strategy_name}")
+    
+    # Create dispatch strategy with inner strategy based on selection
     dispatch_strategy = HybridArbitrageEngineStrategy()
+    
+    # Configure inner strategy based on selection
+    # The inner strategy selection will be passed to initialize()
+    dispatch_strategy._strategy_override = strategy_name
 
     # Create simulation engine with strategy and topology connections
     if output_dir is None:
@@ -193,15 +209,34 @@ def run_with_dispatch_strategy(
     )
     logger.info(f"Markdown report saved to: {report_path}")
 
-    # Export history to CSV
+    # Export history to CSV and NPZ
     try:
         import pandas as pd
         csv_path = output_dir / "simulation_history.csv"
-        df_history = pd.DataFrame(history)
+        npz_path = output_dir / "simulation_matrices.npz"
+        
+        # Split history into 1D (scalar) and >1D (matrix)
+        scalar_history = {}
+        matrix_history = {}
+        
+        for k, v in history.items():
+            if isinstance(v, np.ndarray) and v.ndim > 1:
+                matrix_history[k] = v
+            else:
+                scalar_history[k] = v
+        
+        # Save Scalars to CSV
+        df_history = pd.DataFrame(scalar_history)
         df_history.to_csv(csv_path, index=False)
         logger.info(f"Simulation history exported to: {csv_path}")
+        
+        # Save Matrices to NPZ
+        if matrix_history:
+             np.savez_compressed(npz_path, **matrix_history)
+             logger.info(f"Simulation matrices exported to: {npz_path}")
+             
     except Exception as e:
-        logger.warning(f"Failed to export history CSV: {e}")
+        logger.warning(f"Failed to export history CSV/NPZ: {e}")
 
     logger.info("Simulation completed successfully")
     
@@ -288,6 +323,11 @@ def generate_graphs(
             create_entrained_liquid_figure,
             create_h2_stacked_properties,
             create_o2_stacked_properties,
+            # RFNBO Compliance graphs
+            create_rfnbo_compliance_stacked_figure,
+            create_rfnbo_spot_analysis_figure,
+            create_rfnbo_pie_figure,
+            create_cumulative_rfnbo_figure,
         )
         GRAPHS_AVAILABLE = True
     except ImportError as e:
@@ -315,8 +355,11 @@ def generate_graphs(
     graphs_dir = output_dir / "graphs"
     graphs_dir.mkdir(parents=True, exist_ok=True)
     
+    # Filter 1D history for DataFrame (exclude matrices)
+    scalar_history = {k: v for k, v in history.items() if not (isinstance(v, np.ndarray) and v.ndim > 1)}
+    
     # Convert history to DataFrame
-    df = pd.DataFrame(history)
+    df = pd.DataFrame(scalar_history)
     
     # Normalize column names to match what graph functions expect
     # The dispatch history uses names like 'H2_soec_kg', 'spot_price', 'P_soec_actual'
@@ -407,6 +450,12 @@ def generate_graphs(
         # Flow tracking
         'water_vapor_tracking': create_water_vapor_tracking_figure,
         'total_mass_flow': create_total_mass_flow_figure,
+        
+        # RFNBO Compliance (Economic Spot Dispatch)
+        'rfnbo_compliance_stacked': create_rfnbo_compliance_stacked_figure,
+        'rfnbo_spot_analysis': create_rfnbo_spot_analysis_figure,
+        'rfnbo_pie': create_rfnbo_pie_figure,
+        'cumulative_rfnbo': create_cumulative_rfnbo_figure,
         
         # Legacy aliases (disabled by default in config, kept for backward compat)
         'dispatch': create_dispatch_figure,
@@ -521,6 +570,13 @@ def main():
         help="Skip graph generation"
     )
     parser.add_argument(
+        "--strategy",
+        type=str,
+        choices=["SOEC_ONLY", "REFERENCE_HYBRID", "ECONOMIC_SPOT"],
+        default=None,
+        help="Dispatch strategy (overrides config). Options: SOEC_ONLY, REFERENCE_HYBRID, ECONOMIC_SPOT"
+    )
+    parser.add_argument(
         "--profile",
         action="store_true",
         help="Enable cProfile benchmarking"
@@ -551,7 +607,8 @@ def main():
             history = run_with_dispatch_strategy(
                 scenarios_dir=args.scenarios_dir,
                 hours=args.hours,
-                output_dir=output_dir
+                output_dir=output_dir,
+                strategy=args.strategy
             )
         finally:
             profiler.disable()
@@ -571,7 +628,8 @@ def main():
         history = run_with_dispatch_strategy(
             scenarios_dir=args.scenarios_dir,
             hours=args.hours,
-            output_dir=output_dir
+            output_dir=output_dir,
+            strategy=args.strategy
         )
 
     # Summary stats

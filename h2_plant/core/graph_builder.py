@@ -8,6 +8,8 @@ from h2_plant.components.electrolysis.pem_electrolyzer import DetailedPEMElectro
 from h2_plant.components.electrolysis.soec_operator import SOECOperator
 from h2_plant.components.storage.h2_tank import TankArray
 from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
+from h2_plant.components.storage.detailed_tank import DetailedTankArray
+from h2_plant.components.delivery.discharge_station import DischargeStation
 from h2_plant.components.compression.compressor import CompressorStorage as Compressor
 from h2_plant.components.compression.compressor_single import CompressorSingle
 from h2_plant.components.balance_of_plant.pump import Pump
@@ -173,7 +175,14 @@ class PlantGraphBuilder:
             capacity = float(node.params.get('capacity_kg', 1000.0))
             pressure = float(node.params.get('max_pressure_bar', 200.0))
             temp = float(node.params.get('temperature_k', 298.15))
-            return TankArray(n_tanks=n_tanks, capacity_kg=capacity, pressure_bar=pressure, temperature_k=temp)
+            max_out_flow = float(node.params.get('max_output_flow_kg_h', 5000.0))
+            return TankArray(
+                n_tanks=n_tanks, 
+                capacity_kg=capacity, 
+                pressure_bar=pressure, 
+                temperature_k=temp,
+                max_output_flow_kg_h=max_out_flow
+            )
             
         elif node.type == "Tank_Enhanced":
             # Enhanced single tank with PVT dynamics
@@ -439,13 +448,19 @@ class PlantGraphBuilder:
                 pressure_bar=float(node.params.get('pressure_bar', 5.0)),
                 temperature_c=float(node.params.get('temperature_c', 25.0)),
                 max_flow_rate_kg_h=float(node.params.get('max_flow_rate_kg_h', 1000.0)),
-                methane_content=float(node.params.get('methane_content', 0.60))
+                methane_content=float(node.params.get('methane_content', 0.60)),
+                # Proportional control params
+                reference_component_id=node.params.get('reference_component_id', None),
+                reference_ratio=node.params.get('reference_ratio', None),
+                reference_max_flow_kg_h=node.params.get('reference_max_flow_kg_h', None)
             )
 
         elif node.type == "OxygenMakeupNode":
             return OxygenMakeupNode(
                 component_id=node.id,
-                target_flow_kg_h=float(node.params.get('target_flow_kg_h', 1000.0)),
+                target_flow_kg_h=node.params.get('target_flow_kg_h', None),
+                min_target_flow_kg_h=node.params.get('min_target_flow_kg_h', None),
+                max_limit_flow_kg_h=node.params.get('max_limit_flow_kg_h', None),
                 supply_pressure_bar=float(node.params.get('supply_pressure_bar', 15.0)),
                 supply_temperature_c=float(node.params.get('supply_temperature_c', 25.0)),
                 supply_purity=float(node.params.get('supply_purity', 0.995))
@@ -466,6 +481,30 @@ class PlantGraphBuilder:
 
         elif node.type == "WaterBalanceTracker":
             return WaterBalanceTracker()
+
+        elif node.type == "DetailedTank":
+            # High-fidelity tank array with state machines
+            return DetailedTankArray(
+                n_tanks=int(node.params.get('n_tanks', 10)),
+                volume_per_tank_m3=float(node.params.get('volume_per_tank_m3', 50.0)),
+                max_pressure_bar=float(node.params.get('max_pressure_bar', 500.0)),
+                initial_pressure_bar=float(node.params.get('initial_pressure_bar', 1.0)),
+                ambient_temp_k=float(node.params.get('ambient_temp_k', 293.15))
+            )
+
+        elif node.type == "DischargeStation":
+            # Truck loading station with compression energy
+            return DischargeStation(
+                station_id=int(node.params.get('station_id', 1)),
+                truck_capacity_kg=float(node.params.get('truck_capacity_kg', 1000.0)),
+                delivery_pressure_bar=float(node.params.get('delivery_pressure_bar', 500.0)),
+                max_fill_rate_kg_min=float(node.params.get('max_fill_rate_kg_min', 60.0)),
+                isen_efficiency=float(node.params.get('isen_efficiency', 0.75)),
+                mech_efficiency=float(node.params.get('mech_efficiency', 0.95)),
+                cooldown_minutes=float(node.params.get('cooldown_minutes', 150.0)),
+                arrival_probability=float(node.params.get('arrival_probability', 0.3))
+            )
+
         else:
             logger.warning(f"Unknown component type: {node.type} (ID: {node.id}) -> Instantiating PassiveComponent")
             return PassiveComponent()

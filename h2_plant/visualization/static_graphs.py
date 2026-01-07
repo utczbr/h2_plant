@@ -8,8 +8,10 @@ It replaces the legacy `h2_plant/gui/core/plotter.py` and `h2_plant/visualizatio
 from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
 from matplotlib.cm import get_cmap
+from matplotlib.ticker import FuncFormatter
 import pandas as pd
 import numpy as np
+import CoolProp.CoolProp as CP
 from typing import Dict, Any, List, Optional
 import logging
 
@@ -231,9 +233,13 @@ def create_dispatch_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     P_sold = downsample_for_plot(df['P_sold'])
     P_offer = downsample_for_plot(df['P_offer'])
     
-    # Get auxiliary power (convert kW to MW)
-    if 'auxiliary_power_kw' in df.columns:
+    # Get auxiliary/BOP power (priority: P_bop_mw, then compressor_power_kw)
+    if 'P_bop_mw' in df.columns:
+        P_aux = downsample_for_plot(df['P_bop_mw'])  # Already in MW
+    elif 'auxiliary_power_kw' in df.columns:
         P_aux = downsample_for_plot(df['auxiliary_power_kw'] / 1000.0)
+    elif 'compressor_power_kw' in df.columns:
+        P_aux = downsample_for_plot(df['compressor_power_kw'] / 1000.0)
     else:
         P_aux = np.zeros_like(P_soec)
     
@@ -407,27 +413,220 @@ def create_dispatch_curve_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figur
 
 @log_graph_errors
 def create_cumulative_h2_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
-    """Create cumulative hydrogen production chart."""
-    fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
+    """
+    Unified adaptive cumulative hydrogen production chart.
+    
+    Auto-detects available production sources (PEM, SOEC, ATR) and RFNBO data.
+    Creates stacked areas for each source with optional RFNBO overlay lines.
+    
+    Adapts to configurations:
+    - Only PEM
+    - Only SOEC
+    - PEM + SOEC
+    - PEM + SOEC + ATR
+    
+    Args:
+        df: History DataFrame
+        dpi: Figure resolution
+        
+    Returns:
+        Matplotlib Figure
+    """
+    fig = Figure(figsize=(12, 7), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
-    H2_soec_cum_full = df['H2_soec'].cumsum()
-    H2_pem_cum_full = df['H2_pem'].cumsum()
-    H2_total_cum_full = H2_soec_cum_full + H2_pem_cum_full
-    final_total = H2_total_cum_full.iloc[-1] if not H2_total_cum_full.empty else 0
     
-    minutes = downsample_for_plot(df['minute'])
-    H2_soec_cum = downsample_for_plot(H2_soec_cum_full)
-    H2_total_cum = downsample_for_plot(H2_total_cum_full)
+    # Time axis
+    if 'minute' in df.columns:
+        x = df['minute'] / 60.0  # Convert to hours
+        x_label = 'Time (hours)'
+    else:
+        x = df.index
+        x_label = 'Timestep'
     
-    ax.fill_between(minutes, 0, H2_soec_cum, label='SOEC (Cumulative)', color=COLORS['soec'], alpha=0.6)
-    ax.fill_between(minutes, H2_soec_cum, H2_total_cum, label='PEM (Cumulative)', color=COLORS['pem'], alpha=0.6)
-    ax.plot(minutes, H2_total_cum, color='black', linestyle='--', label=f'Total: {final_total:.1f} kg', linewidth=1.5)
+    x_ds = downsample_for_plot(x)
     
-    ax.set_title('Cumulative Hydrogen Production', fontsize=12)
-    ax.set_xlabel('Time (Minutes)')
-    ax.set_ylabel('Cumulative H2 (kg)')
-    ax.legend(fontsize=8, loc='upper left')
+    # =========================================================================
+    # DETECT AVAILABLE SOURCES
+    # =========================================================================
+    sources = {}
+    source_colors = {
+        'SOEC': COLORS['soec'],
+        'PEM': COLORS['pem'],
+        'ATR': '#FF5722'  # Deep Orange for ATR
+    }
+    
+    # Check for SOEC
+    if 'H2_soec' in df.columns or 'H2_soec_kg' in df.columns:
+        col = 'H2_soec' if 'H2_soec' in df.columns else 'H2_soec_kg'
+        if df[col].sum() > 0:
+            sources['SOEC'] = df[col].cumsum()
+    
+    # Check for PEM
+    if 'H2_pem' in df.columns or 'H2_pem_kg' in df.columns:
+        col = 'H2_pem' if 'H2_pem' in df.columns else 'H2_pem_kg'
+        if df[col].sum() > 0:
+            sources['PEM'] = df[col].cumsum()
+    
+    # Check for ATR
+    if 'H2_atr' in df.columns or 'H2_atr_kg' in df.columns:
+        col = 'H2_atr' if 'H2_atr' in df.columns else 'H2_atr_kg'
+        if df[col].sum() > 0:
+            sources['ATR'] = df[col].cumsum()
+    
+    # =========================================================================
+    # PLOT STACKED AREAS (if any sources detected)
+    # =========================================================================
+    if sources:
+        # Build stacked data in consistent order: SOEC (bottom), PEM, ATR (top)
+        stack_order = ['SOEC', 'PEM', 'ATR']
+        cumulative_base = pd.Series(0.0, index=df.index)
+        
+        for source_name in stack_order:
+            if source_name in sources:
+                cumsum = sources[source_name]
+                upper = cumulative_base + cumsum
+                
+                ax.fill_between(
+                    x_ds, 
+                    downsample_for_plot(cumulative_base), 
+                    downsample_for_plot(upper), 
+                    label=f'{source_name}', 
+                    color=source_colors[source_name], 
+                    alpha=0.6
+                )
+                cumulative_base = upper
+        
+        # Total line
+        total_cumsum = cumulative_base
+        final_total = total_cumsum.iloc[-1] if not total_cumsum.empty else 0
+        ax.plot(x_ds, downsample_for_plot(total_cumsum), 
+                color='black', linestyle='-', linewidth=2, 
+                label=f'Total: {final_total:,.1f} kg')
+    else:
+        ax.text(0.5, 0.5, 'No hydrogen production data detected.\n'
+                          'Expected columns: H2_soec, H2_pem, H2_atr',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('Cumulative Hydrogen Production')
+        return fig
+    
+    # =========================================================================
+    # OVERLAY RFNBO DATA (if available)
+    # =========================================================================
+    has_rfnbo = False
+    cum_rfnbo = df.get('cumulative_h2_rfnbo_kg', None)
+    cum_non_rfnbo = df.get('cumulative_h2_non_rfnbo_kg', None)
+    
+    if cum_rfnbo is not None and cum_non_rfnbo is not None:
+        if cum_rfnbo.sum() > 0 or cum_non_rfnbo.sum() > 0:
+            has_rfnbo = True
+            
+            # Create secondary y-axis for RFNBO classification
+            # Actually, better to use same axis but with dashed lines
+            ax.plot(x_ds, downsample_for_plot(cum_rfnbo), 
+                    color='#2ECC71', linestyle='--', linewidth=2, 
+                    label='RFNBO (Green)')
+            ax.plot(x_ds, downsample_for_plot(cum_non_rfnbo), 
+                    color='#E74C3C', linestyle='--', linewidth=2, 
+                    label='Non-RFNBO (Grid)')
+    
+    # =========================================================================
+    # OVERLAY PSA OUTPUT (Sellable/Storable H2)
+    # =========================================================================
+    # PSA units produce the final purified H2 for sale/storage
+    # Look for *_PSA_*_outlet_mass_flow_kg_h columns
+    psa_outputs = {}
+    psa_colors = {
+        'SOEC_H2_PSA': '#1B5E20',   # Dark Green
+        'PEM_H2_PSA': '#0D47A1',    # Dark Blue  
+        'ATR_PSA': '#BF360C'        # Dark Orange
+    }
+    
+    # Check for PSA output columns (mass flow in kg/h, need to convert to kg/min for cumsum)
+    for prefix in ['SOEC_H2_PSA_1', 'PEM_H2_PSA_1', 'ATR_PSA_1']:
+        col = f'{prefix}_outlet_mass_flow_kg_h'
+        if col in df.columns:
+            # Convert kg/h to kg/step (assuming 1-min steps)
+            mass_per_step = df[col] / 60.0
+            if mass_per_step.sum() > 0:
+                # Use short key for legend
+                short_key = prefix.replace('_1', '').replace('_H2', '')
+                psa_outputs[short_key] = mass_per_step.cumsum()
+    
+    has_psa = len(psa_outputs) > 0
+    total_psa_cumsum = None
+    
+    if has_psa:
+        # Sum all PSA outputs for total sellable H2
+        total_psa_cumsum = pd.Series(0.0, index=df.index)
+        for key, cumsum in psa_outputs.items():
+            total_psa_cumsum += cumsum
+            # Plot individual PSA lines (thin, dotted)
+            color = psa_colors.get(key, '#555555')
+            ax.plot(x_ds, downsample_for_plot(cumsum),
+                    color=color, linestyle=':', linewidth=1.5, alpha=0.7,
+                    label=f'{key} (purified)')
+        
+        # Plot total sellable H2 (thick dashed)
+        final_psa = total_psa_cumsum.iloc[-1]
+        ax.plot(x_ds, downsample_for_plot(total_psa_cumsum),
+                color='#6A1B9A', linestyle='-.', linewidth=2.5,
+                label=f'Sellable H₂: {final_psa:,.1f} kg')
+    
+    # =========================================================================
+    # ANNOTATIONS
+    # =========================================================================
+    summary_lines = []
+    
+    # Source breakdown
+    for source_name in stack_order:
+        if source_name in sources:
+            final_val = sources[source_name].iloc[-1]
+            pct = (final_val / final_total * 100) if final_total > 0 else 0
+            summary_lines.append(f'{source_name}: {final_val:,.1f} kg ({pct:.1f}%)')
+    
+    # PSA/Sellable breakdown
+    if has_psa:
+        final_psa_total = total_psa_cumsum.iloc[-1]
+        loss_pct = ((final_total - final_psa_total) / final_total * 100) if final_total > 0 else 0
+        summary_lines.append(f'─────────────────')
+        summary_lines.append(f'Sellable: {final_psa_total:,.1f} kg')
+        summary_lines.append(f'Losses: {loss_pct:.1f}%')
+    
+    # RFNBO breakdown
+    if has_rfnbo:
+        final_rfnbo = cum_rfnbo.iloc[-1]
+        final_non_rfnbo = cum_non_rfnbo.iloc[-1]
+        compliance = (final_rfnbo / (final_rfnbo + final_non_rfnbo) * 100) if (final_rfnbo + final_non_rfnbo) > 0 else 100
+        summary_lines.append(f'─────────────────')
+        summary_lines.append(f'RFNBO: {final_rfnbo:,.1f} kg')
+        summary_lines.append(f'Non-RFNBO: {final_non_rfnbo:,.1f} kg')
+        summary_lines.append(f'Compliance: {compliance:.1f}%')
+    
+    if summary_lines:
+        annotation_text = '\n'.join(summary_lines)
+        ax.annotate(annotation_text,
+                   xy=(0.98, 0.02), xycoords='axes fraction',
+                   ha='right', va='bottom', fontsize=9,
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
+    
+    # =========================================================================
+    # FORMATTING
+    # =========================================================================
+    # Dynamic title based on sources
+    source_list = ' + '.join([s for s in stack_order if s in sources])
+    title = f'Cumulative H₂ Production ({source_list})'
+    if has_rfnbo:
+        title += ' with RFNBO Classification'
+    
+    ax.set_title(title, fontsize=13, fontweight='bold')
+    ax.set_xlabel(x_label, fontsize=11)
+    ax.set_ylabel('Cumulative H₂ (kg)', fontsize=11)
+    ax.legend(loc='upper left', fontsize=9, framealpha=0.9)
     ax.grid(True, alpha=0.3)
+    
+    # Format y-axis for large numbers
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x/1000:.1f}k' if x >= 1000 else f'{x:.0f}'))
+    
     return fig
 
 @log_graph_errors
@@ -515,6 +714,108 @@ def create_revenue_analysis_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax.set_ylabel('Value (EUR)')
     ax.legend(fontsize=8, loc='upper left')
     ax.grid(True, alpha=0.3)
+    return fig
+
+
+@log_graph_errors
+def create_storage_apc_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create Storage APC (Advanced Process Control) visualization.
+    
+    Shows:
+    - State of Charge (SOC) with zone thresholds
+    - Control zones (shaded regions)
+    - Action factor (power modulation)
+    - Time to full (if available)
+    """
+    fig = Figure(figsize=(12, 8), dpi=dpi, constrained_layout=True)
+    
+    # Check if storage data is available
+    has_soc = 'storage_soc' in df.columns
+    has_zone = 'storage_zone' in df.columns
+    has_action = 'storage_action_factor' in df.columns
+    
+    if not has_soc:
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, 'No storage APC data available\n(storage_soc column not found)', 
+                ha='center', va='center', fontsize=12)
+        return fig
+    
+    # Prepare time axis
+    if 'minute' in df.columns:
+        time_axis = df['minute'] / 60.0  # Convert to hours
+        time_label = 'Time (Hours)'
+    else:
+        time_axis = df.index
+        time_label = 'Timestep'
+    
+    time_ds = downsample_for_plot(time_axis)
+    
+    # Create subplots
+    if has_action:
+        gs = fig.add_gridspec(3, 1, height_ratios=[2, 1, 1])
+        ax_soc = fig.add_subplot(gs[0])
+        ax_zone = fig.add_subplot(gs[1], sharex=ax_soc)
+        ax_act = fig.add_subplot(gs[2], sharex=ax_soc)
+    else:
+        gs = fig.add_gridspec(2, 1, height_ratios=[2, 1])
+        ax_soc = fig.add_subplot(gs[0])
+        ax_zone = fig.add_subplot(gs[1], sharex=ax_soc)
+        ax_act = None
+    
+    # --- Plot 1: SOC with Zone Thresholds ---
+    soc = downsample_for_plot(df['storage_soc'] * 100)  # Convert to %
+    
+    ax_soc.fill_between(time_ds, 0, soc, color='#00BCD4', alpha=0.4, label='SOC')
+    ax_soc.plot(time_ds, soc, color='#00838F', linewidth=1.5)
+    
+    # Zone thresholds (using APC default values)
+    ax_soc.axhline(y=60, color='yellow', linestyle='--', linewidth=1.5, label='Attention (60%)')
+    ax_soc.axhline(y=80, color='orange', linestyle='--', linewidth=1.5, label='Alert (80%)')
+    ax_soc.axhline(y=95, color='red', linestyle='--', linewidth=1.5, label='Critical (95%)')
+    
+    ax_soc.set_ylabel('State of Charge (%)', fontsize=10)
+    ax_soc.set_ylim(0, 105)
+    ax_soc.legend(loc='upper left', fontsize=8)
+    ax_soc.grid(True, alpha=0.3)
+    ax_soc.set_title('Storage APC: State of Charge & Control Zones', fontsize=12)
+    
+    # --- Plot 2: Control Zones ---
+    if has_zone:
+        zone = downsample_for_plot(df['storage_zone'])
+        zone_colors = {0: '#4CAF50', 1: '#FFEB3B', 2: '#FF9800', 3: '#F44336'}
+        zone_labels = {0: 'Normal', 1: 'Attention', 2: 'Alert', 3: 'Critical'}
+        
+        # Create stepped zone plot
+        for z in [0, 1, 2, 3]:
+            mask = zone == z
+            if mask.any():
+                ax_zone.fill_between(time_ds, 0, np.where(mask, 1, 0), 
+                                    color=zone_colors[z], alpha=0.7, 
+                                    label=zone_labels[z], step='post')
+        
+        ax_zone.set_ylabel('Zone', fontsize=10)
+        ax_zone.set_ylim(-0.1, 1.1)
+        ax_zone.set_yticks([0.5])
+        ax_zone.set_yticklabels([''])
+        ax_zone.legend(loc='upper left', fontsize=8, ncol=4)
+        ax_zone.grid(True, alpha=0.3, axis='x')
+    
+    # --- Plot 3: Action Factor ---
+    if ax_act is not None and has_action:
+        action = downsample_for_plot(df['storage_action_factor'] * 100)
+        
+        ax_act.fill_between(time_ds, 0, action, color='#9C27B0', alpha=0.4)
+        ax_act.plot(time_ds, action, color='#7B1FA2', linewidth=1.5, label='Action Factor')
+        
+        ax_act.set_ylabel('Power Factor (%)', fontsize=10)
+        ax_act.set_ylim(-5, 105)
+        ax_act.set_xlabel(time_label, fontsize=10)
+        ax_act.legend(loc='upper left', fontsize=8)
+        ax_act.grid(True, alpha=0.3)
+    else:
+        ax_zone.set_xlabel(time_label, fontsize=10)
+    
     return fig
 
 @log_graph_errors
@@ -870,9 +1171,9 @@ def create_soec_module_wear_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
         # Cycles: 0 -> 1 transitions
         # Boolean series of ON/OFF
         is_on = series > threshold_mw
-        # Shift to compare with previous step - avoid FutureWarning
-        shifted = is_on.shift(1)
-        prev_on = shifted.where(shifted.notna(), False)
+        # Shift to compare with previous step
+        # FIX: Use fillna(False) to maintain bool dtype (not object)
+        prev_on = is_on.shift(1, fill_value=False)
         starts = is_on & (~prev_on)
         cycles = starts.sum()
         cycles_count.append(cycles)
@@ -925,102 +1226,135 @@ def create_q_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     # Pattern: {cid: {'Total': avg_kw, 'Sensible': avg_kw, 'Latent': avg_kw}}
     data = {}
     
-    # Chillers (Full Split available)
-    chiller_cols = [c for c in df.columns if '_cooling_load_kw' in c and 'Chiller' in c]
+    # Chillers (Full Split available from Chiller.get_state())
+    chiller_cols = [c for c in df.columns if '_cooling_load_kw' in c]
     for col in chiller_cols:
         cid = col.replace('_cooling_load_kw', '')
         total = df[col].mean()
-        # Try to find split
+        # Try to find split columns (sensible/latent)
         sens = df.get(f"{cid}_sensible_heat_kw", pd.Series([0])).mean()
         lat = df.get(f"{cid}_latent_heat_kw", pd.Series([0])).mean()
         
-        # If sensible/latent columns missing/empty, assume majority is Sensible or use Total
         if sens == 0 and lat == 0:
-             # Legacy fallback: Use total as 'Sensible' for gas coolers, or try to guess
              sens = total
              
         data[cid] = {'Total': total, 'Sensible': sens, 'Latent': lat}
 
-    # Dry Coolers (Total only/Sensible)
-    dc_cols = [c for c in df.columns if '_heat_rejected_kw' in c and 'DryCooler' in c]
+    # Dry Coolers / Intercoolers (heat_rejected_kw from DryCooler.get_state())
+    dc_cols = [c for c in df.columns if '_heat_rejected_kw' in c]
     for col in dc_cols:
         cid = col.replace('_heat_rejected_kw', '')
-        # Note: heat_rejected is usually positive for cooling
         val = df[col].mean()
         data[cid] = {'Total': val, 'Sensible': val, 'Latent': 0.0}
         
-    # Heat Exchangers (Total only)
-    hx_cols = [c for c in df.columns if '_heat_removed_kw' in c] # We just added this
+    # Interchangers (q_transferred_kw from Interchanger.get_state())
+    hx_cols = [c for c in df.columns if '_q_transferred_kw' in c]
     for col in hx_cols:
-        cid = col.replace('_heat_removed_kw', '')
+        cid = col.replace('_q_transferred_kw', '')
         val = df[col].mean()
-        # Logic: If val > 0 it's cooling.
         data[cid] = {'Total': val, 'Sensible': val, 'Latent': 0.0}
+
+    # Electric Boilers (power_input_kw - heating, shown as negative for balance)
+    boiler_cols = [c for c in df.columns if '_power_input_kw' in c and 'Boiler' in c]
+    for col in boiler_cols:
+        cid = col.replace('_power_input_kw', '')
+        val = df[col].mean()
+        # Heating is opposite of cooling - show as negative
+        data[cid] = {'Total': -val, 'Sensible': -val, 'Latent': 0.0}
 
     if not data:
         fig.text(0.5, 0.5, 'No thermal load data found', ha='center')
         return fig
 
-    # 2. Grouping (H2 vs O2)
-    # Heuristic: Check CID string
-    h2_group = {}
-    o2_group = {}
+    # 2. Grouping by Subsystem (SOEC, PEM, ATR, Storage)
+    soec_h2_group = {}
+    soec_o2_group = {}
+    pem_h2_group = {}
+    pem_o2_group = {}
+    atr_group = {}
+    storage_group = {}
     other_group = {}
     
     for cid, vals in data.items():
-        # Heuristics based on topology naming conventions
         lower_id = cid.lower()
-        if 'h2' in lower_id or 'recup' in lower_id or 'interchanger' in lower_id:
-            h2_group[cid] = vals
-        elif 'o2' in lower_id or 'oxygen' in lower_id:
-            o2_group[cid] = vals
+        
+        # Categorize by subsystem prefix in component ID
+        if 'soec' in lower_id:
+            if 'o2' in lower_id or 'oxygen' in lower_id:
+                soec_o2_group[cid] = vals
+            else:  # H2/Steam/Interchanger default to H2 side
+                soec_h2_group[cid] = vals
+        elif 'pem' in lower_id:
+            if 'o2' in lower_id or 'oxygen' in lower_id:
+                pem_o2_group[cid] = vals
+            else:
+                pem_h2_group[cid] = vals
+        elif 'atr' in lower_id or 'biogas' in lower_id:
+            atr_group[cid] = vals
+        elif 'hp' in lower_id or 'lp' in lower_id or 'storage' in lower_id or 'production_cooler' in lower_id:
+            storage_group[cid] = vals
         else:
             other_group[cid] = vals
             
-    # Merge 'other' into H2 if small or generic, or keep separate? 
-    # Let's create subplots based on what we found.
-    
+    # Build subplot list
     subplots = []
-    if h2_group: subplots.append(('Fluxo H₂', h2_group))
-    if o2_group: subplots.append(('Fluxo O₂', o2_group))
-    if other_group: subplots.append(('Outros', other_group))
+    if soec_h2_group: subplots.append(('SOEC H₂ Train', soec_h2_group))
+    if soec_o2_group: subplots.append(('SOEC O₂ Train', soec_o2_group))
+    if pem_h2_group: subplots.append(('PEM H₂ Train', pem_h2_group))
+    if pem_o2_group: subplots.append(('PEM O₂ Train', pem_o2_group))
+    if atr_group: subplots.append(('ATR Train', atr_group))
+    if storage_group: subplots.append(('HP Storage', storage_group))
+    if other_group: subplots.append(('Other', other_group))
     
     n_plots = len(subplots)
     if n_plots == 0: return fig
     
+    # Adjust figure height based on number of subplots
+    fig.set_figheight(max(10, 4 * n_plots))
+    
     # 3. Plotting
-    gs = fig.add_gridspec(n_plots, 1)
+    gs = fig.add_gridspec(n_plots, 1, hspace=0.35)
+
+    # Subsystem color palette
+    SUBSYSTEM_COLORS = {
+        'SOEC H₂': ('#1f77b4', '#aec7e8'),  # Blue (primary, latent)
+        'SOEC O₂': ('#ff7f0e', '#ffbb78'),  # Orange
+        'PEM H₂': ('#2ca02c', '#98df8a'),   # Green
+        'PEM O₂': ('#d62728', '#ff9896'),   # Red
+        'ATR': ('#9467bd', '#c5b0d5'),      # Purple
+        'HP Storage': ('#8c564b', '#c49c94'), # Brown
+        'Other': ('#7f7f7f', '#c7c7c7')     # Grey
+    }
     
     for i, (title, group) in enumerate(subplots):
         ax = fig.add_subplot(gs[i])
         
         labels = list(group.keys())
-        # Sort labels to stabilize order?
         labels.sort()
         
+        # Simplify labels by removing common prefix for readability
+        short_labels = [lbl.split('_', 1)[-1] if '_' in lbl else lbl for lbl in labels]
+        
         x = np.arange(len(labels))
-        width = 0.4
+        width = 0.6 if len(labels) <= 6 else 0.4
         
         lat_vals = [group[k]['Latent'] for k in labels]
         sens_vals = [group[k]['Sensible'] for k in labels]
         
-        # Stacked Bar: Latent (Bottom), Sensible (Top)
-        # Colors matching legacy: Latent (H2O) = skyblue/salmon, Sensible (Gas) = blue/red
+        # Get colors for this subsystem
+        subsystem_key = title.replace(' Train', '').replace(' ', ' ')
+        color_sens, color_lat = SUBSYSTEM_COLORS.get(subsystem_key, ('#7f7f7f', '#c7c7c7'))
         
-        # Base colors (H2-ish vs O2-ish)
-        is_o2 = 'O₂' in title
-        color_lat = 'salmon' if is_o2 else 'skyblue'
-        color_sens = 'red' if is_o2 else 'blue'
-        label_lat = 'H2O (Vapor + Líquido)'
-        label_sens = f"{'O2' if is_o2 else 'H2'} (Gás Principal)"
+        label_sens = 'Sensible (Gas)'
+        label_lat = 'Latent (H₂O)'
         
-        p1 = ax.bar(x, lat_vals, width, color=color_lat, edgecolor='grey', label=label_lat)
-        p2 = ax.bar(x, sens_vals, width, bottom=lat_vals, color=color_sens, edgecolor='grey', label=label_sens)
+        ax.bar(x, lat_vals, width, color=color_lat, edgecolor='grey', label=label_lat)
+        ax.bar(x, sens_vals, width, bottom=lat_vals, color=color_sens, edgecolor='grey', label=label_sens)
         
-        ax.set_title(title)
-        ax.set_ylabel('Carga Térmica (kW)')
+        ax.set_title(title, fontweight='bold')
+        ax.set_ylabel('Thermal Load (kW)')
         ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=15 if len(labels) > 4 else 0)
+        ax.set_xticklabels(short_labels, rotation=30 if len(labels) > 3 else 0, ha='right' if len(labels) > 3 else 'center', fontsize=8)
         ax.grid(True, axis='y', linestyle='--', alpha=0.5)
         ax.axhline(0, color='black', linewidth=0.5)
         
@@ -1028,12 +1362,11 @@ def create_q_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         for j, k in enumerate(labels):
             total = group[k]['Total']
             if abs(total) > 0.01:
-                ax.text(j + width/2 + 0.02, total, f"{total:.1f}", ha='left', va='center', fontsize=8)
+                ax.text(j, total + (5 if total > 0 else -15), f"{total:.0f}", ha='center', va='bottom' if total > 0 else 'top', fontsize=7)
 
-        if i == 0:
-            ax.legend(loc='upper right') # Only legend on top plot to save space? Or all?
+        ax.legend(loc='upper right', fontsize=8)
 
-    fig.suptitle('Carga Térmica Média (Q dot) por Componente', fontsize=14)
+    fig.suptitle('Thermal Load Breakdown by Subsystem (Average kW)', fontsize=14)
     return fig
 
 @log_graph_errors
@@ -3322,6 +3655,230 @@ def create_dry_cooler_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
 
 
 # ==============================================================================
+# RFNBO COMPLIANCE GRAPHS (Economic Spot Dispatch)
+# ==============================================================================
+
+@log_graph_errors
+def create_rfnbo_compliance_stacked_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    RFNBO vs Non-RFNBO hydrogen production stacked area chart.
+    
+    Shows certified green H2 (renewable powered) vs non-certified H2 (grid powered)
+    over time. Useful for tracking RFNBO compliance throughout simulation.
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    x = df['minute'] if 'minute' in df.columns else df.index
+    
+    # Get RFNBO data
+    h2_rfnbo = df.get('h2_rfnbo_kg', df.get('H2_rfnbo_kg', None))
+    h2_non_rfnbo = df.get('h2_non_rfnbo_kg', df.get('H2_non_rfnbo_kg', None))
+    
+    if h2_rfnbo is None or h2_non_rfnbo is None:
+        ax.text(0.5, 0.5, 'No RFNBO classification data available.\nEnsure ECONOMIC_SPOT strategy is selected.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('RFNBO Compliance - H₂ Classification')
+        return fig
+    
+    # Check if we have non-zero data
+    if h2_rfnbo.sum() == 0 and h2_non_rfnbo.sum() == 0:
+        ax.text(0.5, 0.5, 'No hydrogen production recorded.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('RFNBO Compliance - H₂ Classification')
+        return fig
+    
+    # Stacked area chart
+    ax.fill_between(downsample_for_plot(x), 0, downsample_for_plot(h2_rfnbo), 
+                    color='#2ECC71', alpha=0.8, label='RFNBO (Green H₂)')
+    ax.fill_between(downsample_for_plot(x), downsample_for_plot(h2_rfnbo), 
+                    downsample_for_plot(h2_rfnbo) + downsample_for_plot(h2_non_rfnbo),
+                    color='#E74C3C', alpha=0.8, label='Non-RFNBO (Grid H₂)')
+    
+    # Calculate compliance percentage
+    total = h2_rfnbo.sum() + h2_non_rfnbo.sum()
+    compliance_pct = (h2_rfnbo.sum() / total * 100) if total > 0 else 100.0
+    
+    ax.set_xlabel('Time (Minutes)')
+    ax.set_ylabel('H₂ Production (kg)')
+    ax.set_title(f'RFNBO Compliance: {compliance_pct:.1f}% Green Hydrogen', fontsize=14)
+    ax.legend(loc='upper left')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+    # Add compliance annotation
+    ax.annotate(f'RFNBO: {h2_rfnbo.sum():,.1f} kg\nNon-RFNBO: {h2_non_rfnbo.sum():,.1f} kg',
+               xy=(0.98, 0.98), xycoords='axes fraction',
+               ha='right', va='top', fontsize=10,
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return fig
+
+
+@log_graph_errors
+def create_rfnbo_spot_analysis_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Spot price vs economic threshold analysis.
+    
+    Shows when spot purchases are active (price < threshold) and
+    the amount of spot power purchased for non-RFNBO production.
+    """
+    fig = Figure(figsize=(12, 8), dpi=dpi, constrained_layout=True)
+    
+    x = df['minute'] if 'minute' in df.columns else df.index
+    
+    # Get spot data
+    spot_price = df.get('spot_price', df.get('Spot', None))
+    threshold = df.get('spot_threshold_eur_mwh', None)
+    spot_purchased = df.get('spot_purchased_mw', None)
+    
+    if spot_price is None:
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, 'No spot price data available.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('Economic Spot Analysis')
+        return fig
+    
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212, sharex=ax1)
+    
+    # Panel 1: Price vs Threshold
+    ax1.plot(downsample_for_plot(x), downsample_for_plot(spot_price), 
+             color='blue', linewidth=1, label='Spot Price', alpha=0.8)
+    
+    if threshold is not None and threshold.mean() > 0:
+        ax1.axhline(y=threshold.mean(), color='red', linestyle='--', 
+                    linewidth=2, label=f'Purchase Threshold ({threshold.mean():.1f} EUR/MWh)')
+        
+        # Highlight purchase zones (where price < threshold)
+        purchase_zone = spot_price < threshold.mean()
+        ax1.fill_between(x, spot_price.min(), spot_price.max(), 
+                        where=purchase_zone, color='red', alpha=0.1, 
+                        label='Spot Purchase Zone')
+    
+    ax1.set_ylabel('Price (EUR/MWh)')
+    ax1.set_title('Spot Price vs Economic Threshold')
+    ax1.legend(loc='upper right')
+    ax1.grid(True, linestyle='--', alpha=0.5)
+    
+    # Panel 2: Spot Power Purchased
+    if spot_purchased is not None:
+        ax2.fill_between(downsample_for_plot(x), 0, downsample_for_plot(spot_purchased),
+                        color='#E74C3C', alpha=0.6, label='Grid Power Purchased')
+        ax2.set_ylabel('Spot Purchase (MW)')
+        ax2.set_xlabel('Time (Minutes)')
+        ax2.set_title(f'Grid Power Purchased for Non-RFNBO H₂ (Total: {spot_purchased.sum():.1f} MWh)')
+        ax2.legend(loc='upper right')
+        ax2.grid(True, linestyle='--', alpha=0.5)
+    else:
+        ax2.text(0.5, 0.5, 'No spot purchase data available.',
+                ha='center', va='center', transform=ax2.transAxes, fontsize=12, color='gray')
+    
+    return fig
+
+
+@log_graph_errors
+def create_rfnbo_pie_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    RFNBO compliance pie chart.
+    
+    Shows final breakdown of RFNBO vs non-RFNBO hydrogen production.
+    """
+    fig = Figure(figsize=(8, 8), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Get cumulative RFNBO data (final values)
+    h2_rfnbo = df.get('cumulative_h2_rfnbo_kg', df.get('h2_rfnbo_kg', None))
+    h2_non_rfnbo = df.get('cumulative_h2_non_rfnbo_kg', df.get('h2_non_rfnbo_kg', None))
+    
+    if h2_rfnbo is None or h2_non_rfnbo is None:
+        ax.text(0.5, 0.5, 'No RFNBO data available.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('RFNBO Compliance')
+        return fig
+    
+    # Get final values (cumulative) or sum
+    rfnbo_total = h2_rfnbo.iloc[-1] if hasattr(h2_rfnbo, 'iloc') else h2_rfnbo.sum()
+    non_rfnbo_total = h2_non_rfnbo.iloc[-1] if hasattr(h2_non_rfnbo, 'iloc') else h2_non_rfnbo.sum()
+    
+    if rfnbo_total + non_rfnbo_total == 0:
+        ax.text(0.5, 0.5, 'No hydrogen production recorded.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('RFNBO Compliance')
+        return fig
+    
+    # Pie chart data
+    sizes = [rfnbo_total, non_rfnbo_total]
+    labels = [f'RFNBO\n{rfnbo_total:,.1f} kg', f'Non-RFNBO\n{non_rfnbo_total:,.1f} kg']
+    colors = ['#2ECC71', '#E74C3C']  # Green and Red
+    explode = (0.05, 0) if rfnbo_total >= non_rfnbo_total else (0, 0.05)
+    
+    wedges, texts, autotexts = ax.pie(sizes, labels=labels, colors=colors, 
+                                       explode=explode, autopct='%1.1f%%',
+                                       startangle=90, textprops={'fontsize': 11})
+    
+    # Make percentage text bold
+    for autotext in autotexts:
+        autotext.set_fontweight('bold')
+        autotext.set_fontsize(12)
+    
+    compliance_pct = (rfnbo_total / (rfnbo_total + non_rfnbo_total) * 100)
+    ax.set_title(f'RFNBO Compliance: {compliance_pct:.1f}%\nTotal H₂: {rfnbo_total + non_rfnbo_total:,.1f} kg',
+                fontsize=14)
+    
+    return fig
+
+
+@log_graph_errors
+def create_cumulative_rfnbo_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Cumulative RFNBO and non-RFNBO H2 production over time.
+    
+    Shows the running total of green vs grid-powered hydrogen.
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    x = df['minute'] if 'minute' in df.columns else df.index
+    
+    # Get cumulative RFNBO data
+    cum_rfnbo = df.get('cumulative_h2_rfnbo_kg', None)
+    cum_non_rfnbo = df.get('cumulative_h2_non_rfnbo_kg', None)
+    
+    if cum_rfnbo is None or cum_non_rfnbo is None:
+        ax.text(0.5, 0.5, 'No cumulative RFNBO data available.',
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('Cumulative RFNBO Production')
+        return fig
+    
+    # Plot cumulative lines
+    ax.plot(downsample_for_plot(x), downsample_for_plot(cum_rfnbo), 
+            color='#2ECC71', linewidth=2, label='RFNBO (Green H₂)')
+    ax.plot(downsample_for_plot(x), downsample_for_plot(cum_non_rfnbo), 
+            color='#E74C3C', linewidth=2, label='Non-RFNBO (Grid H₂)')
+    ax.plot(downsample_for_plot(x), downsample_for_plot(cum_rfnbo + cum_non_rfnbo), 
+            color='#3498DB', linewidth=2, linestyle='--', label='Total H₂')
+    
+    ax.set_xlabel('Time (Minutes)')
+    ax.set_ylabel('Cumulative H₂ (kg)')
+    ax.set_title('Cumulative Hydrogen Production by Source')
+    ax.legend(loc='upper left')
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+    # Add final values annotation
+    final_rfnbo = cum_rfnbo.iloc[-1]
+    final_non_rfnbo = cum_non_rfnbo.iloc[-1]
+    compliance = (final_rfnbo / (final_rfnbo + final_non_rfnbo) * 100) if (final_rfnbo + final_non_rfnbo) > 0 else 100
+    
+    ax.annotate(f'Final: RFNBO {final_rfnbo:,.1f} kg ({compliance:.1f}%)\n'
+               f'Non-RFNBO {final_non_rfnbo:,.1f} kg',
+               xy=(0.98, 0.02), xycoords='axes fraction',
+               ha='right', va='bottom', fontsize=10,
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
+    return fig
+
+
+# ==============================================================================
 # PROFILE PLOTTING (Merged from profile_plotter.py)
 # ==============================================================================
 
@@ -3630,8 +4187,24 @@ def _build_train_profile_df(df: pd.DataFrame, metadata: Dict[str, Any], train_ta
                  row['H_kj_kg'] = h_spec / 1000.0
                  row['H_mix_J_kg'] = h_spec
             else:
-                 row['H_kj_kg'] = 0.0
-                 row['H_mix_J_kg'] = 0.0
+                 # Fallback: Calculate from T, P using CoolProp
+                 try:
+                     T_k = t_c + 273.15 if t_c is not None else 298.15
+                     P_pa = p_bar * 1e5 if p_bar is not None else 101325.0
+                     fluid = 'Oxygen' if 'O2' in train_tag else 'Hydrogen'
+                     
+                     # Component Enthalpies
+                     h_gas = CP.PropsSI('H', 'T', T_k, 'P', P_pa, fluid)
+                     h_h2o = CP.PropsSI('H', 'T', T_k, 'P', P_pa, 'Water')
+                     
+                     w_h2o = row.get('MassFrac_H2O', 0.0)
+                     h_mix = (1.0 - w_h2o) * h_gas + w_h2o * h_h2o
+                     
+                     row['H_mix_J_kg'] = h_mix
+                     row['H_kj_kg'] = h_mix / 1000.0
+                 except:
+                     row['H_kj_kg'] = 0.0
+                     row['H_mix_J_kg'] = 0.0
              
         # Entropy
         s_spec = get_mean(['specific_entropy_j_kgk', 'entropy_j_kgk'])
@@ -3691,6 +4264,10 @@ def create_stacked_properties_figure(df: pd.DataFrame, gas_fluido: str, dpi: int
     ax3 = fig.add_subplot(gs[2], sharex=ax1)
     ax4 = fig.add_subplot(gs[3], sharex=ax1)
     
+    # Hide x labels for top plots to prevent clutter
+    for ax in [ax1, ax2, ax3]:
+        ax.tick_params(labelbottom=False)
+    
     x_labels = df['Component']
     x = range(len(x_labels))
     
@@ -3737,3 +4314,160 @@ def create_stacked_properties_figure(df: pd.DataFrame, gas_fluido: str, dpi: int
     
     fig.suptitle(f'Property Profile: {gas_fluido} Stream', fontsize=14)
     return fig
+
+
+# ==============================================================================
+# STORAGE DASHBOARD FIGURES
+# ==============================================================================
+
+@log_graph_errors
+def create_storage_inventory_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create storage inventory percentage figure.
+    
+    Shows total hydrogen inventory across all tank arrays as a percentage of
+    estimated capacity. Capacity is determined dynamically from config or
+    estimated from max observed value.
+    
+    Args:
+        df: History DataFrame containing 'inventory_kg' columns
+        dpi: Figure resolution
+        
+    Returns:
+        Matplotlib Figure
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Find inventory columns
+    inv_cols = [c for c in df.columns if 'inventory_kg' in c.lower()]
+    if not inv_cols:
+        # Fallback: try tank_level_kg
+        inv_cols = [c for c in df.columns if 'tank_level_kg' in c.lower()]
+    
+    if not inv_cols:
+        ax.text(0.5, 0.5, 'No storage inventory data found\n(inventory_kg columns not present)', 
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+        return fig
+    
+    # Time axis
+    if 'minute' in df.columns:
+        time_h = df['minute'] / 60.0
+    else:
+        time_h = df.index * (1/60.0)
+    
+    time_ds = downsample_for_plot(time_h)
+    
+    # Aggregate total inventory
+    total_inventory = pd.Series(0.0, index=df.index)
+    for col in inv_cols:
+        total_inventory += df[col]
+    
+    # Estimate capacity
+    # Try to get from config first
+    capacity_kg = get_config(df, 'storage_capacity_kg')
+    
+    if capacity_kg is None:
+        # Heuristic: Use max observed * 1.1 or a reasonable default
+        max_observed = total_inventory.max()
+        if max_observed > 100:
+            # Assume we saw near-full condition at some point
+            capacity_kg = max_observed * 1.05
+        else:
+            # Fallback: standard tank array (30 tanks * 50m3 * ~5.7 kg/m3 @ 70bar)
+            capacity_kg = 8500.0
+    
+    # Calculate percentage
+    pct_inventory = (total_inventory / capacity_kg) * 100.0
+    pct_ds = downsample_for_plot(pct_inventory)
+    
+    # Plot
+    ax.fill_between(time_ds, 0, pct_ds, color='#00BCD4', alpha=0.4)
+    ax.plot(time_ds, pct_ds, color='#00838F', linewidth=2, label='System Inventory')
+    
+    # Reference lines
+    ax.axhline(y=80, color='orange', linestyle='--', linewidth=1, alpha=0.7, label='80% Alert')
+    ax.axhline(y=95, color='red', linestyle='--', linewidth=1, alpha=0.7, label='95% Critical')
+    
+    ax.set_title(f'Total Hydrogen Inventory (Est. Capacity: {capacity_kg:.0f} kg)', fontsize=12)
+    ax.set_xlabel('Time (hours)')
+    ax.set_ylabel('Inventory (%)')
+    ax.set_ylim(0, 105)
+    ax.legend(loc='upper left', fontsize=8)
+    ax.grid(True, alpha=0.3)
+    
+    return fig
+
+
+@log_graph_errors
+def create_storage_pressure_heatmap_figure(matrices: Dict[str, np.ndarray], dpi: int = DPI_FAST) -> Figure:
+    """
+    Create per-tank pressure heatmap from matrix data.
+    
+    Displays time-averaged pressure for each tank in a grid layout.
+    Requires simulation_matrices.npz data.
+    
+    Args:
+        matrices: Dictionary from np.load('simulation_matrices.npz')
+        dpi: Figure resolution
+        
+    Returns:
+        Matplotlib Figure
+    """
+    # Find pressure key
+    p_key = next((k for k in matrices.keys() if 'tank_pressures_bar' in k.lower()), None)
+    
+    if p_key is None:
+        fig = Figure(figsize=(8, 6), dpi=dpi)
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, 'No tank pressure matrix found\n(tank_pressures_bar key not present)', 
+                ha='center', va='center', fontsize=12, transform=ax.transAxes)
+        return fig
+    
+    pressure_data = matrices[p_key]
+    n_tanks = pressure_data.shape[1]
+    
+    # Calculate optimal grid
+    cols = int(np.ceil(np.sqrt(n_tanks)))
+    rows = int(np.ceil(n_tanks / cols))
+    
+    # Time-averaged pressure per tank
+    avg_pressures = np.mean(pressure_data, axis=0)
+    
+    # Pad to fill grid
+    grid_p = np.full((rows * cols), np.nan)
+    grid_p[:n_tanks] = avg_pressures
+    grid_p_2d = grid_p.reshape((rows, cols))
+    
+    # Figure sizing for square cells
+    cell_size = 0.8  # inches per cell
+    fig_w = max(8, cols * cell_size + 2)
+    fig_h = max(6, rows * cell_size + 1.5)
+    
+    fig = Figure(figsize=(fig_w, fig_h), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Heatmap
+    im = ax.imshow(grid_p_2d, cmap='magma', aspect='equal')
+    
+    # Colorbar
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label('Avg Pressure (bar)', fontsize=10)
+    
+    # Annotations
+    for i in range(rows):
+        for j in range(cols):
+            val = grid_p_2d[i, j]
+            if not np.isnan(val):
+                text_color = 'white' if val > np.nanmean(grid_p_2d) else 'black'
+                ax.text(j, i, f'{val:.1f}', ha='center', va='center', 
+                       color=text_color, fontsize=7)
+    
+    ax.set_title(f'Average Tank Pressure (Grid {rows}×{cols}, {n_tanks} tanks)', fontsize=12)
+    ax.set_xlabel('Column')
+    ax.set_ylabel('Row')
+    ax.set_xticks(range(cols))
+    ax.set_yticks(range(rows))
+    
+    return fig
+
