@@ -9,7 +9,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..')))
 
 from h2_plant.components.reforming.atr_reactor import ATRReactor
-from h2_plant.components.reforming.wgs_reactor import WGSReactor
+from h2_plant.components.atr.wgs_reactor import WGSReactor
 from h2_plant.core.stream import Stream
 
 # Mock LUT Manager

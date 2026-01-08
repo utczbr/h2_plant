@@ -1,8 +1,10 @@
-
 from typing import Dict, Any
+import logging
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.core.stream import Stream
 from h2_plant.components.reforming.atr_data_manager import ATRBaseComponent, C_TO_K, KW_TO_W
+
+logger = logging.getLogger(__name__)
 
 class Boiler(ATRBaseComponent):
     """
@@ -148,6 +150,7 @@ class HeatExchanger(ATRBaseComponent):
 class HTWGS(ATRBaseComponent):
     """
     High Temperature Water Gas Shift + Cooler H08.
+    Uses regression table for Thermal Setpoints (T_out) and assumes Chemical Equilibrium at that T.
     """
     def step(self, t: float) -> None:
         super().step(t)
@@ -156,14 +159,97 @@ class HTWGS(ATRBaseComponent):
 
         f_o2 = self.get_oxygen_flow({'inlet': in_stream})
         
-        # H08
+        # 1. Lookup Thermal Targets from Table
         duty_kw = self.data_manager.lookup('H08_Q_func', f_o2)
         t_out_c = self.data_manager.lookup('Tout_H08_func', f_o2)
+        target_temp_k = t_out_c + C_TO_K
+
+        # 2. Results Dictionary
+        self.results['duty_w'] = duty_kw * KW_TO_W
+        
+        # 3. Solve Chemical Equilibrium at Target Temperature
+        # Reaction: CO + H2O <-> CO2 + H2
+        # Keq(T) approximation: log10(K) = 2073/T - 2.029
+        K_eq = 10**(2073.0 / target_temp_k - 2.029)
+        
+        # Moles
+        comp = in_stream.composition
+        total_flow_kmol = in_stream.mass_flow_kg_h / self.calculate_mw(comp) if in_stream.mass_flow_kg_h > 0 else 0
+        
+        n_co = comp.get('CO', 0) * total_flow_kmol
+        n_h2o = comp.get('H2O', 0) * total_flow_kmol
+        n_co2 = comp.get('CO2', 0) * total_flow_kmol
+        n_h2 = comp.get('H2', 0) * total_flow_kmol
+        
+        if n_co > 1e-6 and n_h2o > 1e-6:
+            # Solve Quadratic: K = ( (CO2+x)(H2+x) ) / ( (CO-x)(H2O-x) )
+            # (1 - K)x^2 + (CO2 + H2 + K(CO + H2O))x + (CO2*H2 - K*CO*H2O) = 0
+            
+            # Coefficients
+            A = 1.0 - K_eq
+            B = n_co2 + n_h2 + K_eq * (n_co + n_h2o)
+            C = n_co2 * n_h2 - K_eq * n_co * n_h2o
+            
+            if abs(A) < 1e-9:
+                # Linear case: Bx + C = 0 -> x = -C/B
+                xi = -C / B
+            else:
+                # Quadratic formula
+                delta = B*B - 4*A*C
+                if delta >= 0:
+                    sqrt_delta = delta**0.5
+                    x1 = (-B + sqrt_delta) / (2*A)
+                    x2 = (-B - sqrt_delta) / (2*A)
+                    
+                    # Choose valid root (must calculate positive moles)
+                    # Limit: -min(CO2, H2) <= x <= min(CO, H2O)
+                    max_x = min(n_co, n_h2o)
+                    min_x = -min(n_co2, n_h2)
+                    
+                    if min_x - 1e-6 <= x1 <= max_x + 1e-6:
+                        xi = x1
+                    elif min_x - 1e-6 <= x2 <= max_x + 1e-6:
+                        xi = x2
+                    else:
+                        xi = 0.0 # Error fallback
+                else:
+                    xi = 0.0
+            
+            # Apply Extent
+            n_co_new = n_co - xi
+            n_h2o_new = n_h2o - xi
+            n_co2_new = n_co2 + xi
+            n_h2_new = n_h2 + xi
+            
+            # DEBUG LOGGING
+            if int(t * 60) % 60 == 0:
+                 conv = (xi / n_co * 100) if n_co > 0 else 0
+                 logger.info(f"WGS [{self.component_id}] T={target_temp_k:.0f}K, xi={xi:.3f}, CO_in={n_co/total_flow_kmol*100:.1f}%, CO_out={n_co_new/total_flow_kmol*100:.1f}%, Conv={conv:.1f}%")
+            
+        else:
+            xi = 0.0
+            n_co_new, n_h2o_new, n_co2_new, n_h2_new = n_co, n_h2o, n_co2, n_h2
+            
+        # 4. Construct Output Stream
+        out_comp = comp.copy()
+        out_comp['CO'] = n_co_new / total_flow_kmol
+        out_comp['H2O'] = n_h2o_new / total_flow_kmol
+        out_comp['CO2'] = n_co2_new / total_flow_kmol
+        out_comp['H2'] = n_h2_new / total_flow_kmol
+        
+        # Calculate new Mass Flow (Mass is conserved in WGS, simple check)
+        # But MW changes slightly? No, atoms conserved so mass conserved.
         
         out_stream = in_stream.copy()
-        out_stream.temperature_k = t_out_c + C_TO_K
-        self.results['duty_w'] = duty_kw * KW_TO_W
+        out_stream.temperature_k = target_temp_k
+        out_stream.composition = out_comp
+        
         self.outlet_stream = out_stream
+        self.outlet_temp_k = target_temp_k
+
+    def calculate_mw(self, comp):
+        MW = {'CO': 28.01, 'H2O': 18.015, 'CO2': 44.01, 'H2': 2.016, 'CH4': 16.04, 'N2': 28.014}
+        return sum(frac * MW.get(s, 0) for s, frac in comp.items())
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         super().initialize(dt, registry)
@@ -199,6 +285,7 @@ class HTWGS(ATRBaseComponent):
 class LTWGS(ATRBaseComponent):
     """
     Low Temperature Water Gas Shift + Cooler H09.
+    Uses regression table for Thermal Setpoints (T_out) and assumes Chemical Equilibrium at that T.
     """
     def step(self, t: float) -> None:
         super().step(t)
@@ -207,14 +294,73 @@ class LTWGS(ATRBaseComponent):
 
         f_o2 = self.get_oxygen_flow({'inlet': in_stream})
         
-        # H09
+        # 1. Lookup Thermal Targets from Table
         duty_kw = self.data_manager.lookup('H09_Q_func', f_o2)
         t_out_c = self.data_manager.lookup('Tout_H09_func', f_o2)
+        target_temp_k = t_out_c + C_TO_K
+        
+        self.results['duty_w'] = duty_kw * KW_TO_W
+        
+        # 2. Solve Chemical Equilibrium at Target Temperature
+        K_eq = 10**(2073.0 / target_temp_k - 2.029)
+        
+        comp = in_stream.composition
+        total_flow_kmol = in_stream.mass_flow_kg_h / self.calculate_mw(comp) if in_stream.mass_flow_kg_h > 0 else 0
+        
+        n_co = comp.get('CO', 0) * total_flow_kmol
+        n_h2o = comp.get('H2O', 0) * total_flow_kmol
+        n_co2 = comp.get('CO2', 0) * total_flow_kmol
+        n_h2 = comp.get('H2', 0) * total_flow_kmol
+        
+        if n_co > 1e-6 and n_h2o > 1e-6:
+            A = 1.0 - K_eq
+            B = n_co2 + n_h2 + K_eq * (n_co + n_h2o)
+            C = n_co2 * n_h2 - K_eq * n_co * n_h2o
+            
+            if abs(A) < 1e-9:
+                xi = -C / B
+            else:
+                delta = B*B - 4*A*C
+                if delta >= 0:
+                    sqrt_delta = delta**0.5
+                    x1 = (-B + sqrt_delta) / (2*A)
+                    x2 = (-B - sqrt_delta) / (2*A)
+                    max_x = min(n_co, n_h2o)
+                    min_x = -min(n_co2, n_h2)
+                    if min_x - 1e-6 <= x1 <= max_x + 1e-6: xi = x1
+                    elif min_x - 1e-6 <= x2 <= max_x + 1e-6: xi = x2
+                    else: xi = 0.0
+                else: xi = 0.0
+            
+            # Apply Extent
+            n_co_new = n_co - xi
+            n_h2o_new = n_h2o - xi
+            n_co2_new = n_co2 + xi
+            n_h2_new = n_h2 + xi
+
+            # DEBUG LOGGING
+            if int(t * 60) % 60 == 0:
+                 conv = (xi / n_co * 100) if n_co > 0 else 0
+                 logger.info(f"WGS [{self.component_id}] T={target_temp_k:.0f}K, xi={xi:.3f}, CO_in={n_co/total_flow_kmol*100:.1f}%, CO_out={n_co_new/total_flow_kmol*100:.1f}%, Conv={conv:.1f}%")
+        else:
+            n_co_new, n_h2o_new, n_co2_new, n_h2_new = n_co, n_h2o, n_co2, n_h2
+            
+        out_comp = comp.copy()
+        out_comp['CO'] = n_co_new / total_flow_kmol
+        out_comp['H2O'] = n_h2o_new / total_flow_kmol
+        out_comp['CO2'] = n_co2_new / total_flow_kmol
+        out_comp['H2'] = n_h2_new / total_flow_kmol
         
         out_stream = in_stream.copy()
-        out_stream.temperature_k = t_out_c + C_TO_K
-        self.results['duty_w'] = duty_kw * KW_TO_W
+        out_stream.temperature_k = target_temp_k
+        out_stream.composition = out_comp
+        
         self.outlet_stream = out_stream
+        self.outlet_temp_k = target_temp_k
+
+    def calculate_mw(self, comp):
+        MW = {'CO': 28.01, 'H2O': 18.015, 'CO2': 44.01, 'H2': 2.016, 'CH4': 16.04, 'N2': 28.014}
+        return sum(frac * MW.get(s, 0) for s, frac in comp.items())
         
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         super().initialize(dt, registry)

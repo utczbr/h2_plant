@@ -195,21 +195,23 @@ def run_with_dispatch_strategy(
         }
 
     # Generate markdown report
-    from h2_plant.reporting.markdown_report import generate_simulation_report
-    report_path = output_dir / "simulation_report.md"
-    topology_name = getattr(context.topology, 'name', 'SOEC Hydrogen Production')
-    generate_simulation_report(
-        components=components_dict,
-        topo_order=topo_order,
-        connection_map=connection_map,
-        history=history,
-        duration_hours=hours,
-        output_path=report_path,
-        topology_name=topology_name
-    )
-    logger.info(f"Markdown report saved to: {report_path}")
+    # SUPPRESSED by user request
+    # from h2_plant.reporting.markdown_report import generate_simulation_report
+    # report_path = output_dir / "simulation_report.md"
+    # topology_name = getattr(context.topology, 'name', 'SOEC Hydrogen Production')
+    # generate_simulation_report(
+    #     components=components_dict,
+    #     topo_order=topo_order,
+    #     connection_map=connection_map,
+    #     history=history,
+    #     duration_hours=hours,
+    #     output_path=report_path,
+    #     topology_name=topology_name
+    # )
+    # logger.info(f"Markdown report saved to: {report_path}")
 
     # Export history to CSV and NPZ
+    # COMMENT: This section handles the generation of the history CSV file, as requested by the user.
     try:
         import pandas as pd
         csv_path = output_dir / "simulation_history.csv"
@@ -528,6 +530,23 @@ def generate_graphs(
         logger.debug(f"Graph orchestrator not available: {e}")
     except Exception as e:
         logger.warning(f"Orchestrated graph generation failed: {e}")
+    
+    # ========================================================================
+    # DAILY H2 PRODUCTION AVERAGE GRAPH
+    # ========================================================================
+    try:
+        daily_config = viz_config.get('visualization', {}).get('orchestrated_graphs', {}).get('daily_h2_production_average', {})
+        if daily_config.get('enabled', False):
+            from scripts.plot_daily_h2_production import generate_daily_h2_production_graph
+            csv_path = output_dir / "simulation_history.csv"
+            output_path = graphs_dir / "daily_h2_production.png"
+            if csv_path.exists():
+                generate_daily_h2_production_graph(str(csv_path), str(output_path))
+                logger.info("Generated: daily_h2_production.png")
+    except ImportError as e:
+        logger.debug(f"Daily H2 production graph not available: {e}")
+    except Exception as e:
+        logger.warning(f"Daily H2 production graph failed: {e}")
 
 
 def main():
@@ -652,4 +671,3 @@ if __name__ == "__main__":
         sys.path.insert(0, str(project_root))
     
     main()
-

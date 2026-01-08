@@ -305,10 +305,15 @@ class DryCooler(Component):
 
         C_min_tqc = min(C_hot_gas, C_coolant)
         C_max_tqc = max(C_hot_gas, C_coolant)
-        R_tqc = C_min_tqc / C_max_tqc
-        NTU_tqc = (self.tqc_u_value * self.tqc_area_m2) / C_min_tqc
 
-        eff_tqc = numba_ops.counter_flow_ntu_effectiveness(NTU_tqc, R_tqc)
+        if C_min_tqc > 1e-9:
+            R_tqc = C_min_tqc / C_max_tqc if C_max_tqc > 1e-9 else 0.0
+            NTU_tqc = (self.tqc_u_value * self.tqc_area_m2) / C_min_tqc
+            eff_tqc = numba_ops.counter_flow_ntu_effectiveness(NTU_tqc, R_tqc)
+        else:
+            NTU_tqc = 0.0
+            eff_tqc = 0.0
+
         self.tqc_effectiveness = eff_tqc
 
         Q_max_tqc = C_min_tqc * (T_gas_in_k - T_glycol_in_k)
@@ -316,8 +321,16 @@ class DryCooler(Component):
         self.tqc_duty_kw = Q_tqc / 1000.0
 
         # Energy balance: outlet temperatures
-        T_gas_out_k = T_gas_in_k - Q_tqc / C_hot_gas
-        T_glycol_out_k = T_glycol_in_k + Q_tqc / C_coolant
+        if C_hot_gas > 1e-9:
+            T_gas_out_k = T_gas_in_k - Q_tqc / C_hot_gas
+        else:
+            T_gas_out_k = T_gas_in_k
+
+        if C_coolant > 1e-9:
+            T_glycol_out_k = T_glycol_in_k + Q_tqc / C_coolant
+        else:
+            T_glycol_out_k = T_glycol_in_k
+            
         self.t_glycol_hot_c = T_glycol_out_k - 273.15
 
         # ================================================================
@@ -330,10 +343,15 @@ class DryCooler(Component):
 
         C_min_dc = min(C_coolant, C_air)
         C_max_dc = max(C_coolant, C_air)
-        R_dc = C_min_dc / C_max_dc
-        NTU_dc = (self.dc_u_value * self.dc_area_m2) / C_min_dc
+        
+        if C_min_dc > 1e-9:
+            R_dc = C_min_dc / C_max_dc if C_max_dc > 1e-9 else 0.0
+            NTU_dc = (self.dc_u_value * self.dc_area_m2) / C_min_dc
+            eff_dc = numba_ops.dry_cooler_ntu_effectiveness(NTU_dc, R_dc)
+        else:
+            NTU_dc = 0.0
+            eff_dc = 0.0
 
-        eff_dc = numba_ops.dry_cooler_ntu_effectiveness(NTU_dc, R_dc)
         self.dc_effectiveness = eff_dc
 
         Q_max_dc = C_min_dc * (T_glycol_out_k - T_air_in_k)
@@ -341,7 +359,10 @@ class DryCooler(Component):
         self.dc_duty_kw = Q_dc / 1000.0
 
         # Glycol return temperature (quasi-dynamic state update)
-        T_glycol_return_k = T_glycol_out_k - Q_dc / C_coolant
+        if C_coolant > 1e-9:
+            T_glycol_return_k = T_glycol_out_k - Q_dc / C_coolant
+        else:
+            T_glycol_return_k = T_glycol_out_k
         self.t_glycol_cold_c = T_glycol_return_k - 273.15
 
         # Gas-side pressure drop through TQC internals

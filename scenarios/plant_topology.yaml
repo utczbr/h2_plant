@@ -391,7 +391,7 @@ nodes:
   - id: "SOEC_H2_PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.99995
+      purity_target: 0.99999
       process_step: 300
     connections:
       - source_port: "purified_gas_out"
@@ -910,7 +910,7 @@ nodes:
   - id: "PEM_H2_PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.9999
+      purity_target: 0.99999
       recovery_rate: 0.90
       power_consumption_kw: 10.0
     connections: 
@@ -1436,11 +1436,11 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       max_flow_kg_h: 1500.0
-    connections: 
-      - source_port: "outlet"
-        target_name: "H2_Production_Mixer"
-        target_port: "inlet_3"
-        resource_type: "stream"
+    connections: []
+    #  - source_port: "outlet"
+    #    target_name: "H2_Production_Mixer"
+    #    target_port: "inlet_3"
+    #    resource_type: "stream"
 
 
   # =================================================================================

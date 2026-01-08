@@ -53,13 +53,31 @@ visualization:
           variable: "water_consumption"
 
     production_cumulative:
-      enabled: false  # Merged into unified legacy_cumulative_h2
+      enabled: false  
       plots:
         - title: "Cumulative H2 Production"
           components: ["PEM", "SOEC_Cluster"]
 
-    # 2. PERFORMANCE GRAPHS
-    # ----------------------------------------------------------------------
+    daily_h2_production_average:
+      enabled: true
+      script: "scripts/plot_daily_h2_production.py"
+      plots:
+        - title: "Daily Average H2 Production by Source"
+          description: "Stacked bars for gross production (PEM/SOEC/ATR) + line for purified total"
+          components: []
+          gross_sources:
+            - column: "H2_soec_kg"
+              label: "SOEC"
+              color: "#2ecc71"
+            - column: "H2_pem_kg"
+              label: "PEM"
+              color: "#3498db"
+            - column: "H2_atr_kg"
+              label: "ATR"
+              color: "#e74c3c"
+          purified_column: "h2_kg"
+          purified_label: "Purified Total (H2_Production_Mixer)"
+
     performance_time_series:
       enabled: true
       plots:

@@ -165,7 +165,12 @@ class SimulationEngine:
                 dependency_graph[comp_id] = set()
             
             # Add edges from topology connections
+            # Skip 'signal' type connections as they are control signals, not mass flow
             for conn in self.flow_network.topology:
+                # Skip signal connections (demand feedback loops)
+                if getattr(conn, 'resource_type', None) == 'signal':
+                    continue
+                    
                 source_id = conn.source_id
                 target_id = conn.target_id
                 

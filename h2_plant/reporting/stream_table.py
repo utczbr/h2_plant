@@ -23,21 +23,6 @@ MW_SPECIES = {
     'CO': 28.01e-3,
 }
 
-def mass_frac_to_mole_frac(composition: dict) -> dict:
-    """Convert mass fractions to mole fractions."""
-    n_species = {}
-    n_total = 0.0
-    for species, mass_frac in composition.items():
-        mw = MW_SPECIES.get(species, 28.0e-3)
-        if mass_frac > 0 and mw > 0:
-            n = mass_frac / mw
-            n_species[species] = n
-            n_total += n
-    
-    if n_total > 0:
-        return {s: n / n_total for s, n in n_species.items()}
-    return composition.copy()
-
 def _format_ppm_pct(mole_frac: float, precision: int = 4) -> str:
     """
     Format as % if >= 0.01% (100 ppm), else as ppm.
@@ -147,10 +132,10 @@ def _get_section(comp_id: str) -> str:
 SECTION_HEADERS = {
     1: "=== Section 1: Feed & Upstream (SOEC) ===",
     2: "=== Section 2: Feed & Upstream (PEM) ===",
-    3: "=== Section 3: SOEC H2 Train (Cathode) ===",
-    4: "=== Section 4: SOEC O2 Train (Anode) ===",
-    5: "=== Section 5: PEM H2 Train (Cathode) ===",
-    6: "=== Section 6: PEM O2 Train (Anode) ===",
+    3: "=== Section 3: SOEC H2 Output Train (Cathode) ===",
+    4: "=== Section 4: SOEC O2 Output Train (Anode) ===",
+    5: "=== Section 5: PEM H2 Output Train (Cathode) ===",
+    6: "=== Section 6: PEM O2 Output Train (Anode) ===",
     7: "=== Section 7: Storage & Distribution ===",
     8: "=== Section 8: ATR Reforming & WGS Unit ==="
 }
@@ -231,51 +216,50 @@ def print_stream_summary_table(
             P_bar = stream.pressure_pa / 1e5
             total_kg_h = stream.mass_flow_kg_h
             
-            # 2. Composition (Mass)
-            mass_h2o_vap = stream.composition.get('H2O', 0.0)
-            mass_h2o_liq = stream.composition.get('H2O_liq', 0.0)
-            mass_h2o_total = mass_h2o_vap + mass_h2o_liq
+            # 2. Composition - Stream.composition is in MASS FRACTIONS (Layer 1 Standard)
+            comp_mass = stream.composition
             
-            mass_h2 = stream.composition.get('H2', 0.0)
-            mass_o2 = stream.composition.get('O2', 0.0)
+            mass_frac_h2 = comp_mass.get('H2', 0.0)
+            mass_frac_o2 = comp_mass.get('O2', 0.0)
+            mass_frac_h2o_vap = comp_mass.get('H2O', 0.0)
+            mass_frac_h2o_liq = comp_mass.get('H2O_liq', 0.0)
+            mass_frac_h2o_total = mass_frac_h2o_vap + mass_frac_h2o_liq
             
-            kg_h_h2 = mass_h2 * total_kg_h
-            kg_h_o2 = mass_o2 * total_kg_h
-            kg_h_h2o = mass_h2o_total * total_kg_h
+            # 3. Calculate mass flows (kg/h) DIRECTLY from Mass Fractions
+            kg_h_h2 = mass_frac_h2 * total_kg_h
+            kg_h_o2 = mass_frac_o2 * total_kg_h
+            kg_h_h2o = mass_frac_h2o_total * total_kg_h
             
-            # 3. Composition (Molar)
-            mole_fracs = mass_frac_to_mole_frac(stream.composition)
-            
-            mol_h2 = mole_fracs.get('H2', 0.0)
-            mol_o2 = mole_fracs.get('O2', 0.0)
-            mol_h2o_total = mole_fracs.get('H2O', 0.0) + mole_fracs.get('H2O_liq', 0.0)
-            
-            # 4. Phase Partitioning of Water
-            # Calculate % of WATER that is Liquid vs Vapor
-            if mass_h2o_total > 1e-9:
-                pct_h2o_liq = (mass_h2o_liq / mass_h2o_total) * 100.0
+            # 4. Calculate Mole Fractions for Display (using helper method from Stream class)
+            # Use get_total_mole_frac to correctly account for all water in the stream
+            mol_h2 = stream.get_total_mole_frac('H2')
+            mol_o2 = stream.get_total_mole_frac('O2')
+            mol_h2o_total = stream.get_total_mole_frac('H2O') + stream.get_total_mole_frac('H2O_liq')
+
+            # 5. Phase Partitioning of Water (Simple Approximation)
+            # pct_h2o_liq = (mass_liq / mass_total_water) * 100
+            if mass_frac_h2o_total > 1e-9:
+                pct_h2o_liq = (mass_frac_h2o_liq / mass_frac_h2o_total) * 100.0
             else:
                 pct_h2o_liq = 0.0
             pct_h2o_vap = 100.0 - pct_h2o_liq
             
-            # Formatting helpers
+            # Formatting helpers (display MOLE fractions as percentages)
             h2_str = _format_ppm_pct(mol_h2)
             h2o_str = _format_ppm_pct(mol_h2o_total)
             o2_str = _format_ppm_pct(mol_o2)
             
             if is_atr:
                 # Format B Rows
-                ch4_str = _format_ppm_pct(mole_fracs.get('CH4', 0.0))
-                co_str = _format_ppm_pct(mole_fracs.get('CO', 0.0))
-                co2_str = _format_ppm_pct(mole_fracs.get('CO2', 0.0))
-                n2_str = _format_ppm_pct(mole_fracs.get('N2', 0.0))
+                ch4_str = _format_ppm_pct(stream.get_total_mole_frac('CH4'))
+                co_str = _format_ppm_pct(stream.get_total_mole_frac('CO'))
+                co2_str = _format_ppm_pct(stream.get_total_mole_frac('CO2'))
+                n2_str = _format_ppm_pct(stream.get_total_mole_frac('N2'))
                 
                 print(f"{cid:<20} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>7} | {h2o_str:>7} | {o2_str:>7} | {ch4_str:>7} | {co_str:>7} | {co2_str:>7} | {n2_str:>7} | {total_kg_h:>10.2f}")
             
             else:
                 # Format A Rows
-                # Component | T_out | P_out | H2% | H2 kg/h | H2O% | H2O kg/h | O2% | O2 kg/h | Total | H2O %Liq | H2O %Vap
-                
                 print(f"{cid:<20} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>7} | {kg_h_h2:>9.2f} | {h2o_str:>7} | {kg_h_h2o:>9.2f} | {o2_str:>7} | {kg_h_o2:>9.2f} | {total_kg_h:>10.2f} | {pct_h2o_liq:>7.1f}% | {pct_h2o_vap:>7.1f}%")
         
         if is_atr:

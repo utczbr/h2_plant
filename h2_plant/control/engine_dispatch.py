@@ -31,6 +31,7 @@ from h2_plant.components.thermal.chiller import Chiller
 from h2_plant.components.separation.coalescer import Coalescer
 from h2_plant.components.purification.deoxo_reactor import DeoxoReactor
 from h2_plant.components.separation.psa import PSA
+from h2_plant.components.separation.psa_syngas import SyngasPSA
 from h2_plant.components.separation.knock_out_drum import KnockOutDrum
 from h2_plant.components.separation.hydrogen_cyclone import HydrogenMultiCyclone
 from h2_plant.components.thermal.interchanger import Interchanger
@@ -254,6 +255,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             Coalescer: ('output_stream', [('delta_p_bar', 'delta_p_bar'), ('drain_flow_kg_h', 'drain_flow_kg_h')]),
             DeoxoReactor: ('output_stream', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol'), ('peak_temp_c', 'peak_temp_c')]),
             PSA: ('product_outlet', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol')]), 
+            SyngasPSA: ('product_outlet', []),  # ATR Syngas PSA 
             KnockOutDrum: ('_gas_outlet_stream', [('water_removed_kg_h', 'water_removed_kg_h')]),
             HydrogenMultiCyclone: ('_outlet_stream', [('pressure_drop_mbar', 'pressure_drop_mbar')]),
             CompressorSingle: ('outlet', [('power_kw', 'power_kw')]),

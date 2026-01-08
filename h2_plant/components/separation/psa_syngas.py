@@ -156,8 +156,11 @@ class SyngasPSA(Component):
         T_in = inlet.temperature_k
         rho_in = inlet.density_kg_m3 if inlet.density_kg_m3 > 0 else 1.0
 
-        # 3. Retrieve Composition (Already in MASS fractions)
-        comp_mass = inlet.composition or {}
+        # 3. Retrieve Composition
+        # CRITICAL FIX: Stream.composition is in MOLE FRACTIONS.
+        # We must convert to MASS FRACTIONS for the mass balance logic.
+        comp_mole = inlet.composition or {}
+        comp_mass = self._mole_to_mass_fractions(comp_mole)
 
         # 4. Physics: Calculate Pressure Drop (Ergun)
         flow_m3_s = (in_flow_kg_h / 3600.0) / rho_in if rho_in > 0 else 0.0
@@ -259,6 +262,13 @@ class SyngasPSA(Component):
             actual_purity = prod_comp_mass.get('H2', 0.0)
             logger.debug(f"{self.component_id}: H2 purity={actual_purity:.4f}, "
                          f"recovery={self.recovery_rate:.2f}, tail={m_tail_total:.1f} kg/h")
+            
+            # DEBUG: Trace input composition (once per hour)
+            if int((self.cycle_position * self.cycle_time_min)) % 10 == 0:
+                logger.info(f"PSA [{self.component_id}] INPUT: {in_flow_kg_h:.1f} kg/h, "
+                           f"H2(mol)={comp_mole.get('H2',0)*100:.1f}%, H2(mass)={comp_mass.get('H2',0)*100:.1f}%")
+                logger.info(f"PSA [{self.component_id}] OUTPUT: {m_product_total:.1f} kg/h H2 product, "
+                           f"tail={m_tail_total:.1f} kg/h")
 
     def _mole_to_mass_fractions(self, y_mol: Dict[str, float]) -> Dict[str, float]:
         """

@@ -116,6 +116,9 @@ class WGSReactor(Component):
         # 1. Check if we have flow
         total_moles = sum(self.inlet_buffer.values())
         if total_moles < 1e-9:
+            # === DEBUG: Log early exit ===
+            if int(t * 60) % 60 == 0:
+                logger.warning(f"WGS [{self.component_id}] [t={t:.2f}h]: NO FLOW - inlet_buffer empty!")
             self.outlet_flow_kg_h = 0.0
             self.CO_conversion = 0.0
             self._output_stream.mass_flow_kg_h = 0.0
@@ -258,6 +261,15 @@ class WGSReactor(Component):
         self._output_stream.temperature_k = self.outlet_temp_k
         self._output_stream.pressure_pa = self.outlet_pressure_pa
         self._output_stream.composition = self.outlet_composition.copy()
+        
+        # === DEBUG LOGGING ===
+        if int(t * 60) % 60 == 0:  # Log once per hour
+            co_in_pct = (CO_in / total_moles * 100) if total_moles > 0 else 0
+            co_out_pct = self.outlet_composition.get('CO', 0) * 100
+            logger.info(f"WGS DEBUG [{self.component_id}] [t={t:.2f}h]:")
+            logger.info(f"  Inlet: T={self.inlet_temp_k:.1f}K, CO_in={CO_in:.2f} kmol")
+            logger.info(f"  Reaction: Keq={Keq:.2f}, xi={xi:.4f} kmol, conversion={self.CO_conversion*100:.1f}%")
+            logger.info(f"  Outlet: T={self.outlet_temp_k:.1f}K, CO={co_out_pct:.2f}%")
         
         # 6. Clear input buffers
         self.inlet_buffer = {k: 0.0 for k in MW}
