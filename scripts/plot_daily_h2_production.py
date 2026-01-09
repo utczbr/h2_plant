@@ -203,6 +203,12 @@ def generate_daily_h2_production_graph(
     avg_gross = daily['Gross_Total'].mean()
     avg_purified = daily['Purified_Total'].mean()
     
+    # Calculate equivalent nominal days (13,313 kg/day at full capacity)
+    total_purified_kg = daily['Purified_Total'].sum()
+    equiv_days = total_purified_kg / 13313.0
+    num_sim_days = len(daily)
+    capacity_factor = (avg_purified / 13313.0) * 100 if avg_purified > 0 else 0
+    
     stats_text = (
         f"Average Daily Production:\n"
         f"─────────────────────\n"
@@ -212,7 +218,10 @@ def generate_daily_h2_production_graph(
         f"─────────────────────\n"
         f"Gross:    {avg_gross:,.0f} kg/day\n"
         f"Purified: {avg_purified:,.0f} kg/day\n"
-        f"Recovery: {avg_purified/avg_gross*100:.1f}%"
+        f"Recovery: {avg_purified/avg_gross*100:.1f}%\n"
+        f"─────────────────────\n"
+        f"Eq. Nominal Days: {equiv_days:.1f}\n"
+        f"Capacity Factor:  {capacity_factor:.1f}%"
     )
     
     ax.text(0.02, 0.98, stats_text,

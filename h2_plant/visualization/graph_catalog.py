@@ -570,6 +570,19 @@ class GraphCatalog:
             enabled=True
         ))
         
+        # Effective PPA Pricing (Dual Contract/Variable)
+        self.register(GraphMetadata(
+            graph_id='effective_ppa',
+            title='Effective PPA Price',
+            description='Weighted average PPA price over time (contract + variable)',
+            function=sg.create_effective_ppa_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['ppa_price_effective_eur_mwh'],
+            priority=GraphPriority.HIGH,
+            category='economics',
+            enabled=True
+        ))
+        
         # Thermal & Separation (Static)
         self.register(GraphMetadata(
             graph_id='chiller_cooling',

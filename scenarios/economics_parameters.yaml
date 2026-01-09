@@ -1,10 +1,28 @@
+
+
 h2_price_eur_kg: 9.6
-ppa_price_eur_mwh: 50.0
 arbitrage_enabled: true
+
+# =============================================================================
+# DUAL PPA PRICING CONFIGURATION
+# =============================================================================
+# Weighted average PPA is calculated based on power usage:
+# - Contract block (up to guaranteed_power_mw): ppa_contract_price_eur_mwh
+# - Variable excess (above guaranteed_power_mw): ppa_variable_price_eur_mwh
+#
+# Effective PPA = (Contract_MW × Contract_Price + Excess_MW × Variable_Price) / Total_MW
+
+# Price for the first block of power (up to guaranteed_power_mw)
+# Range: 65 - 95 EUR/MWh
+ppa_contract_price_eur_mwh: 80.0
+
+# Price for variable renewable energy exceeding the guaranteed block
+# Range: 50 - 65 EUR/MWh
+ppa_variable_price_eur_mwh: 55.0
 
 # Grid Firming: Minimum guaranteed power availability from utility (MW)
 # When wind power falls below this value, grid imports the difference.
-# Set to 0 to disable grid firming (pure wind-following mode).
+# Also defines the "contract block" size for dual PPA pricing.
 guaranteed_power_mw: 10.0
 
 # Optional: Set explicit threshold (EUR/MWh). If set, overrides calculated threshold.
@@ -25,3 +43,16 @@ h2_non_rfnbo_price_eur_kg: 2.0
 # Maximum grid power for spot purchases (MW)
 # Limits non-RFNBO production capacity
 p_grid_max_mw: 30.0
+
+# =============================================================================
+# BOP GRID POWER CONFIGURATION
+# =============================================================================
+# BOP (Balance of Plant) power is imported from the grid separately from wind.
+# This ensures wind power goes 100% to electrolyzers (RFNBO-compliant).
+
+# Pricing mode for BOP grid import
+# Options: "fixed" (contract price), "spot" (timestep market price)
+bop_pricing_mode: "fixed"
+
+# Fixed contract price for BOP (EUR/MWh) - used when bop_pricing_mode = "fixed"
+bop_fixed_price_eur_mwh: 80.0

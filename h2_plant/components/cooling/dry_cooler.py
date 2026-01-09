@@ -446,35 +446,28 @@ class DryCooler(Component):
             beta = numba_ops.solve_rachford_rice_single_condensable(z_H2O, K_value)
             
             # 5. Convert back to Mass
+            # 5. Convert back to Mass
             n_dot_vapor = n_dot_total * beta
             n_dot_liquid = n_dot_total * (1.0 - beta)
             
             # In single condensable assumption, liquid is pure water
-            # Vapor contains all non-condensables + remaining water vapor
-            # y_H2O_vap = P_sat / P_out (if saturated) or z_H2O (if superheated)
-            # Rigorous check:
-            if beta >= 0.999999: # Superheated
-                 m_condensed_kg_h = 0.0
-                 m_H2O_vapor_out = m_H2O_total_in # All remains vapor
-            else:
-                 # Liquid is pure water
-                 # Moles liquid = n_dot_liquid (since non-condensables don't condense)
-                 m_condensed_kg_h = n_dot_liquid * MW_H2O
-                 m_H2O_vapor_out = m_H2O_total_in - m_condensed_kg_h
+            # m_H2O_liq_out represents TOTAL liquid water at equilibrium
+            m_H2O_liq_out = n_dot_liquid * MW_H2O
+            m_H2O_vapor_out = m_H2O_total_in - m_H2O_liq_out
                  
             # Clamp for physics safety
-            m_condensed_kg_h = max(0.0, min(m_H2O_total_in, m_condensed_kg_h))
-            m_H2O_vapor_out = max(0.0, m_H2O_total_in - m_condensed_kg_h)
+            m_H2O_liq_out = max(0.0, min(m_H2O_total_in, m_H2O_liq_out))
+            m_H2O_vapor_out = max(0.0, m_H2O_total_in - m_H2O_liq_out)
 
         else:
-             m_condensed_kg_h = 0.0
+             m_H2O_liq_out = m_H2O_liq_in
              m_H2O_vapor_out = m_H2O_vap_in
 
         # 3. Update Composition & Mass Balance
         # Incorporate 'extra' liquid water from upstream sources (if any)
         # into the main stream mass definition for the outlet.
         m_total_out = self.inlet_stream.mass_flow_kg_h
-        m_H2O_liq_total_out = m_H2O_liq_in + m_condensed_kg_h
+        m_H2O_liq_total_out = m_H2O_liq_out
         
 
 

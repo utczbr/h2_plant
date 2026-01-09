@@ -39,10 +39,11 @@ GAS_CP_COEFFS = np.array([
     [28.98, -0.1571e-2, 0.8081e-5, -2.873e-9, 0.0],   # N2
     [32.24, 1.92e-3, 1.06e-5, -3.60e-9, 0.0],         # H2O (vap)
     [19.89, 5.02e-2, 1.27e-5, -1.10e-8, 0.0],         # CH4
-    [22.26, 5.98e-2, -3.50e-5, 7.47e-9, 0.0]          # CO2
+    [22.26, 5.98e-2, -3.50e-5, 7.47e-9, 0.0],         # CO2
+    [29.14, -0.1571e-2, 0.8081e-5, -2.873e-9, 0.0]    # CO (Approx as N2/Ideal)
 ], dtype=np.float64)
 
-GAS_MW = np.array([2.016, 32.0, 28.014, 18.015, 16.04, 44.01], dtype=np.float64)
+GAS_MW = np.array([2.016, 32.0, 28.014, 18.015, 16.04, 44.01, 28.01], dtype=np.float64)
 
 # Pre-computed MW in kg/mol for stream.py compatibility
 GAS_MW_KG_MOL = GAS_MW * 1e-3
@@ -67,8 +68,8 @@ def fast_composition_properties(mass_fracs: np.ndarray) -> Tuple[np.ndarray, flo
         Tuple of (mole_fracs, M_mix, sum_ylny)
     """
     # MW in kg/mol for this calculation
-    mw_arr = np.array([0.002016, 0.032, 0.028014, 0.018015, 0.01604, 0.04401])
-    n = 6
+    mw_arr = np.array([0.002016, 0.032, 0.028014, 0.018015, 0.01604, 0.04401, 0.02801])
+    n = len(mass_fracs)
     
     # Single pass: compute moles and total
     total_moles = 0.0
@@ -124,9 +125,10 @@ def calculate_stream_enthalpy_jit(
     """
     t_ref = 298.15
     h_total = 0.0
+    n = len(mass_fracs)
     
     # 1. Gas Species
-    for i in range(6):
+    for i in range(n):
         w_i = mass_fracs[i]
         if w_i > 1e-12:
             dh_mol = _integral_cp(T_k, GAS_CP_COEFFS[i]) - _integral_cp(t_ref, GAS_CP_COEFFS[i])

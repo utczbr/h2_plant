@@ -92,7 +92,7 @@ class LUTConfig:
     entropy_max: float = 100000.0
     entropy_points: int = 500
     properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C', 'Z')
-    fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O')
+    fluids: Tuple[str, ...] = ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O', 'CO')
     interpolation: Literal['linear', 'cubic'] = 'linear'
     cache_dir: Path = Path(__file__).resolve().parents[2] / '.h2_plant' / 'lut_cache'
 

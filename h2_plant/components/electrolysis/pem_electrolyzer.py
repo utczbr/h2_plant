@@ -616,17 +616,17 @@ class DetailedPEMElectrolyzer(Component):
         self.o2_output_kg = self.m_O2_kg_s * dt_seconds
         self.water_consumption_kg = actual_reaction_kg
 
-        # === DEBUG TRACE (remove after diagnosis) ===
-        if self.t_op_h < 0.1:  # Only first few steps
-            h2_total = (self._snapshot_h2_gas_kg_s + self._snapshot_h2_liq_kg_s) * 3600
-            o2_total = (self._snapshot_o2_gas_kg_s + self._snapshot_o2_liq_kg_s) * 3600
-            print(f"\n[PEM DEBUG t={self.t_op_h:.3f}h]")
-            print(f"  Inventory: buffer_start={buffer_start:.2f}kg + water_in={water_in_this_step:.2f}kg = {total_inventory_kg:.2f}kg")
-            print(f"  Demand: rxn={mass_needed_reaction:.2f} + drag={mass_needed_drag:.2f} + recirc={mass_needed_recirc:.2f} = {total_demand_mass:.2f}kg")
-            print(f"  Actual: rxn={actual_reaction_kg:.2f} + drag={actual_drag_kg:.2f} + recirc={actual_recirc_kg:.2f} = {total_withdrawal_kg:.2f}kg")
-            print(f"  Buffer final: {self.water_buffer_kg:.2f}kg")
-            print(f"  Snapshot H2: gas={self._snapshot_h2_gas_kg_s*3600:.1f} + liq={self._snapshot_h2_liq_kg_s*3600:.1f} = {h2_total:.1f} kg/h")
-            print(f"  Snapshot O2: gas={self._snapshot_o2_gas_kg_s*3600:.1f} + liq={self._snapshot_o2_liq_kg_s*3600:.1f} = {o2_total:.1f} kg/h")
+        # === DEBUG TRACE (commented out to reduce noise) ===
+        # if self.t_op_h < 0.1:  # Only first few steps
+        #     h2_total = (self._snapshot_h2_gas_kg_s + self._snapshot_h2_liq_kg_s) * 3600
+        #     o2_total = (self._snapshot_o2_gas_kg_s + self._snapshot_o2_liq_kg_s) * 3600
+        #     print(f"\n[PEM DEBUG t={self.t_op_h:.3f}h]")
+        #     print(f"  Inventory: buffer_start={buffer_start:.2f}kg + water_in={water_in_this_step:.2f}kg = {total_inventory_kg:.2f}kg")
+        #     print(f"  Demand: rxn={mass_needed_reaction:.2f} + drag={mass_needed_drag:.2f} + recirc={mass_needed_recirc:.2f} = {total_demand_mass:.2f}kg")
+        #     print(f"  Actual: rxn={actual_reaction_kg:.2f} + drag={actual_drag_kg:.2f} + recirc={actual_recirc_kg:.2f} = {total_withdrawal_kg:.2f}kg")
+        #     print(f"  Buffer final: {self.water_buffer_kg:.2f}kg")
+        #     print(f"  Snapshot H2: gas={self._snapshot_h2_gas_kg_s*3600:.1f} + liq={self._snapshot_h2_liq_kg_s*3600:.1f} = {h2_total:.1f} kg/h")
+        #     print(f"  Snapshot O2: gas={self._snapshot_o2_gas_kg_s*3600:.1f} + liq={self._snapshot_o2_liq_kg_s*3600:.1f} = {o2_total:.1f} kg/h"))
 
         # Update cumulative counters
         self.cumulative_h2_kg += self.h2_output_kg
@@ -1017,9 +1017,9 @@ class DetailedPEMElectrolyzer(Component):
                 water_received_kg = value.mass_flow_kg_h * self.dt
                 self.water_buffer_kg += water_received_kg
                 self.available_water_kg_h = value.mass_flow_kg_h
-                # DEBUG: Track receive_input calls
-                if self.t_op_h < 0.05:
-                    print(f"[PEM receive_input] flow={value.mass_flow_kg_h:.0f}kg/h, buffer+={water_received_kg:.2f}kg, buffer_now={self.water_buffer_kg:.2f}kg")
+                # DEBUG: Track receive_input calls (commented out to reduce noise)
+                # if self.t_op_h < 0.05:
+                #     print(f"[PEM receive_input] flow={value.mass_flow_kg_h:.0f}kg/h, buffer+={water_received_kg:.2f}kg, buffer_now={self.water_buffer_kg:.2f}kg")
                 return value.mass_flow_kg_h
         elif port_name == 'power_in':
             if isinstance(value, (int, float)):

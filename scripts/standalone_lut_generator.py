@@ -104,7 +104,8 @@ class LUTConfig:
     properties: Tuple[PropertyType, ...] = ('D', 'H', 'S', 'C', 'Z')
     
     # Fluids to support
-    fluids: Tuple[str, ...] = ('H2', 'O2', 'H2O', 'N2', 'CO2', 'CH4')
+    # Fluids to support
+    fluids: Tuple[str, ...] = ('H2', 'O2', 'H2O', 'N2', 'CO2', 'CH4', 'CO')
     
     # Interpolation method
     interpolation: Literal['linear', 'cubic'] = 'linear'
@@ -123,14 +124,16 @@ class StandaloneGenerator:
         # Determine CPU count for parallelization
         self.max_workers = os.cpu_count() or 4
         
-    def generate_all(self, skip_fluids: bool = False):
+    def generate_all(self, skip_fluids: bool = False, target_fluids: list = None):
         if not skip_fluids:
             logger.info("Starting Batch Generation (Parallelized)...")
             logger.info(f"Workers: {self.max_workers}")
             logger.info(f"Grid: {self.config.pressure_points}x{self.config.temperature_points} points")
-            logger.info(f"Fluids: {self.config.fluids}")
             
-            for fluid in self.config.fluids:
+            fluids_to_gen = target_fluids if target_fluids else self.config.fluids
+            logger.info(f"Fluids: {fluids_to_gen}")
+            
+            for fluid in fluids_to_gen:
                 self._generate_fluid_lut(fluid)
         else:
             logger.info("Skipping main fluid generation (skip_fluids=True)...")
@@ -322,7 +325,7 @@ if __name__ == "__main__":
     
     config = LUTConfig()
     generator = StandaloneGenerator(config)
-    # Generate ONLY saturation LUT to save time/space since others exist
-    generator.generate_all(skip_fluids=False)
+    # Generate ONLY CO LUT as requested
+    generator.generate_all(skip_fluids=False, target_fluids=['CO'])
     
     print("\nGeneration Complete.")

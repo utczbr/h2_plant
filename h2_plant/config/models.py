@@ -59,12 +59,17 @@ class SimulationConfig(BaseModel):
 
 class EconomicsConfig(BaseModel):
     h2_price_eur_kg: float
-    ppa_price_eur_mwh: float
     arbitrage_enabled: bool = True
     guaranteed_power_mw: float = 0.0
     arbitrage_threshold_eur_mwh: Optional[float] = None
     h2_non_rfnbo_price_eur_kg: float = 2.0
     p_grid_max_mw: float = 30.0
+    # BOP Grid Power Configuration
+    bop_pricing_mode: str = "fixed"  # "fixed" or "spot"
+    bop_fixed_price_eur_mwh: float = 80.0
+    # Dual PPA Pricing Configuration
+    ppa_contract_price_eur_mwh: float = 80.0  # Price for guaranteed block
+    ppa_variable_price_eur_mwh: float = 55.0  # Price for excess renewable
 
 # --- MASTER CONTEXT ---
 

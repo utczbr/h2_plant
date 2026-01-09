@@ -157,10 +157,8 @@ class SyngasPSA(Component):
         rho_in = inlet.density_kg_m3 if inlet.density_kg_m3 > 0 else 1.0
 
         # 3. Retrieve Composition
-        # CRITICAL FIX: Stream.composition is in MOLE FRACTIONS.
-        # We must convert to MASS FRACTIONS for the mass balance logic.
-        comp_mole = inlet.composition or {}
-        comp_mass = self._mole_to_mass_fractions(comp_mole)
+        # Stream.composition is in MASS FRACTIONS (Layer 1 Standard).
+        comp_mass = inlet.composition or {}
 
         # 4. Physics: Calculate Pressure Drop (Ergun)
         flow_m3_s = (in_flow_kg_h / 3600.0) / rho_in if rho_in > 0 else 0.0
@@ -194,7 +192,7 @@ class SyngasPSA(Component):
         # 6. Tail Gas Mass Balance (Conservation)
         m_tail_total = in_flow_kg_h - m_product_total
 
-        # 7. Compose Output Streams (in MASS fractions, then convert back to mole)
+        # 7. Compose Output Streams (in MASS fractions)
         # Product Composition (mass fractions)
         prod_comp_mass = {}
         if m_product_total > 0:
@@ -227,10 +225,6 @@ class SyngasPSA(Component):
         else:
             tail_comp_mass = {'CO2': 1.0}  # Fallback
 
-        # 8. Convert mass fractions back to mole fractions for Stream
-        prod_comp_mol = self._mass_to_mole_fractions(prod_comp_mass)
-        tail_comp_mol = self._mass_to_mole_fractions(tail_comp_mass)
-
         # 9. Power Calculation (Regeneration / Vacuum)
         # Empirical: ~50 kJ/kg tailgas for Zeolite regen at typical vacuum depth
         purge_kg_s = m_tail_total / 3600.0
@@ -242,7 +236,7 @@ class SyngasPSA(Component):
             mass_flow_kg_h=m_product_total,
             temperature_k=T_in,  # Isothermal approximation (adsorption heat ignored)
             pressure_pa=P_out_pa,
-            composition=prod_comp_mol,
+            composition=prod_comp_mass,
             phase='gas'
         )
 
@@ -251,7 +245,7 @@ class SyngasPSA(Component):
             mass_flow_kg_h=m_tail_total,
             temperature_k=T_in,
             pressure_pa=130000.0,
-            composition=tail_comp_mol,
+            composition=tail_comp_mass,
             phase='gas'
         )
 
@@ -265,9 +259,11 @@ class SyngasPSA(Component):
             
             # DEBUG: Trace input composition (once per hour)
             if int((self.cycle_position * self.cycle_time_min)) % 10 == 0:
-                logger.info(f"PSA [{self.component_id}] INPUT: {in_flow_kg_h:.1f} kg/h, "
+                # Re-calculate mole fractions for logging display only
+                comp_mole = self._mass_to_mole_fractions(comp_mass)
+                logger.debug(f"PSA [{self.component_id}] INPUT: {in_flow_kg_h:.1f} kg/h, "
                            f"H2(mol)={comp_mole.get('H2',0)*100:.1f}%, H2(mass)={comp_mass.get('H2',0)*100:.1f}%")
-                logger.info(f"PSA [{self.component_id}] OUTPUT: {m_product_total:.1f} kg/h H2 product, "
+                logger.debug(f"PSA [{self.component_id}] OUTPUT: {m_product_total:.1f} kg/h H2 product, "
                            f"tail={m_tail_total:.1f} kg/h")
 
     def _mole_to_mass_fractions(self, y_mol: Dict[str, float]) -> Dict[str, float]:

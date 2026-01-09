@@ -123,6 +123,14 @@ visualization:
         - title: "Arbitrage Opportunity"
           components: []
 
+    effective_ppa:
+      enabled: true
+      plots:
+        - title: "Effective PPA Price"
+          components: []
+          ppa_contract_price: 80.0
+          ppa_variable_price: 55.0
+
     # 4. RFNBO COMPLIANCE (Economic Spot Dispatch)
     # ----------------------------------------------------------------------
     rfnbo_compliance_stacked:

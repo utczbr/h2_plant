@@ -29,9 +29,6 @@ from h2_plant.core.component_ids import ComponentID
 
 # ATR Components
 from h2_plant.components.reforming.atr_thermal_components import Boiler as ATR_Boiler
-from h2_plant.components.reforming.atr_thermal_components import HeatExchanger as ATR_HeatExchanger
-from h2_plant.components.reforming.atr_thermal_components import HTWGS as ATR_HTWGS
-from h2_plant.components.reforming.atr_thermal_components import LTWGS as ATR_LTWGS
 from h2_plant.components.reforming.atr_system_components import ATRSystemCompressor, ATRProductSeparator
 from h2_plant.components.reforming.atr_recovery import ATRSyngasCooler
 
@@ -285,15 +282,17 @@ class PlantGraphBuilder:
             lookup_id = params.get('lookup_id', params.get('component_id', None))
             return ATR_Boiler(node.id, lookup_id=lookup_id)
 
-        elif node.type == "ATR_HeatExchanger":
-            lookup_id = node.params.get('lookup_id', None) if node.params else None
-            return ATR_HeatExchanger(node.id, lookup_id=lookup_id)
+        # ATR_HeatExchanger, ATR_HTWGS, ATR_LTWGS removed - replaced by IntegratedATRPlant
 
-        elif node.type == "ATR_HTWGS":
-            return ATR_HTWGS(node.id)
-
-        elif node.type == "ATR_LTWGS":
-            return ATR_LTWGS(node.id)
+        elif node.type == "IntegratedATRPlant":
+            from h2_plant.components.reforming.integrated_atr_plant import IntegratedATRPlant
+            max_flow = float(node.params.get('max_flow_kg_h', 20000.0))
+            pressure_drop = float(node.params.get('pressure_drop_bar', 2.5))
+            return IntegratedATRPlant(
+                component_id=node.id,
+                max_flow_kg_h=max_flow,
+                pressure_drop_bar=pressure_drop
+            )
 
         elif node.type == "ATR_SystemCompressor":
             return ATRSystemCompressor(node.id)

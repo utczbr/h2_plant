@@ -499,9 +499,13 @@ def create_cumulative_h2_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
         # Total line
         total_cumsum = cumulative_base
         final_total = total_cumsum.iloc[-1] if not total_cumsum.empty else 0
+        
+        # Calculate equivalent days at nominal power (13,313 kg/day)
+        equiv_days = final_total / 13313.0
+        
         ax.plot(x_ds, downsample_for_plot(total_cumsum), 
                 color='black', linestyle='-', linewidth=2, 
-                label=f'Total: {final_total:,.1f} kg')
+                label=f'Total: {final_total:,.1f} kg ({equiv_days:.1f} days)')
     else:
         ax.text(0.5, 0.5, 'No hydrogen production data detected.\n'
                           'Expected columns: H2_soec, H2_pem, H2_atr',
@@ -583,6 +587,9 @@ def create_cumulative_h2_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
             final_val = sources[source_name].iloc[-1]
             pct = (final_val / final_total * 100) if final_total > 0 else 0
             summary_lines.append(f'{source_name}: {final_val:,.1f} kg ({pct:.1f}%)')
+    
+    # Equivalent Days
+    summary_lines.append(f'Eq. Nominal Days: {equiv_days:.1f}')
     
     # PSA/Sellable breakdown
     if has_psa:
@@ -714,6 +721,76 @@ def create_revenue_analysis_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax.set_ylabel('Value (EUR)')
     ax.legend(fontsize=8, loc='upper left')
     ax.grid(True, alpha=0.3)
+    return fig
+
+
+@log_graph_errors
+def create_effective_ppa_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Create Effective PPA Price over time chart.
+    
+    Shows how the weighted average PPA price varies with wind availability:
+    - When wind <= guaranteed: PPA = Contract Price (higher)
+    - When wind > guaranteed: PPA = Weighted average (lower)
+    
+    Also overlays spot price for arbitrage context.
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Check if effective PPA data is available
+    if 'ppa_price_effective_eur_mwh' not in df.columns:
+        ax.text(0.5, 0.5, 'No effective PPA data available\n(ppa_price_effective_eur_mwh column not found)', 
+                ha='center', va='center', fontsize=12)
+        return fig
+    
+    # Prepare time axis
+    if 'minute' in df.columns:
+        time_axis = df['minute'] / 60.0  # Convert to hours
+        time_label = 'Time (Hours)'
+    else:
+        time_axis = df.index
+        time_label = 'Timestep'
+    
+    time_ds = downsample_for_plot(time_axis)
+    
+    # Effective PPA Price
+    ppa_eff = downsample_for_plot(df['ppa_price_effective_eur_mwh'])
+    ax.plot(time_ds, ppa_eff, color='#1976D2', linewidth=2, label='Effective PPA')
+    ax.fill_between(time_ds, 0, ppa_eff, color='#1976D2', alpha=0.2)
+    
+    # Spot price (for comparison)
+    if 'Spot' in df.columns or 'spot_price' in df.columns:
+        spot_col = 'Spot' if 'Spot' in df.columns else 'spot_price'
+        spot_ds = downsample_for_plot(df[spot_col])
+        ax.plot(time_ds, spot_ds, color='#FF5722', linewidth=1.5, linestyle='--', 
+                label='Spot Price', alpha=0.8)
+    
+    # Contract and Variable reference lines
+    ppa_contract = get_config(df, 'ppa_contract_price_eur_mwh', 80.0)
+    ppa_variable = get_config(df, 'ppa_variable_price_eur_mwh', 55.0)
+    
+    ax.axhline(y=ppa_contract, color='#D32F2F', linestyle=':', linewidth=1.5, 
+               label=f'Contract ({ppa_contract:.0f} €/MWh)')
+    ax.axhline(y=ppa_variable, color='#388E3C', linestyle=':', linewidth=1.5, 
+               label=f'Variable ({ppa_variable:.0f} €/MWh)')
+    
+    # Statistics
+    avg_ppa = df['ppa_price_effective_eur_mwh'].mean()
+    min_ppa = df['ppa_price_effective_eur_mwh'].min()
+    max_ppa = df['ppa_price_effective_eur_mwh'].max()
+    
+    stats_text = f'Avg: {avg_ppa:.2f} €/MWh\nMin: {min_ppa:.2f} | Max: {max_ppa:.2f}'
+    ax.annotate(stats_text, xy=(0.98, 0.98), xycoords='axes fraction',
+               ha='right', va='top', fontsize=10,
+               bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='gray'))
+    
+    ax.set_title('Effective PPA Price (Dual Pricing Model)', fontsize=13, fontweight='bold')
+    ax.set_xlabel(time_label, fontsize=11)
+    ax.set_ylabel('Price (EUR/MWh)', fontsize=11)
+    ax.legend(loc='upper left', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    
     return fig
 
 

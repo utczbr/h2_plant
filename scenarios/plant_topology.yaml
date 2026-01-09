@@ -391,7 +391,7 @@ nodes:
   - id: "SOEC_H2_PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.99999
+      purity_target: 0.99995
       process_step: 300
     connections:
       - source_port: "purified_gas_out"
@@ -599,7 +599,7 @@ nodes:
     connections:
       - source_port: "outlet_1"
         target_name: "ATR_Syngas_Cooler"
-        target_port: "water_in"
+        target_port: "cold_in"
         resource_type: "stream"
       - source_port: "outlet_2"
         target_name: "SOEC_Feed_Pump"
@@ -910,7 +910,7 @@ nodes:
   - id: "PEM_H2_PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.99999
+      purity_target: 0.99995
       recovery_rate: 0.90
       power_consumption_kw: 10.0
     connections: 
@@ -1045,7 +1045,7 @@ nodes:
       process_step: 42
     connections:
       - source_port: "outlet"
-        target_name: "ATR_SystemCompressor"
+        target_name: "ATR_O2_Compressor"
         target_port: "inlet"
         resource_type: "stream"
 
@@ -1219,21 +1219,37 @@ nodes:
       process_step: 46
     connections:
       - source_port: "outlet"
-        target_name: "ATR_Reactor"
+        target_name: "ATR_Plant"
         target_port: "inlet"
         resource_type: "stream"
 
-  - id: "ATR_Reactor"
-    type: "ATR"
+  # =================================================================================
+  # INTEGRATED ATR PLANT (Black Box - replaces ATR_Reactor + HTWGS + LTWGS)
+  # =================================================================================
+  - id: "ATR_Plant"
+    type: "IntegratedATRPlant"
     params:
       max_flow_kg_h: 20000.0
+      pressure_drop_bar: 2.5
       system_group: "ATR_Unit"
       process_step: 47
     connections:
       - source_port: "syngas_out"
-        target_name: "ATR_HTWGS_Block" # H08
-        target_port: "inlet"
+        target_name: "ATR_Syngas_Cooler"
+        target_port: "hot_in"
         resource_type: "stream"
+      - source_port: "o2_signal"
+        target_name: "ATR_H01_Boiler"
+        target_port: "o2_signal_in"
+        resource_type: "signal"
+      - source_port: "o2_signal"
+        target_name: "ATR_H02_Boiler"
+        target_port: "o2_signal_in"
+        resource_type: "signal"
+      - source_port: "o2_signal"
+        target_name: "ATR_H04_Boiler"
+        target_port: "o2_signal_in"
+        resource_type: "signal"
 
   # =================================================================================
   # ATR SURROGATE MODEL CHAIN
@@ -1252,10 +1268,13 @@ nodes:
         resource_type: "stream"
 
   # --- Oxygen System Compressor (Power Tracking) ---
-  - id: "ATR_SystemCompressor"
-    type: "ATR_SystemCompressor"
+  # --- Oxygen Feed Compressor ---
+  - id: "ATR_O2_Compressor"
+    type: "CompressorSingle"
     params:
-      max_flow_kg_h: 757.54 # Clamping flow to regression max
+      max_flow_kg_h: 760.0 
+      outlet_pressure_bar: 15.0 
+      isentropic_efficiency: 0.75
       system_group: "ATR_Unit"
     connections:
       - source_port: "outlet"
@@ -1287,40 +1306,20 @@ nodes:
         target_port: "inlet_3"
         resource_type: "stream"
 
-  # --- High Temperature Water Gas Shift (H08) ---
-  - id: "ATR_HTWGS_Block"
-    type: "ATR_HTWGS"
-    params:
-      system_group: "ATR_Unit"
-    connections:
-      - source_port: "outlet"
-        target_name: "ATR_LTWGS_Block" # H09
-        target_port: "inlet"
-        resource_type: "stream"
-
-  # --- Low Temperature Water Gas Shift (H09) ---
-  - id: "ATR_LTWGS_Block"
-    type: "ATR_LTWGS"
-    params:
-      system_group: "ATR_Unit"
-    connections:
-      - source_port: "outlet"
-        target_name: "ATR_Syngas_Cooler"
-        target_port: "syngas_in"
-        resource_type: "stream"
-
-  # --- Syngas Heat Recovery (Cooler) ---
+  # --- Syngas Heat Recovery (Interchanger) ---
   - id: "ATR_Syngas_Cooler"
-    type: "ATRSyngasCooler"
+    type: "Interchanger"
     params:
-      lookup_id: "Tin_H05"
+      min_approach_temp_k: 10.0
+      target_cold_out_temp_c: 180.0  # Preheat water toward steam
+      efficiency: 0.95
       system_group: "ATR_Unit"
     connections:
-      - source_port: "syngas_out"
+      - source_port: "hot_out"
         target_name: "ATR_DryCooler"
         target_port: "fluid_in"
         resource_type: "stream"
-      - source_port: "water_out"
+      - source_port: "cold_out"
         target_name: "SOEC_Steam_Boiler"
         target_port: "fluid_in"
         resource_type: "stream"
@@ -1437,10 +1436,10 @@ nodes:
       temperature_limited: true
       max_flow_kg_h: 1500.0
     connections: []
-    #  - source_port: "outlet"
-    #    target_name: "H2_Production_Mixer"
-    #    target_port: "inlet_3"
-    #    resource_type: "stream"
+      #- source_port: "outlet"
+      #  target_name: "H2_Production_Mixer"
+      #  target_port: "inlet_3"
+      #  resource_type: "stream"
 
 
   # =================================================================================
@@ -1509,7 +1508,7 @@ nodes:
     type: "DetailedTank"
     params:
       n_tanks: 30
-      volume_per_tank_m3: 2000000000000000000000000000000000000000000000000000000000000000.0 # From HP spec, assumed consistent
+      volume_per_tank_m3: 80.0 # From HP spec, assumed consistent
       max_pressure_bar: 70.0
       initial_pressure_bar: 1.0
       min_discharge_pressure_bar: 30.0

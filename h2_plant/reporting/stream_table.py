@@ -234,7 +234,9 @@ def print_stream_summary_table(
             # Use get_total_mole_frac to correctly account for all water in the stream
             mol_h2 = stream.get_total_mole_frac('H2')
             mol_o2 = stream.get_total_mole_frac('O2')
-            mol_h2o_total = stream.get_total_mole_frac('H2O') + stream.get_total_mole_frac('H2O_liq')
+            # Fixed: get_total_mole_frac('H2O') already returns (vapor + liquid + extra).
+            # Do NOT add 'H2O_liq' manually here or it counts twice.
+            mol_h2o_total = stream.get_total_mole_frac('H2O')
 
             # 5. Phase Partitioning of Water (Simple Approximation)
             # pct_h2o_liq = (mass_liq / mass_total_water) * 100

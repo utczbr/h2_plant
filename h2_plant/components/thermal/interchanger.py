@@ -133,8 +133,8 @@ class Interchanger(Component):
         # Note: StandardConditions.CANONICAL_FLUID_ORDER = ('H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2')
         # but LUT config uses ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O') - check lut_manager.LUTConfig
         
-        hot_mass_fracs = np.zeros(6, dtype=np.float64)
         lut_fluid_order = lut_mgr.config.fluids if lut_mgr else StandardConditions.CANONICAL_FLUID_ORDER
+        hot_mass_fracs = np.zeros(len(lut_fluid_order), dtype=np.float64)
         
         for idx, fluid in enumerate(lut_fluid_order):
             if fluid in self.hot_stream.composition:
@@ -183,10 +183,9 @@ class Interchanger(Component):
         from h2_plant.optimization.numba_ops import solve_rachford_rice_single_condensable, calculate_stream_enthalpy_jit, fast_composition_properties
         
         # Prepare inputs for JIT functions
-        # We need mass fractions array [H2, O2, N2, H2O, CH4, CO2]
-        # Map current composition to this array
-        input_mass_fracs = np.zeros(6, dtype=np.float64)
-        species_order = ['H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2']
+        # We need mass fractions array matching numba_ops constant order: [H2, O2, N2, H2O, CH4, CO2, CO]
+        species_order = ['H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2', 'CO']
+        input_mass_fracs = np.zeros(len(species_order), dtype=np.float64)
         
         # Normalize composition if needed, though Stream should be solid.
         comp_copy = self.hot_stream.composition.copy()

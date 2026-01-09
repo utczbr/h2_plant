@@ -57,6 +57,7 @@ class GraphOrchestrator:
             'economics_time_series': economics.plot_time_series,
             'economics_pie': economics.plot_pie,
             'economics_scatter': economics.plot_arbitrage,
+            'effective_ppa': economics.plot_effective_ppa,
 
             # Production
             'production_time_series': production.plot_time_series,

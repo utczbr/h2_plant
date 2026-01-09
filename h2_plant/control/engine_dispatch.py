@@ -225,7 +225,16 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             'cumulative_h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
             'cumulative_h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
             'spot_purchased_mw': np.zeros(total_steps, dtype=np.float64),
-            'spot_threshold_eur_mwh': np.zeros(total_steps, dtype=np.float64)
+            'spot_threshold_eur_mwh': np.zeros(total_steps, dtype=np.float64),
+            
+            # --- BOP GRID IMPORT ---
+            'bop_grid_import_mw': np.zeros(total_steps, dtype=np.float64),
+            'bop_price_eur_mwh': np.zeros(total_steps, dtype=np.float64),
+            'bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
+            'cumulative_bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
+            
+            # --- DUAL PPA PRICING ---
+            'ppa_price_effective_eur_mwh': np.zeros(total_steps, dtype=np.float64)
         }
 
         # 2. Identify Components & Pre-Bind Arrays
@@ -529,6 +538,26 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         wind_fut = wind[min(step_idx + 60, len(wind) - 1)]
         P_future = max(wind_fut, guaranteed_mw)
 
+        # =====================================================================
+        # DUAL PPA PRICING: Weighted Average Calculation
+        # =====================================================================
+        # Contract block (up to guaranteed_mw): ppa_contract_price_eur_mwh
+        # Variable excess (above guaranteed_mw): ppa_variable_price_eur_mwh
+        price_contract = getattr(self._context.economics, 'ppa_contract_price_eur_mwh', 80.0)
+        price_variable = getattr(self._context.economics, 'ppa_variable_price_eur_mwh', 55.0)
+        
+        if P_offer <= 1e-6:
+            current_ppa_price = price_contract
+        elif P_offer <= guaranteed_mw:
+            # Entire power is within the guaranteed contract block
+            current_ppa_price = price_contract
+        else:
+            # Power exceeds guaranteed block: Blend the prices
+            # Effective = (Contract_MW × Contract_Price + Excess_MW × Variable_Price) / Total_MW
+            excess_mw = P_offer - guaranteed_mw
+            total_cost_per_hour = (guaranteed_mw * price_contract) + (excess_mw * price_variable)
+            current_ppa_price = total_cost_per_hour / P_offer
+
         soec_kwh_kg = getattr(self._context.physics.soec_cluster, 'kwh_per_kg', 37.5)
         pem_kwh_kg = getattr(self._context.physics.pem_system, 'kwh_per_kg', 50.0)
 
@@ -541,7 +570,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             pem_max_power_mw=self._pem_max,
             soec_h2_kwh_kg=soec_kwh_kg,
             pem_h2_kwh_kg=pem_kwh_kg,
-            ppa_price_eur_mwh=getattr(self._context.economics, 'ppa_price_eur_mwh', 50.0),
+            ppa_price_eur_mwh=current_ppa_price,  # Use calculated weighted average
             h2_price_eur_kg=getattr(self._context.economics, 'h2_price_eur_kg', 9.6),
             arbitrage_threshold_eur_mwh=getattr(self._context.economics, 'arbitrage_threshold_eur_mwh', None),
             # RFNBO / Economic Spot parameters
@@ -612,7 +641,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['storage_action_factor'][step_idx] = action_factor
         self._history['storage_time_to_full_h'][step_idx] = self._ctrl_state['time_to_full_h']
         self._history['spot_price'][step_idx] = current_price
-        
+        self._history['ppa_price_effective_eur_mwh'][step_idx] = current_ppa_price
         # Record RFNBO classification metrics
         # For ECONOMIC_SPOT: get from result.state_update
         # For other strategies: ALL H2 is RFNBO (100% renewable-powered)
@@ -755,9 +784,25 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
              if hasattr(comp, 'electrical_power_kw'): P_bop_kw += comp.electrical_power_kw
 
         P_bop_mw = P_bop_kw / 1000.0
-        P_total_consumed = P_soec_actual + P_pem_actual + P_bop_mw
+        
+        # === NEW: BOP is imported from grid separately (not from wind) ===
+        # Wind power goes 100% to electrolyzers (RFNBO-compliant)
+        P_consumed_from_wind = P_soec_actual + P_pem_actual  # BOP excluded
         P_offer = self._history['P_offer'][step_idx]
-        P_sold_corrected = max(0.0, P_offer - P_total_consumed)
+        P_sold_corrected = max(0.0, P_offer - P_consumed_from_wind)
+        
+        # BOP Grid Import Cost Calculation
+        dt = self._context.simulation.timestep_hours
+        bop_pricing_mode = getattr(self._context.economics, 'bop_pricing_mode', 'fixed')
+        spot_price = self._history['spot_price'][step_idx]
+        
+        if bop_pricing_mode == 'spot':
+            bop_price = spot_price
+        else:
+            bop_price = getattr(self._context.economics, 'bop_fixed_price_eur_mwh', 80.0)
+        
+        bop_cost_eur = P_bop_mw * dt * bop_price
+        
         total_h2 = h2_soec + h2_pem + h2_atr
         self._state.cumulative_h2_kg += total_h2
 
@@ -773,6 +818,17 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['steam_soec_kg'][step_idx] = steam_soec
         self._history['P_bop_mw'][step_idx] = P_bop_mw
         self._history['sell_decision'][step_idx] = 1 if P_sold_corrected > 0 else 0
+        
+        # BOP Grid Import Recording
+        self._history['bop_grid_import_mw'][step_idx] = P_bop_mw
+        self._history['bop_price_eur_mwh'][step_idx] = bop_price
+        self._history['bop_cost_eur'][step_idx] = bop_cost_eur
+        if step_idx > 0:
+            self._history['cumulative_bop_cost_eur'][step_idx] = (
+                self._history['cumulative_bop_cost_eur'][step_idx - 1] + bop_cost_eur
+            )
+        else:
+            self._history['cumulative_bop_cost_eur'][step_idx] = bop_cost_eur
         
         # SOEC Modules
         if self._soec and hasattr(self._soec, 'real_powers'):
