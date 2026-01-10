@@ -475,3 +475,33 @@ These parameters drive the Ergun pressure drop calculation.
 | Tag | $Q_{transferred}$ | Hot Side $\Delta T$ | Cold Side $\Delta T$ | Effectiveness |
 | :--- | :--- | :--- | :--- | :--- |
 | **SOEC_H2_Interchanger_1** | **309.5 kW** | 152°C $\to$ 58°C | 10°C $\to$ 95°C | High |
+
+---
+
+## 9. Summary of Technical Parameters
+
+| Item ID | Equipment/Parameter Name | Value | Unit | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | **ATR Reactor:** Volume | **Not Specified** | m³ | Modeled as integrated "Black Box" (`IntegratedATRPlant`); specific internal reactor volume is not defined. |
+| 2 | **Attemperator:** Diameter | **Not Specified** | mm | Implemented as `WaterMixer` (thermodynamic node) without geometric sizing. |
+| 3 | **Dry Cooler:** Heat Exchange Area | **H2: 453.62**<br>**O2: 92.95** | m² | Indirect (Glycol→Air) units. Direct model uses 219.0 m². |
+| 4 | **Chiller:** Thermal Load | **500.0** | kW | Design capacity (e.g., `SOEC_H2_Chiller_1`). |
+| 5 | **Coalescer:** Contact Area | **Not Specified** | m² | Defined by Shell Dia (0.3 m) and Element Length (0.5-1.0 m). |
+| 6 | **Degasser:** Operating Flow Rate | **N/A** | kg/h | Not present in active topology. |
+| 7 | **Deoxygenator:** Shell Internal Volume | **0.11** | m³ | Calculated from L=1.333m, D=0.324m. |
+| 8 | **Electric Boiler:** Power Rating | **3000.0** | kW | Main unit `SOEC_Steam_Boiler`. Pre-heaters: 25-50 kW. |
+| 9 | **Hydrogen Tank:** Volume | **107.37** | m³ | Per tank (`LP_Storage_Tank`, Array of 30). |
+| 10 | **Heater:** Heat Exchange Area | **Not Specified** | m² | Modeled as `ElectricBoiler` (Thermodynamic). |
+| 11 | **Heat Exchanger:** Heat Transfer Area | **Not Specified** | m² | `Interchanger` uses approach temp & efficiency model. |
+| 12 | **KOD (Knock-Out Drum):** Volume | **Not Specified** | m³ | Defined by Diameter (0.5-0.8 m); L/D ratio not fixed. |
+| 13 | **Multistage Compressor Train:** Shaft Power | **~15 - 20** | kW | Est. per stage (HP Train). Total power calculated dynamically. |
+| 14 | **Multicyclone Separator:** Gas Flow Rate | **Not Specified** | m³/h | Sized by Target Velocity (22.0 m/s). |
+| 15 | **Mixer:** Power Consumption | **0** | kW | Passive thermodynamic node. |
+| 16 | **Mixing Tank:** Volume | **0.5 - 5.0** | m³ | Feed/Prod Mixers: 5.0 m³. Drain Mixers: 0.5 m³. |
+| 17 | **Pump:** Shaft Power | **5.7** | kW | `PEM_Water_Pump` (40 bar). `SOEC_Feed_Pump`: 0.41 kW. |
+| 18 | **PSA:** Gas Feed Flow Rate | **~267** | kg/h | Est. for `SOEC_H2_PSA_1`. |
+| 19 | **Rectifier and Transformer:** Nominal Power | **5.0** | MW | Per PEM unit. SOEC Cluster total ~10-12 MW. |
+| 20 | **Separator:** Volume | **Not Specified** | m³ | See KOD. |
+| 21 | **Valves:** Diameter | **Not Specified** | mm | Modeled as `ThrottlingValve` (Isenthalpic). |
+| 22 | **UPW (Ultra-Pure Water):** Flow Rate | **3600 - 4000** | kg/h | Target makeup rates (SOEC/PEM). |
+| 23 | **UPWT (Ultra-Pure Water Tank):** Volume | **N/A** | m³ | Modeled as infinite source. |
