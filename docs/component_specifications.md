@@ -482,19 +482,19 @@ These parameters drive the Ergun pressure drop calculation.
 
 | Item ID | Equipment/Parameter Name | Value | Unit | Notes |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | **ATR Reactor:** Volume | **Not Specified** | m³ | Modeled as integrated "Black Box" (`IntegratedATRPlant`); specific internal reactor volume is not defined. |
-| 2 | **Attemperator:** Diameter | **Not Specified** | mm | Implemented as `WaterMixer` (thermodynamic node) without geometric sizing. |
-| 3 | **Dry Cooler:** Heat Exchange Area | **H2: 453.62**<br>**O2: 92.95** | m² | Indirect (Glycol→Air) units. Direct model uses 219.0 m². |
+| 1 | **ATR Reactor:** Volume | **5.0** | m³ | **Physical:** Feed Mixer Buffer. **Capacity:** ~5,050 kg/h (Design Max) |
+| 2 | **Attemperator:** Diameter | **100 - 200** | mm | Used for steam velocity monitoring (Constraint Validator). **Value:** 154.1mm (DN150). |
+| 3 | **Dry Cooler:** Heat Exchange Area | **H2: 453.62**<br>**O2: 92.95** | m² | Indirect (Glycol→Air). **U:** 35 (Air) / 1000 (Glycol) W/m²K. **Fan Eff:** 60%. |
 | 4 | **Chiller:** Thermal Load | **500.0** | kW | Design capacity (e.g., `SOEC_H2_Chiller_1`). |
-| 5 | **Coalescer:** Contact Area | **Not Specified** | m² | Defined by Shell Dia (0.3 m) and Element Length (0.5-1.0 m). |
+| 5 | **Coalescer:** Contact Area | **Not Specified** | m² | Shell D=0.32m. **Eff:** 98% liquid removal. **Permeability:** ~2e10 (Darcy). |
 | 6 | **Degasser:** Operating Flow Rate | **N/A** | kg/h | Not present in active topology. |
-| 7 | **Deoxygenator:** Shell Internal Volume | **0.11** | m³ | Calculated from L=1.333m, D=0.324m. |
-| 8 | **Electric Boiler:** Power Rating | **3000.0** | kW | Main unit `SOEC_Steam_Boiler`. Pre-heaters: 25-50 kW. |
+| 7 | **Deoxygenator:** Shell Internal Volume | **0.11** | m³ | **Limits:** T_in > 4°C, T_cat < 150°C. **Porosity:** 0.4. **Pellet:** 3mm. |
+| 8 | **Electric Boiler:** Power Rating | **Main: 2500.0**<br>**Aux: 10 - 45** | kW | **Tested Peaks:**<br>- Main Steam: 2483.69 kW<br>- PSA Heat: 40.69 kW<br>- PEM O2: 20.98 kW<br>- PEM H2: ~10-11 kW |
 | 9 | **Hydrogen Tank:** Volume | **107.37** | m³ | Per tank (`LP_Storage_Tank`, Array of 30). |
 | 10 | **Heater:** Heat Exchange Area | **Not Specified** | m² | Modeled as `ElectricBoiler` (Thermodynamic). |
 | 11 | **Heat Exchanger:** Heat Transfer Area | **Not Specified** | m² | `Interchanger` uses approach temp & efficiency model. |
 | 12 | **KOD (Knock-Out Drum):** Volume | **Not Specified** | m³ | Defined by Diameter (0.5-0.8 m); L/D ratio not fixed. |
-| 13 | **Multistage Compressor Train:** Shaft Power | **~15 - 20** | kW | Est. per stage (HP Train). Total power calculated dynamically. |
+| 13 | **Multistage Compressor Train:** Shaft Power | **~15 - 20** | kW | **Eff:** 75% Isentropic, 95% Mech. Ratio: ~3.5 per stage. |
 | 14 | **Multicyclone Separator:** Gas Flow Rate | **Not Specified** | m³/h | Sized by Target Velocity (22.0 m/s). |
 | 15 | **Mixer:** Power Consumption | **0** | kW | Passive thermodynamic node. |
 | 16 | **Mixing Tank:** Volume | **0.5 - 5.0** | m³ | Feed/Prod Mixers: 5.0 m³. Drain Mixers: 0.5 m³. |
@@ -503,5 +503,5 @@ These parameters drive the Ergun pressure drop calculation.
 | 19 | **Rectifier and Transformer:** Nominal Power | **5.0** | MW | Per PEM unit. SOEC Cluster total ~10-12 MW. |
 | 20 | **Separator:** Volume | **Not Specified** | m³ | See KOD. |
 | 21 | **Valves:** Diameter | **Not Specified** | mm | Modeled as `ThrottlingValve` (Isenthalpic). |
-| 22 | **UPW (Ultra-Pure Water):** Flow Rate | **3600 - 4000** | kg/h | Target makeup rates (SOEC/PEM). |
+| 22 | **UPW (Ultra-Pure Water):** Flow Rate | **3600 - 4000** | kg/h | **RO Recovery:** 75%. **Energy:** 0.004 kWh/kg. Target: SOEC/PEM makeup. |
 | 23 | **UPWT (Ultra-Pure Water Tank):** Volume | **N/A** | m³ | Modeled as infinite source. |
