@@ -59,6 +59,9 @@ def _get_topology_section(comp_id: str, comp_type: str) -> int:
     cid = comp_id.upper()
     ctype = comp_type.upper()
     
+    # Special Case: Attemperator for Feed (Section 1)
+    if "ATTEMPERATOR" in ctype: return 1
+    
     # Special Case: ATR Heat Recovery Loop components go to Section 1 (Feed)
     if "ATR_H2O_" in cid: return 1
     if "SOEC_Steam_Loop_" in cid: return 1
@@ -157,8 +160,8 @@ def print_stream_summary_table(
         
         # Get component output stream - prioritize by gas species mass (H2 + O2 + CH4)
         candidate_streams = []
-        priority_ports = ['inventory', 'h2_out', 'syngas_out', 'purified_gas_out', 'hydrogen']
-        all_ports = ['inventory', 'outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'tail_gas_out', 'hot_out', 'water_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water', 'outlet_1', 'outlet_2']
+        priority_ports = ['inventory', 'h2_out', 'syngas_out', 'purified_gas_out', 'hydrogen', 'steam_out']
+        all_ports = ['inventory', 'outlet', 'h2_out', 'syngas_out', 'o2_out', 'fluid_out', 'gas_outlet', 'purified_gas_out', 'tail_gas_out', 'hot_out', 'water_out', 'liquid_drain', 'drain', 'out', 'biogas_out', 'cold_out', 'hydrogen', 'offgas', 'water', 'outlet_1', 'outlet_2', 'steam_out']
         
         for port in all_ports:
             try:
@@ -265,6 +268,5 @@ def print_stream_summary_table(
                 print(f"{cid:<20} | {T_c:>5.1f}°C | {P_bar:>5.2f} bar | {h2_str:>7} | {kg_h_h2:>9.2f} | {h2o_str:>7} | {kg_h_h2o:>9.2f} | {o2_str:>7} | {kg_h_o2:>9.2f} | {total_kg_h:>10.2f} | {pct_h2o_liq:>7.1f}% | {pct_h2o_vap:>7.1f}%")
         
         if is_atr:
-             print("-" * 145)
-        else:
              print("-" * 155)
+

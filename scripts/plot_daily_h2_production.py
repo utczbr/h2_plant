@@ -13,12 +13,44 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
+import yaml
 
 def generate_daily_h2_production_graph(
     csv_path: str = "scenarios/simulation_output/simulation_history.csv",
-    output_path: str = "scenarios/simulation_output/daily_h2_production.png"
+    output_path: str = "scenarios/simulation_output/daily_h2_production.png",
+    config_path: str = None,
+    nominal_daily_production_kg: float = None
 ):
-    """Generate daily H2 production graph."""
+    """
+    Generate daily H2 production graph.
+    
+    Args:
+        csv_path: Path to simulation history CSV
+        output_path: Path for output PNG
+        config_path: Optional path to visualization_config.yaml
+        nominal_daily_production_kg: Override for 100% capacity (kg/day).
+                                     If None, reads from config or uses 8500.
+    """
+    
+    # Load nominal production from config if not provided
+    if nominal_daily_production_kg is None:
+        nominal_daily_production_kg = 8500.0  # Default: SOEC + PEM only
+        
+        if config_path:
+            config_file = Path(config_path)
+        else:
+            # Try to find config relative to csv_path
+            config_file = Path(csv_path).parent.parent / "visualization_config.yaml"
+        
+        if config_file.exists():
+            try:
+                with open(config_file, 'r') as f:
+                    viz_config = yaml.safe_load(f)
+                daily_config = viz_config.get('visualization', {}).get('orchestrated_graphs', {}).get('daily_h2_production_average', {})
+                nominal_daily_production_kg = daily_config.get('nominal_daily_production_kg', 8500.0)
+                print(f"Loaded nominal production from config: {nominal_daily_production_kg} kg/day")
+            except Exception as e:
+                print(f"Warning: Could not load config ({e}), using default 8500 kg/day")
     
     print("Loading simulation data...")
     df = pd.read_csv(csv_path)
@@ -184,8 +216,8 @@ def generate_daily_h2_production_graph(
     ax.set_title('Daily Hydrogen Production by Source\n(Gross Production Breakdown + Purified Total)', 
                  fontsize=14, fontweight='bold')
     
-    # Legend
-    ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+    # Legend - positioned at lower right to avoid overlap with high purified values
+    ax.legend(loc='lower right', fontsize=10, framealpha=0.95)
     
     # Grid
     ax.grid(True, alpha=0.3, linestyle='--')
@@ -203,11 +235,11 @@ def generate_daily_h2_production_graph(
     avg_gross = daily['Gross_Total'].mean()
     avg_purified = daily['Purified_Total'].mean()
     
-    # Calculate equivalent nominal days (13,313 kg/day at full capacity)
+    # Calculate equivalent nominal days (based on configured nominal capacity)
     total_purified_kg = daily['Purified_Total'].sum()
-    equiv_days = total_purified_kg / 13313.0
+    equiv_days = total_purified_kg / nominal_daily_production_kg
     num_sim_days = len(daily)
-    capacity_factor = (avg_purified / 13313.0) * 100 if avg_purified > 0 else 0
+    capacity_factor = (avg_purified / nominal_daily_production_kg) * 100 if avg_purified > 0 else 0
     
     stats_text = (
         f"Average Daily Production:\n"

@@ -65,6 +65,7 @@ Coordination:
 
 **Out of Scope:**
 - Component implementations (covered in `03_Component_Standardization_Specification.md`)
+- Sub-component thermal loops (Heat Exchangers, Attemperators, Recirculation Pumps) - Encapsulated within Source
 - Simulation engine (covered in `06_Simulation_Engine_Specification.md`)
 - Multi-pathway systems beyond dual-path (future enhancement)
 
@@ -89,6 +90,8 @@ Coordination:
 **Benefits:**
 - Simplifies coordination logic (coordinator deals with paths, not individual components)
 - Enables independent testing of production chains
+- Enables independent testing of production chains
+- **Encapsulates Complexity:** Auxiliary thermal management (e.g., Attemperators, Cooling loops) is hidden within the Source abstraction.
 - Supports future multi-pathway configurations
 - Clear responsibility boundaries
 

@@ -199,6 +199,9 @@ try:
     plot_h2_stacked = _wrap_stacked_properties(sg.create_h2_stacked_properties, "H2_Train")
     plot_o2_stacked = _wrap_stacked_properties(sg.create_o2_stacked_properties, "O2_Train")
     
+    # Water Tank Inventory
+    plot_water_tank_inventory = _wrap_legacy(sg.create_water_tank_inventory_figure, "UltraPure Water Tank Inventory")
+    
     LEGACY_AVAILABLE = True
     
 except ImportError as e:
@@ -274,4 +277,7 @@ LEGACY_HANDLERS = {
     # Stacked Properties
     'legacy_h2_stacked': plot_h2_stacked,
     'legacy_o2_stacked': plot_o2_stacked,
+    
+    # New Water Tank Inventory
+    'water_tank_inventory': plot_water_tank_inventory,
 } if LEGACY_AVAILABLE else {}

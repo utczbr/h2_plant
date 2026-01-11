@@ -1,12 +1,11 @@
-# SOEC + PEM Hydrogen Production Topology (ATR Removed)
+# SOEC Hydrogen Production Train Topology
 # 
-# Process Description:
+# Process Description (REORDERED to match legacy architecture):
 # 1. Hot wet H2 from SOEC (152°C) enters Heat Recovery (Interchanger).
 # 2. Cooled gas passes through staged cooling and separation (DryCooler -> Chiller -> KODs).
 # 3. Dried H2 is COMPRESSED (5-Stage to 40 bar) BEFORE purification.
 # 4. Compressed H2 is purified (Deoxo -> PSA) at high pressure.
-# 5. PEM H2 is produced, dried, purified, and mixed with SOEC H2.
-# 6. Combined H2 is compressed to 500 bar for storage.
+# 5. Recovered water is collected, mixed with fresh makeup water, pressurized, and pre-heated.
 
 nodes:
   # =================================================================================
@@ -14,6 +13,9 @@ nodes:
   # =================================================================================
 
   # 1. SOEC Cluster
+  # -------------------------------------------------------------------------
+  # The h2_out port now outputs the combined Cathode Exhaust (Wet Hydrogen):
+  # H2 (produced) + H2O (unreacted steam) + trace O2 (crossover)
   - id: "SOEC_Cluster"
     type: "SOEC"
     params:
@@ -23,7 +25,7 @@ nodes:
       steam_input_ratio_kg_per_kg_h2: 11.0 
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
-      lifecycle: 43800
+      lifecycle: 43800  # 5 years lifecycle for degradation reset
       process_step: 10
     connections:
       - source_port: "h2_out"
@@ -51,6 +53,7 @@ nodes:
         target_name: "SOEC_Interchanger_Drain_Combiner"
         target_port: "inlet_1"
         resource_type: "stream"
+
 
   # 3b. Dry Cooler (Post-Heat Recovery)
   - id: "SOEC_H2_DryCooler_1"
@@ -89,7 +92,7 @@ nodes:
     params:
       cooling_capacity_kw: 500.0
       target_temp_k: 277.15 # 4°C
-      process_step: 33
+      process_step: 33  # Reordered step
     connections:
       - source_port: "fluid_out"
         target_name: "SOEC_H2_KOD_2"
@@ -115,9 +118,9 @@ nodes:
   - id: "SOEC_H2_Cyclone_1"
     type: "HydrogenMultiCyclone"
     params:
-      element_diameter_mm: 50.0
+      element_diameter_mm: 50.0  # High efficiency separation of fine mist
       vane_angle_deg: 45.0
-      target_velocity_ms: 22.0
+      target_velocity_ms: 22.0   # Optimized for fine droplets
       process_step: 70
     connections:
       - source_port: "outlet"
@@ -125,8 +128,11 @@ nodes:
         target_port: "h2_in"
         resource_type: "stream"
 
+
+
   # =================================================================================
   # COMPRESSION TRAIN (6-Stage, BEFORE Purification)
+  # Redistributed Pressure Ratios ~2.0x per stage (Target ~42 bar)
   # =================================================================================
 
   - id: "SOEC_H2_Compressor_S1"
@@ -331,6 +337,8 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
 
+
+
   # =================================================================================
   # PURIFICATION STAGE (After 6-Stage Compression, at 42 bar)
   # =================================================================================
@@ -393,14 +401,21 @@ nodes:
 
   # =================================================================================
   # O2 PURIFICATION TRAIN (Anode Side)
+  # Sequence: SOEC(o2_out) -> KOD1 -> DryCooler -> Chiller -> KOD2 -> Coalescer -> Vent
   # =================================================================================
 
+
+
+
+
+  # === New O2 Compression Train (4 Stages) ===
+  
   # Heat Recovery (O2 side)
   - id: "SOEC_O2_Interchanger_1"
     type: "Interchanger"
     params:
       min_approach_temp_k: 10.0
-      target_cold_out_temp_c: 80.0
+      target_cold_out_temp_c: 80.0  # Lower than H2 side
       process_step: 21
     connections:
       - source_port: "hot_out"
@@ -412,7 +427,7 @@ nodes:
         target_port: "inlet_2"
         resource_type: "stream"
 
-  # O2 Compression Stage 1
+  # Stage 1
   - id: "SOEC_O2_Drycooler_1"
     type: "DryCooler"
     params:
@@ -436,7 +451,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
 
-  # O2 Compression Stage 2
+  # Stage 2
   - id: "SOEC_O2_Drycooler_2"
     type: "DryCooler"
     params: 
@@ -460,7 +475,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
 
-  # O2 Compression Stage 3
+  # Stage 3
   - id: "SOEC_O2_Drycooler_3"
     type: "DryCooler"
     params:
@@ -484,7 +499,7 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
 
-  # O2 Compression Stage 4
+  # Stage 4
   - id: "SOEC_O2_Drycooler_4"
     type: "DryCooler"
     params:
@@ -509,6 +524,8 @@ nodes:
         target_name: "O2_Production_Mixer"
         target_port: "inlet_1"
         resource_type: "stream"
+
+
 
   # =================================================================================
   # WATER RECIRCULATION LOOP
@@ -574,12 +591,11 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
 
-  # Split: 91.54% to Main Steam Boiler, 8.46% to Bypass (Attemperator)
-  # MODIFIED: Removed ATR heat recovery path
+  # Split: 91.54% to Steam Boiler, 8.46% to Bypass (Attemperator)
   - id: "SOEC_Water_Splitter"
     type: "StreamSplitter"
     params:
-      split_ratio: 0.9154  # Fraction to Outlet 1 (Main Boiler)
+      split_ratio: 0.9154  # Fraction to Outlet 1 (Direct to Boiler)
     connections:
       - source_port: "outlet_1"
         target_name: "SOEC_Steam_Boiler"
@@ -590,7 +606,8 @@ nodes:
         target_port: "water_in"
         resource_type: "stream"
 
-  # --- MAIN STEAM GENERATION (91.54%) ---
+  # --- LOOP MAIN: STEAM COMPRESSION (91.54%) ---
+  # Note: ATR Syngas Cooler heat recovery removed - water goes directly to boiler
 
   - id: "SOEC_Steam_Boiler"
     type: "ElectricBoiler"
@@ -657,7 +674,7 @@ nodes:
   # --- RECOMBINATION & FEED ---
 
   - id: "SOEC_Feed_Attemperator"
-    type: "WaterMixer"
+    type: "WaterMixer" # Use WaterMixer or Mixer. WaterMixer handles simple P mixing well.
     params:
       outlet_pressure_kpa: 500.0 # 5 bar
     connections:
@@ -665,6 +682,8 @@ nodes:
         target_name: "SOEC_Cluster"
         target_port: "steam_in"
         resource_type: "stream"
+
+
 
   # =================================================================================
   # PEM WATER RECIRCULATION LOOP
@@ -746,7 +765,7 @@ nodes:
       use_polynomials: True
       water_excess_factor: 0.02 
       out_pressure_pa: 4000000.0 # 40 bar
-      lifecycle: 43800
+      lifecycle: 43800  # 5 years lifecycle for degradation reset 
     connections:
       - source_port: "h2_out"
         target_name: "PEM_H2_KOD_1"
@@ -786,7 +805,7 @@ nodes:
     type: "Chiller"
     params:
       target_temp_k: 277.15
-      cooling_capacity_kw: 500.0 
+      cooling_capacity_kw: 500.0 # Upsized for 5x liquid water
       cop: 4.0
       pressure_drop_bar: 0.0
     connections:
@@ -846,7 +865,7 @@ nodes:
     type: "Chiller"
     params:
       target_temp_k: 277.15
-      cooling_capacity_kw: 500.0 
+      cooling_capacity_kw: 500.0 # Upsized for 5x liquid water
       cop: 4.0
       pressure_drop_bar: 0.0
     connections:
@@ -887,7 +906,7 @@ nodes:
   - id: "PEM_H2_PSA_1"
     type: "PSA Unit"
     params:
-      purity_target: 0.9999
+      purity_target: 0.99995
       recovery_rate: 0.90
       power_consumption_kw: 10.0
     connections: 
@@ -933,7 +952,7 @@ nodes:
     params:
       component_id: "PEM_O2_Chiller_1"
       target_temp_k: 277.15 # 4°C
-      cooling_capacity_kw: 8000.0
+      cooling_capacity_kw: 8000.0 # Upsized for bulk cooling
     connections:
       - source_port: "fluid_out"
         target_name: "PEM_O2_KOD_2"
@@ -994,7 +1013,8 @@ nodes:
         resource_type: "stream"
 
   # =================================================================================
-  # O2 COMMON HEADER (SOEC + PEM)
+  # O2 COMMON HEADER (SOEC + PEM) - ATR REMOVED
+  # O2 is now vented or available for future alternative use
   # =================================================================================
 
   - id: "O2_Production_Mixer"
@@ -1005,8 +1025,8 @@ nodes:
       enable_phase_equilibrium: false
       system_group: "O2_Header"
       process_step: 41
-    connections: []
-      # Removed connection to O2_Backup_Supply (ATR Feed)
+    connections: []  # O2 ends here - ATR no longer consumes O2
+
 
   # =================================================================================
   # H2 PRODUCTION MIXING (Combines SOEC and PEM Trains)
@@ -1036,13 +1056,15 @@ nodes:
 
   # =================================================================================
   # HIGH PRESSURE COMPRESSION TRAIN (40 bar → 500 bar)
+  # Redistributed Pressure Ratios ~1.65x per stage
+  # Limit: 135ºC
   # =================================================================================
 
   # --- Stage 1 (40.0 → 70.0 bar) ---
   - id: "LP_Compressor_S1"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0 
+      max_flow_kg_h: 520.0 # Pro-rated for combined flow (400 SOEC + 120 PEM approx)
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 40.0
@@ -1072,7 +1094,7 @@ nodes:
     type: "DetailedTank"
     params:
       n_tanks: 30
-      volume_per_tank_m3: 200.0 # From HP spec, assumed consistent
+      volume_per_tank_m3: 107.37 # From HP spec, assumed consistent
       max_pressure_bar: 70.0
       initial_pressure_bar: 1.0
       min_discharge_pressure_bar: 30.0
@@ -1083,7 +1105,6 @@ nodes:
         target_port: "inlet"
         resource_type: "gas"
 
-
   # =================================================================================
   # HP COMPRESSION TRAIN (500 bar)
   # =================================================================================
@@ -1091,11 +1112,11 @@ nodes:
   - id: "HP_Compressor_S2"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
+      max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 70.0
-      outlet_pressure_bar: 500.0 # Target, but limited by temp
+      inlet_pressure_bar: 30.0
+      outlet_pressure_bar: 60.0 # Balanced Stage 1/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_2"
@@ -1116,11 +1137,11 @@ nodes:
   - id: "HP_Compressor_S3"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
+      max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 150.0 
-      outlet_pressure_bar: 500.0
+      inlet_pressure_bar: 60.0 
+      outlet_pressure_bar: 125.0 # Balanced Stage 2/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_3"
@@ -1141,11 +1162,11 @@ nodes:
   - id: "HP_Compressor_S4"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
+      max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 300.0 
-      outlet_pressure_bar: 500.0
+      inlet_pressure_bar: 125.0 
+      outlet_pressure_bar: 250.0 # Balanced Stage 3/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_4"
@@ -1155,7 +1176,7 @@ nodes:
   - id: "HP_Intercooler_4"
     type: "DryCooler"
     params:
-      design_capacity_kw: 500.0
+      design_capacity_kw: 500.0 # Revert to reasonable sizing
       target_out_temp_c: 40.0
     connections:
       - source_port: "fluid_out"
@@ -1166,9 +1187,41 @@ nodes:
   - id: "HP_Compressor_S5"
     type: "CompressorSingle"
     params:
-      max_flow_kg_h: 520.0
-      max_temp_c: 85.0 # Lower limit for final stage
+      max_flow_kg_h: 720.0
+      max_temp_c: 135.0 # Lower limit for final stage
       temperature_limited: true
-      inlet_pressure_bar: 400.0
-      outlet_pressure_bar: 500.0
-    connections: []
+      inlet_pressure_bar: 250.0 
+      outlet_pressure_bar: 500.0 # Final Stage 4/4
+    connections:
+      - source_port: "outlet"
+        target_name: "Truck_Station_1"
+        target_port: "h2_in"
+        resource_type: "gas"
+
+
+  # =================================================================================
+  # TRUCK DISCHARGE STATION
+  # Event-driven with isentropic compression energy calculation
+  # =================================================================================
+
+  - id: "Truck_Station_1"
+    type: "DischargeStation"
+    params:
+      station_id: 1
+      n_stations: 5  # Simulating 5 identical truck bays
+      truck_capacity_kg: 280.0    # Reference: 280kg
+      delivery_pressure_bar: 500.0
+      max_fill_rate_kg_min: 1.5  # Reference: 90 kg/h
+      min_fill_rate_kg_min: 0.583  # Simulation of lower demand/night shift
+      h_in_day_max: 16.0        
+      valves_close_time_min: 5.0  # Time to close valves
+      arrival_probability: 0.3    # Ignored when h_in_day_max is set
+      isen_efficiency: 0.65       # Reference: 0.65
+      mech_efficiency: 0.90       # Reference: 0.90
+      cooldown_minutes: 187.0     # Reference: 3 hours
+    connections:
+      # Feedback loop: Demand Signal flows back to Tank
+      - source_port: "demand_signal"
+        target_name: "LP_Storage_Tank"
+        target_port: "demand_signal"
+        resource_type: "signal"

@@ -61,6 +61,10 @@ visualization:
     daily_h2_production_average:
       enabled: true
       script: "scripts/plot_daily_h2_production.py"
+      # Nominal production at 100% capacity for capacity factor calculation
+      # 8500 kg/day: SOEC (2.4 MW) + PEM (5 MW) only
+      # 13313 kg/day: With ATR included
+      nominal_daily_production_kg: 13313.0
       plots:
         - title: "Daily Average H2 Production by Source"
           description: "Stacked bars for gross production (PEM/SOEC/ATR) + line for purified total"
@@ -215,6 +219,13 @@ visualization:
           components: ["HP_Compressor_S1", "HP_Compressor_S2", "HP_Compressor_S3", "HP_Compressor_S4", "HP_Compressor_S5"]
         - title: "SOEC O2 Compressors Power"
           components: ["SOEC_O2_compressor_1", "SOEC_O2_compressor_2", "SOEC_O2_compressor_3", "SOEC_O2_compressor_4", "SOEC_O2_compressor_5"]
+
+    water_tank_inventory:
+      enabled: true
+      plots:
+        - title: "UltraPure Water Tank Inventory"
+          description: "Mass tracking and zone limits for the UltraPure Water Tank"
+          components: ["UltraPure_Tank"]
 
     # 6. THERMAL & SEPARATION
     # ----------------------------------------------------------------------

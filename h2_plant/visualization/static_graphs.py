@@ -795,6 +795,52 @@ def create_effective_ppa_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
 
 
 @log_graph_errors
+def create_water_tank_inventory_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """Create UltraPure Water Tank inventory chart."""
+    fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    # Check for likely column names
+    col_mass = 'UltraPure_Tank_mass_kg'
+    col_zones = 'UltraPure_Tank_control_zone'
+    
+    if col_mass not in df.columns:
+        # Fallback search
+        import re
+        cols = [c for c in df.columns if 'UltraPure_Tank' in c and 'mass_kg' in c]
+        if cols:
+            col_mass = cols[0]
+        else:
+            ax.text(0.5, 0.5, 'No UltraPure Tank data found', 
+                   ha='center', va='center', fontsize=12)
+            return fig
+
+    minutes = downsample_for_plot(df['minute'])
+    mass = downsample_for_plot(df[col_mass])
+    
+    # Plot mass
+    ax.plot(minutes, mass, color='#0288D1', linewidth=2, label='Water Inventory (kg)')
+    ax.fill_between(minutes, 0, mass, color='#03A9F4', alpha=0.3)
+    
+    # Zone overlays if available
+    # Identify capacity from max value or config (20,000 kg design)
+    capacity = 20000.0  
+    
+    # Draw zone data if available
+    ax.axhline(y=capacity * 0.9, color='red', linestyle='--', alpha=0.5, label='Zone C (Stop)')
+    ax.axhline(y=capacity * 0.6, color='orange', linestyle='--', alpha=0.5, label='Zone B (Fill)')
+    
+    ax.set_title('UltraPure Water Tank Inventory', fontsize=12)
+    ax.set_xlabel('Time (Minutes)')
+    ax.set_ylabel('Mass (kg)')
+    ax.set_ylim(0, capacity * 1.1)
+    ax.legend(loc='upper right', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    
+    return fig
+
+
+@log_graph_errors
 def create_storage_apc_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
     Create Storage APC (Advanced Process Control) visualization.

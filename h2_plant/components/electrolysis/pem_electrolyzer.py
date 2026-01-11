@@ -137,6 +137,9 @@ class DetailedPEMElectrolyzer(Component):
                 self.component_id = config['component_id']
 
             self.out_pressure_pa = config.get('out_pressure_pa', CONST.output_pressure_pa)
+            
+            # Flow Control: Target stoichiometry (Lambda) for setpoint calculation
+            self.target_stoichiometry = config.get('target_stoichiometry', 6.0)
 
         # ====================================================================
         # Electrochemical State Variables
@@ -231,6 +234,10 @@ class DetailedPEMElectrolyzer(Component):
         self.cumulative_h2_kg = 0.0
         self.cumulative_o2_kg = 0.0
         self.cumulative_energy_kwh = 0.0
+        
+        # Flow setpoint for cascade control
+        self.required_flow_kg_h = 0.0
+        self.h2o_consumption_rate = 0.0  # Stoichiometric water consumption (kg/h)
 
         # ====================================================================
         # Water Management
@@ -635,6 +642,15 @@ class DetailedPEMElectrolyzer(Component):
 
         if hasattr(self, 'dt'):
             self.t_op_h += self.dt
+        
+        # Calculate Flow Setpoint for cascade control
+        # Water consumption rate from Faraday's law (kg/h)
+        self.h2o_consumption_rate = self.m_H2O_kg_s * 3600.0
+        
+        if self.h2o_consumption_rate > 0:
+            self.required_flow_kg_h = self.h2o_consumption_rate * self.target_stoichiometry
+        else:
+            self.required_flow_kg_h = 0.0
 
     def _calculate_U_rev(self, T: float) -> float:
         """
@@ -797,7 +813,10 @@ class DetailedPEMElectrolyzer(Component):
             "cumulative_h2_kg": self.cumulative_h2_kg,
             "cumulative_o2_kg": self.cumulative_o2_kg,
             "cumulative_energy_kwh": self.cumulative_energy_kwh,
-            "o2_impurity_ppm_mol": self._calculate_o2_ppm_total_molar()  # Use table-consistent calculation
+            "o2_impurity_ppm_mol": self._calculate_o2_ppm_total_molar(),
+            "required_flow_kg_h": self.required_flow_kg_h,
+            "target_stoichiometry": self.target_stoichiometry,
+            "h2o_consumption_rate": self.h2o_consumption_rate
         }
 
     def _calculate_o2_ppm_total_molar(self) -> float:
@@ -994,6 +1013,15 @@ class DetailedPEMElectrolyzer(Component):
             )
         elif port_name == 'heat_out':
             return self.heat_output_kw
+        elif port_name == 'flow_setpoint':
+            # Signal for cascade control to downstream mixer
+            return Stream(
+                mass_flow_kg_h=self.required_flow_kg_h,
+                temperature_k=298.15,
+                pressure_pa=101325.0,
+                composition={'Signal': 1.0},
+                phase='signal'
+            )
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 
@@ -1044,7 +1072,8 @@ class DetailedPEMElectrolyzer(Component):
             'power_in': {'type': 'input', 'resource_type': 'electricity', 'units': 'MW'},
             'h2_out': {'type': 'output', 'resource_type': 'hydrogen', 'units': 'kg/h'},
             'oxygen_out': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'},
-            'heat_out': {'type': 'output', 'resource_type': 'heat', 'units': 'kW'}
+            'heat_out': {'type': 'output', 'resource_type': 'heat', 'units': 'kW'},
+            'flow_setpoint': {'type': 'output', 'resource_type': 'signal', 'units': 'kg/h'}
         }
 
 

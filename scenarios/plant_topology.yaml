@@ -9,6 +9,87 @@
 
 nodes:
   # =================================================================================
+  # WATER SUPPLY CHAIN (Push Architecture with Feedback Control)
+  # =================================================================================
+  # Architecture: Source -> Purifier -> Tank -> Pumps -> Mixers
+  # Tank sends control_signal to Source (Zone A/B/C based on fill level)
+  # Mixers send demand_signal to Tank (PEM, SOEC, ATR channels)
+
+  # 0.1 External Water Source (Municipal/Reservoir)
+  - id: "Water_Source"
+    type: "ExternalWaterSource"
+    params:
+      mode: "external_control"
+      flow_rate_kg_h: 12000.0  # Max capacity
+      pressure_bar: 5.0
+      temperature_c: 25.0
+      system_group: "Water_Supply"
+      process_step: 1
+    connections:
+      - source_port: "water_out"
+        target_name: "Water_Purifier"
+        target_port: "raw_water_in"
+        resource_type: "stream"
+
+  # 0.2 Reverse Osmosis Water Purifier
+  - id: "Water_Purifier"
+    type: "WaterPurifier"
+    params:
+      max_flow_kg_h: 12000.0  # Rated @ 25°C
+      recovery_ratio: 0.75
+      system_group: "Water_Supply"
+      process_step: 2
+    connections:
+      - source_port: "ultrapure_out"
+        target_name: "UltraPure_Tank"
+        target_port: "ultrapure_in"
+        resource_type: "stream"
+
+  # 0.3 Ultra-Pure Water Tank (Multi-Channel Distribution)
+  - id: "UltraPure_Tank"
+    type: "UltraPureWaterTank"
+    params:
+      capacity_kg: 20000.0
+      nominal_production_kg_h: 10000.0
+      initial_fill_fraction: 0.7
+      system_group: "Water_Supply"
+      process_step: 3
+    connections:
+      # Control signal to upstream source (feedback)
+      - source_port: "control_signal"
+        target_name: "Water_Source"
+        target_port: "control_signal"
+        resource_type: "signal"
+      # Water distribution to loops
+      - source_port: "water_out_SOEC"
+        target_name: "SOEC_Makeup_Mixer"
+        target_port: "makeup_water_in"
+        resource_type: "stream"
+      - source_port: "water_out_PEM"
+        target_name: "PEM_Makeup_Mixer"
+        target_port: "makeup_water_in"
+        resource_type: "stream"
+      - source_port: "water_out_ATR"
+        target_name: "ATR_Feed_Pump"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  # 0.4 ATR Feed Pump (New - moves water from tank to ATR mixer)
+  - id: "ATR_Feed_Pump"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "ATR_Feed_Pump"
+      capacity_kg_h: 2500.0
+      target_pressure_pa: 1500000.0  # 15 bar (ATR operating pressure)
+      system_group: "Water_Supply"
+      process_step: 4
+    connections:
+      - source_port: "water_out"
+        target_name: "ATR_Makeup_Mixer"
+        target_port: "makeup_water_in"
+        resource_type: "stream"
+
+  # =================================================================================
   # MAIN GAS TRAIN: SOEC -> SEPARATION -> COMPRESSION -> PURIFICATION
   # =================================================================================
 
@@ -581,15 +662,20 @@ nodes:
         resource_type: "stream"
   
   - id: "SOEC_Makeup_Mixer"
-    type: "MakeupMixer"
+    type: "SignalMakeupMixer"
     params:
       target_flow_kg_h: 3600.0  # SOEC theoretical demand
       makeup_temp_c: 25.0
+      system_group: "SOEC_Water_Loop"
     connections:
-      - source_port: "water_out"
+      - source_port: "mixture_out"
         target_name: "SOEC_Water_Splitter"
         target_port: "inlet"
         resource_type: "stream"
+      - source_port: "demand_signal"
+        target_name: "UltraPure_Tank"
+        target_port: "demand_SOEC"
+        resource_type: "signal"
 
   # Split: 92.12% to Heat Recovery Loop, 7.88% to Bypass (Attemperator)
   - id: "SOEC_Water_Splitter"
@@ -743,14 +829,20 @@ nodes:
         resource_type: "stream"
 
   - id: "PEM_Makeup_Mixer"
-    type: "MakeupMixer"
+    type: "SignalMakeupMixer"
     params:
       target_flow_kg_h: 4000.0  # PEM theoretical demand (~5 MW)
+      makeup_temp_c: 20.0
+      system_group: "PEM_Water_Loop"
     connections:
-      - source_port: "water_out"
+      - source_port: "mixture_out"
         target_name: "PEM_Water_Pump"
         target_port: "water_in"
         resource_type: "stream"
+      - source_port: "demand_signal"
+        target_name: "UltraPure_Tank"
+        target_port: "demand_PEM"
+        resource_type: "signal"
 
   - id: "PEM_Water_Pump"
     type: "WaterPumpThermodynamic"
@@ -1178,24 +1270,12 @@ nodes:
       process_step: 43
     connections:
       - source_port: "outlet"
-        target_name: "ATR_Feed_Pump"
-        target_port: "water_in"
+        target_name: "ATR_Makeup_Mixer"
+        target_port: "drain_in"
         resource_type: "stream"
 
-  - id: "ATR_Feed_Pump"
-    type: "WaterPumpThermodynamic"
-    params:
-      pump_id: "ATR_Feed_Pump"
-      capacity_kg_h: 5000.0
-      target_pressure_pa: 1500000.0 # 15 bar
-      efficiency: 0.85
-      system_group: "ATR_Water_Loop"
-      process_step: 44
-    connections:
-      - source_port: "water_out"
-        target_name: "ATR_Makeup_Mixer"
-        target_port: "drain_in" # Connects to 'drain_in' port of MakeupMixer (recycled flow)
-        resource_type: "stream"
+  # NOTE: ATR_Feed_Pump is defined in Water Supply Chain section (line ~70)
+  # It handles fresh makeup water from UltraPure_Tank to ATR_Makeup_Mixer
 
   - id: "ATR_Makeup_Mixer"
     type: "ProportionalMakeupMixer"
@@ -1215,6 +1295,10 @@ nodes:
         target_name: "ATR_H04_Boiler"
         target_port: "inlet"
         resource_type: "stream"
+      - source_port: "demand_signal"
+        target_name: "UltraPure_Tank"
+        target_port: "demand_ATR"
+        resource_type: "signal"
 
   - id: "ATR_Feed_Mixer"
     type: "Mixer"

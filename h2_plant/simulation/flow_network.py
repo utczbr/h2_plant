@@ -146,6 +146,7 @@ class FlowNetwork:
         Flow Pattern:
             1. Get output from source port.
             2. Check if flow exists (mass > 0 or energy > 0).
+               EXCEPTION: Signals are always transferred regardless of value.
             3. Push to target via receive_input().
             4. Notify source of extraction via extract_output().
 
@@ -159,12 +160,20 @@ class FlowNetwork:
         output_value = source.get_output(conn.source_port)
 
         # Check for valid flow
+        # IMPORTANT: Signal connections must ALWAYS be transferred, even with 0 value
+        # (0 = "Stop" command from tank control zone C)
+        is_signal = conn.resource_type == 'signal'
+        
         if isinstance(output_value, Stream):
-            if output_value.mass_flow_kg_h <= 0:
+            # Skip physical streams with no flow, but NEVER skip signals
+            if not is_signal and output_value.mass_flow_kg_h <= 0:
                 return
         elif isinstance(output_value, (int, float)):
-            if output_value <= 0:
+            if not is_signal and output_value <= 0:
                 return
+        elif output_value is None:
+            # No output - skip
+            return
         else:
             logger.warning(f"Unknown output type from {conn.source_id}:{conn.source_port}: {type(output_value)}")
             return
@@ -175,9 +184,14 @@ class FlowNetwork:
             value=output_value,
             resource_type=conn.resource_type
         )
+        
+        # DEBUG: Log signal transfers
+        if is_signal:
+            flow_val = output_value.mass_flow_kg_h if isinstance(output_value, Stream) else output_value
+            logger.info(f"SIGNAL TRANSFER: {conn.source_id}:{conn.source_port} -> {conn.target_id}:{conn.target_port} = {flow_val:.0f} kg/h")
 
-        # Notify source of extraction
-        if accepted_amount > 0:
+        # Notify source of extraction (only for physical flows, not signals)
+        if accepted_amount > 0 and not is_signal:
             source.extract_output(
                 port_name=conn.source_port,
                 amount=accepted_amount,

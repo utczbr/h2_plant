@@ -159,7 +159,11 @@ def run_with_dispatch_strategy(
     # Initialize engine and strategy
     engine.initialize()
     engine.set_dispatch_data(prices, wind)
-    engine.initialize_dispatch_strategy(context, total_steps)
+    
+    # Use chunked history for simulations > 7 days (memory optimization)
+    # Threshold: 7 days × 24 hours × 60 minutes = 10,080 steps
+    use_chunked_history = total_steps > 10_080
+    engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history)
 
     # Run simulation
     logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
@@ -229,8 +233,16 @@ def run_with_dispatch_strategy(
         
         # Save Scalars to CSV
         df_history = pd.DataFrame(scalar_history)
+        logger.info(f"Writing CSV: {len(df_history)} rows, {len(df_history.columns)} columns...")
         df_history.to_csv(csv_path, index=False)
-        logger.info(f"Simulation history exported to: {csv_path}")
+        
+        # Force sync to disk to ensure file is complete before graph generation
+        import os
+        with open(csv_path, 'r') as f:
+            os.fsync(f.fileno())
+        
+        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
+        logger.info(f"Simulation history exported to: {csv_path} ({file_size_mb:.1f} MB)")
         
         # Save Matrices to NPZ
         if matrix_history:
@@ -271,6 +283,152 @@ def generate_graphs(
     """
     import yaml
     import pandas as pd
+    import fnmatch
+    import gc
+    
+    # =========================================================================
+    # COLUMN PATTERNS REGISTRY FOR MEMORY OPTIMIZATION
+    # Maps graph categories to column patterns (exact matches or glob patterns)
+    # This prevents loading all 1000+ columns for each graph.
+    # =========================================================================
+    CORE_COLUMNS = [
+        'minute', 'P_offer', 'P_soec_actual', 'P_pem', 'P_sold', 
+        'spot_price', 'h2_kg', 'time', 'hour'
+    ]
+    
+    GRAPH_COLUMN_PATTERNS = {
+        # Core Dispatch
+        'dispatch_strategy_stacked': CORE_COLUMNS + ['P_bop_mw'],
+        'dispatch': CORE_COLUMNS + ['P_bop_mw'],
+        'arbitrage_scatter': CORE_COLUMNS,
+        'arbitrage': CORE_COLUMNS,
+        
+        # H2 Production
+        'total_h2_production_stacked': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
+        'h2_production': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
+        'cumulative_h2_production': CORE_COLUMNS + [
+            'H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg',
+            'h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg',
+            '*_PSA_*_outlet_mass_flow_kg_h'
+        ],
+        'cumulative_h2': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg'],
+        
+        # O2 Production
+        'oxygen_production_stacked': CORE_COLUMNS + ['O2_pem_kg', '*_O2_*'],
+        'oxygen_production': CORE_COLUMNS + ['O2_pem_kg'],
+        
+        # Water
+        'water_consumption_stacked': CORE_COLUMNS + ['steam_soec_kg', 'H2O_soec_out_kg', 'H2O_pem_kg'],
+        'water_consumption': CORE_COLUMNS + ['steam_soec_kg', 'H2O_soec_out_kg', 'H2O_pem_kg'],
+        
+        # Economics
+        'power_consumption_breakdown_pie': CORE_COLUMNS + ['compressor_power_kw', '*_cooling_load_kw'],
+        'energy_pie': CORE_COLUMNS + ['compressor_power_kw'],
+        'price_histogram': ['spot_price', 'minute'],
+        'dispatch_curve_scatter': CORE_COLUMNS,
+        'dispatch_curve': CORE_COLUMNS,
+        'efficiency_curve': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        'revenue_analysis': CORE_COLUMNS + ['cumulative_h2_kg'],
+        'temporal_averages': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        'cumulative_energy': CORE_COLUMNS,
+        
+        # RFNBO
+        'rfnbo_compliance_stacked': CORE_COLUMNS + ['h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'purchase_threshold_eur_mwh'],
+        'rfnbo_spot_analysis': CORE_COLUMNS + ['purchase_threshold_eur_mwh'],
+        'rfnbo_pie': ['h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'minute'],
+        'cumulative_rfnbo': CORE_COLUMNS + ['cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg'],
+        
+        # SOEC Modules
+        'soec_module_heatmap': ['minute', 'soec_module_*', 'P_soec_actual', 'soec_active_modules'],
+        'soec_module_power_stacked': ['minute', 'soec_module_*', 'P_soec_actual'],
+        'soec_module_wear_stats': ['minute', 'soec_module_*'],
+        'monthly_performance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        'monthly_efficiency': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        'monthly_capacity_factor': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        
+        # Thermal/Separation - use pattern matching
+        'water_removal_total': ['minute', '*_liquid_removed_kg*', '*_water_removed*'],
+        'drains_discarded': ['minute', '*_liquid_removed_kg*', '*_drain*'],
+        'chiller_cooling': ['minute', '*Chiller*', '*_cooling*', '*_duty*'],
+        'coalescer_separation': ['minute', '*Coalescer*'],
+        'kod_separation': ['minute', '*KOD*', '*_liquid_removed*'],
+        'dry_cooler_performance': ['minute', '*DryCooler*', '*Drycooler*', '*_cooling*'],
+        
+        # Energy/Schematic
+        'energy_flows': CORE_COLUMNS + ['compressor_power_kw', '*_power_kw'],
+        'q_breakdown': ['minute', '*_cooling*', '*_duty*', '*_heat*'],
+        'thermal_load_breakdown_time_series': ['minute', '*_cooling*', '*_duty*', '*Chiller*', '*Intercooler*'],
+        'plant_balance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        'mixer_comparison': ['minute', '*Mixer*'],
+        
+        # Separation Analysis (need component-specific columns)
+        'individual_drains': ['minute', '*_drain*', '*_liquid*'],
+        'dissolved_gas_concentration': ['minute', '*_dissolved*', '*KOD*', '*Mixer*'],
+        'dissolved_gas_efficiency': ['minute', '*_dissolved*', '*Mixer*'],
+        'crossover_impurities': ['minute', '*_o2_*', '*_h2_*', '*_impurity*', '*_outlet_*'],
+        'drain_line_properties': ['minute', '*Drain*', '*_outlet_temp*', '*_outlet_pressure*'],
+        'deoxo_profile': ['minute', '*Deoxo*'],
+        'drain_mixer_balance': ['minute', '*Drain_Mixer*', '*_mass_flow*'],
+        'drain_scheme': ['minute', '*Drain*', '*_mass_flow*'],
+        'energy_flow': CORE_COLUMNS + ['*_power_kw', 'compressor_power_kw'],
+        'process_scheme': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+        'drain_line_concentration': ['minute', '*Drain_Mixer*', '*_dissolved*'],
+        'recirculation_comparison': ['minute', '*recirc*', '*recirculation*'],
+        'entrained_liquid_flow': ['minute', '*_entrained*', '*_liquid*'],
+        
+        # Stacked Properties (temperature, pressure profiles)
+        'h2_stacked_properties': ['minute', '*SOEC_H2_*_outlet_*', '*PEM_H2_*_outlet_*', 'SOEC_Cluster_*'],
+        'o2_stacked_properties': ['minute', '*O2_*_outlet_*'],
+        
+        # Flow tracking
+        'water_vapor_tracking': ['minute', '*_h2o_*', '*_vapor*', '*_moisture*'],
+        'total_mass_flow': ['minute', '*_mass_flow*', '*_flow_kg*'],
+        
+        # Storage
+        'storage_levels': ['minute', 'tank_*', '*Tank*_level*', '*Tank*_pressure*'],
+        'compressor_power': ['minute', '*Compressor*_power*', 'compressor_power_kw'],
+        
+        # Effective PPA (new)
+        'effective_ppa': CORE_COLUMNS + ['ppa_price_effective_eur_mwh'],
+        
+        # Water Tank Inventory (new)
+        'water_tank_inventory': ['minute', '*UltraPure_Tank*', '*mass_kg*', '*control_zone*'],
+    }
+    
+    def filter_columns_for_graph(all_columns: list, graph_name: str) -> list:
+        """
+        Filter column list to only those needed for a specific graph.
+        Uses exact matches and glob patterns from GRAPH_COLUMN_PATTERNS.
+        
+        Args:
+            all_columns: List of all available column names
+            graph_name: Name of the graph being generated
+            
+        Returns:
+            Filtered list of columns to load (always includes 'minute')
+        """
+        patterns = GRAPH_COLUMN_PATTERNS.get(graph_name)
+        if patterns is None:
+            # Unknown graph - return core columns + any obvious matches
+            return [c for c in all_columns if any(
+                p in c for p in ['minute', 'P_', 'H2_', 'spot', 'cumulative']
+            )][:100]  # Cap at 100 columns for safety
+        
+        matched = set()
+        for pattern in patterns:
+            if '*' in pattern:
+                # Glob pattern
+                matched.update(fnmatch.filter(all_columns, pattern))
+            else:
+                # Exact match
+                if pattern in all_columns:
+                    matched.add(pattern)
+        
+        # Always include minute if available
+        if 'minute' in all_columns:
+            matched.add('minute')
+            
+        return list(matched)
     
     # Import graph creation functions
     try:
@@ -357,11 +515,17 @@ def generate_graphs(
     graphs_dir = output_dir / "graphs"
     graphs_dir.mkdir(parents=True, exist_ok=True)
     
+    # =========================================================================
+    # MEMORY-OPTIMIZED LOADING STRATEGY
+    # Instead of loading all 1000+ columns at once (~4GB for year-long sims),
+    # we store the raw history and create filtered DataFrames per-graph.
+    # =========================================================================
+    
     # Filter 1D history for DataFrame (exclude matrices)
     scalar_history = {k: v for k, v in history.items() if not (isinstance(v, np.ndarray) and v.ndim > 1)}
+    all_columns = list(scalar_history.keys())
     
-    # Convert history to DataFrame
-    df = pd.DataFrame(scalar_history)
+    logger.info(f"Graph data: {len(all_columns)} columns, {len(scalar_history.get('minute', []))} rows")
     
     # Normalize column names to match what graph functions expect
     # The dispatch history uses names like 'H2_soec_kg', 'spot_price', 'P_soec_actual'
@@ -382,14 +546,47 @@ def generate_graphs(
         'compressor_power_kw': 'Compressor_Power',
     }
     
-    for old_name, new_name in COLUMN_ALIASES.items():
-        if old_name in df.columns and new_name not in df.columns:
-            df[new_name] = df[old_name]
+    def create_filtered_df(graph_name: str) -> pd.DataFrame:
+        """Create a memory-efficient DataFrame with only columns needed for graph."""
+        needed_cols = filter_columns_for_graph(all_columns, graph_name)
+        
+        # Build minimal dict with only needed columns
+        filtered_data = {}
+        for col in needed_cols:
+            if col in scalar_history:
+                filtered_data[col] = scalar_history[col]
+        
+        df = pd.DataFrame(filtered_data)
+        
+        # Apply aliases
+        for old_name, new_name in COLUMN_ALIASES.items():
+            if old_name in df.columns and new_name not in df.columns:
+                df[new_name] = df[old_name]
+        
+        # Add time/hour if minute exists
+        if 'minute' in df.columns and 'time' not in df.columns:
+            df['time'] = df['minute'] / 60.0
+            df['hour'] = df['time']
+        
+        return df
     
-    # Also ensure 'time' or 'hour' column exists for X-axis
-    if 'minute' in df.columns and 'time' not in df.columns:
-        df['time'] = df['minute'] / 60.0  # Convert minutes to hours
-        df['hour'] = df['time']
+    # Create a "full" DataFrame only for orchestrated graphs that need all data
+    # For legacy graphs, we'll create per-graph filtered DataFrames
+    _full_df_cache = None
+    
+    def get_full_df() -> pd.DataFrame:
+        """Lazy-load full DataFrame (for orchestrator compatibility)."""
+        nonlocal _full_df_cache
+        if _full_df_cache is None:
+            logger.info("Loading full DataFrame for orchestrator...")
+            _full_df_cache = pd.DataFrame(scalar_history)
+            for old_name, new_name in COLUMN_ALIASES.items():
+                if old_name in _full_df_cache.columns and new_name not in _full_df_cache.columns:
+                    _full_df_cache[new_name] = _full_df_cache[old_name]
+            if 'minute' in _full_df_cache.columns and 'time' not in _full_df_cache.columns:
+                _full_df_cache['time'] = _full_df_cache['minute'] / 60.0
+                _full_df_cache['hour'] = _full_df_cache['time']
+        return _full_df_cache
     
     # =========================================================================
     # DEPRECATED: GRAPH_MAP
@@ -495,6 +692,10 @@ def generate_graphs(
                 continue  # Graph type not implemented in basic set
             
             try:
+                # Create memory-efficient filtered DataFrame for this graph
+                df = create_filtered_df(graph_name)
+                logger.debug(f"Graph '{graph_name}': using {len(df.columns)} columns")
+                
                 # Pass metadata to crossover_impurities graph for grouping/sorting
                 if graph_name == 'crossover_impurities':
                     fig = create_func(df, metadata=metadata)
@@ -510,6 +711,11 @@ def generate_graphs(
                     # Close figure to free memory
                     import matplotlib.pyplot as plt
                     plt.close(fig)
+                
+                # Free memory after each graph
+                del df
+                gc.collect()
+                
             except Exception as e:
                 logger.warning(f"Failed to generate {graph_name}: {e}")
     
@@ -517,15 +723,21 @@ def generate_graphs(
     
     # ========================================================================
     # ORCHESTRATED GRAPHS (New Architecture)
+    # Uses full DataFrame - lazy-loaded only if orchestrated graphs are enabled
     # ========================================================================
     try:
         from h2_plant.visualization.graph_orchestrator import GraphOrchestrator
         
         orchestrator = GraphOrchestrator(graphs_dir)
-        orchestrated_count = orchestrator.generate_all(df, viz_config)
+        full_df = get_full_df()  # Lazy-load full DataFrame
+        orchestrated_count = orchestrator.generate_all(full_df, viz_config)
         
         if orchestrated_count > 0:
             print(f"### Orchestrated Graphs Generated: {orchestrated_count} files")
+        
+        # Clean up full DataFrame
+        del full_df
+        gc.collect()
     except ImportError as e:
         logger.debug(f"Graph orchestrator not available: {e}")
     except Exception as e:

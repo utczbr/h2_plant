@@ -35,6 +35,8 @@ class Attemperator(Component):
         max_water_flow_kg_h (float): Maximum capacity of the spray valve.
         min_superheat_delta_k (float): Safety margin above saturation (default 5K).
         pressure_drop_bar (float): Steam side pressure drop.
+        pipe_diameter_m (Optional[float]): Internal pipe diameter for velocity checks.
+        heat_loss_kw (float): Fixed heat loss to ambient (default 0.0).
     """
 
     def __init__(
@@ -43,7 +45,10 @@ class Attemperator(Component):
         target_temp_k: float,
         max_water_flow_kg_h: float = 1000.0,
         pressure_drop_bar: float = 0.0,
-        min_superheat_delta_k: float = 5.0
+        min_superheat_delta_k: float = 5.0,
+        pipe_diameter_m: Optional[float] = None,
+        volume_m3: float = 0.05,
+        heat_loss_kw: float = 0.0
     ):
         super().__init__()
         self.component_id = component_id
@@ -51,6 +56,9 @@ class Attemperator(Component):
         self.max_water_flow_kg_h = max_water_flow_kg_h
         self.pressure_drop_bar = pressure_drop_bar
         self.min_superheat_delta_k = min_superheat_delta_k
+        self.pipe_diameter_m = pipe_diameter_m
+        self.volume_m3 = volume_m3
+        self.heat_loss_kw = heat_loss_kw
         
         # Dependencies
         self.lut_manager = None
@@ -64,6 +72,8 @@ class Attemperator(Component):
         # Metrics
         self.water_injected_kg_h = 0.0
         self.outlet_superheat_k = 0.0
+        self.steam_velocity_m_s = 0.0
+        self.residence_time_s = 0.0
         self.is_saturated = False
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
@@ -96,8 +106,25 @@ class Attemperator(Component):
         w_avail_flow = w_in.mass_flow_kg_h if w_in else 0.0
         w_temp = w_in.temperature_k if w_in else 298.15
         
-        # Pressure Calculation
-        P_out = max(1e5, s_in.pressure_pa - (self.pressure_drop_bar * 1e5))
+        # === DYNAMIC PRESSURE DROP (Venturi / Square Law) ===
+        # Standard: dP varies with flow squared.
+        # Design point calibration: 3600 kg/h @ pressure_drop_bar.
+        DESIGN_FLOW = 3600.0   # kg/h (matches pump capacity)
+        DESIGN_DP = self.pressure_drop_bar  # bar (instance param, e.g. 0.5)
+        MIN_DP = 0.05          # bar (minimum resistance at low flow)
+        
+        # Ratio of current flow to design flow
+        flow_ratio = s_in.mass_flow_kg_h / DESIGN_FLOW
+        
+        # Calculate dynamic drop: dP = dP_design * (Q / Q_design)^2
+        # Clamp flow_ratio to 2.0 to prevent explosion during startup transients
+        dynamic_dp_bar = DESIGN_DP * (min(flow_ratio, 2.0) ** 2)
+        
+        # Enforce minimum resistance
+        dynamic_dp_bar = max(MIN_DP, dynamic_dp_bar)
+        
+        # Set Outlet Pressure (Main Phase Dominant)
+        P_out = max(1e5, s_in.pressure_pa - (dynamic_dp_bar * 1e5))
         
         # Hydraulic Check: Can we inject?
         # Assuming regulated nozzle, but supply pressure must be > P_out
@@ -153,7 +180,12 @@ class Attemperator(Component):
             # Denominator check (Target enthalpy must be > Water enthalpy)
             denom = h_target - w_h
             if denom > 1000.0: # Avoid div/0
-                required_water_kg_h = s_in.mass_flow_kg_h * (h_s - h_target) / denom
+                # Q_loss (J/h) = kW * 3.6e6
+                q_loss_jh = self.heat_loss_kw * 3.6e6
+                
+                # Energy Balance: m_s*(h_s - h_tgt) - Q_loss = m_w*(h_tgt - h_w)
+                numerator = s_in.mass_flow_kg_h * (h_s - h_target) - q_loss_jh
+                required_water_kg_h = numerator / denom
         
         # 4. Apply Constraints
         required_water_kg_h = max(0.0, required_water_kg_h)
@@ -193,8 +225,13 @@ class Attemperator(Component):
             w_h_mix = 4184.0 * (w_temp - 273.15)
 
         if total_mass > 0:
-            h_mix = (s_in.mass_flow_kg_h * h_s_mix + 
-                     required_water_kg_h * w_h_mix) / total_mass
+            # Enthalpy Mixing with Heat Loss
+            q_loss_jh = self.heat_loss_kw * 3.6e6
+            total_enthalpy_flow = (s_in.mass_flow_kg_h * h_s_mix + 
+                                  required_water_kg_h * w_h_mix - 
+                                  q_loss_jh)
+            
+            h_mix = total_enthalpy_flow / total_mass
             
             # Phase Stability Check
             if h_mix <= h_sat_vap:
@@ -234,9 +271,69 @@ class Attemperator(Component):
                 phase=phase
             )
             
+            # === Velocity Calculation (Hydraulic Check) ===
+            # Only perform if diameter is provided AND LUT is active
+            if self.pipe_diameter_m is not None and self.lut_manager:
+                try:
+                    # 1. Calculate Cross-sectional Area
+                    area_m2 = 3.14159265 * (self.pipe_diameter_m / 2.0) ** 2
+                    
+                    # 2. Lookup Steam Density at outlet conditions
+                    rho_steam = self.lut_manager.lookup(
+                        'H2O', 'D', P_out, T_final
+                    )
+                    
+                    # 3. Calculate Velocity (m/s)
+                    # mass_flow is kg/h, convert to kg/s -> / 3600
+                    if rho_steam > 1e-3 and area_m2 > 1e-9:
+                        m_dot_s = total_mass / 3600.0
+                        self.steam_velocity_m_s = m_dot_s / (rho_steam * area_m2)
+                    else:
+                        self.steam_velocity_m_s = 0.0
+                    
+                    # 4. Engineering Checks (Industrial Design Limits)
+                    if self.steam_velocity_m_s > 60.0:
+                        logger.warning(
+                            f"Attemperator {self.component_id}: High steam velocity "
+                            f"({self.steam_velocity_m_s:.1f} m/s) - erosion/vibration risk"
+                        )
+                    elif self.steam_velocity_m_s < 5.0 and self.steam_velocity_m_s > 0.1:
+                        logger.warning(
+                            f"Attemperator {self.component_id}: Low velocity "
+                            f"({self.steam_velocity_m_s:.1f} m/s) - poor atomization risk"
+                        )
+                        
+                except Exception as e:
+                    logger.debug(f"Attemperator {self.component_id}: Could not calc velocity: {e}")
+                    self.steam_velocity_m_s = 0.0
+            
             # Consume inputs
             self.steam_in_buffer = None
-            self.water_in_buffer = None # Fully processed (split into injected + drain)
+            self.water_in_buffer = None  # Fully processed (split into injected + drain)
+            
+        # === NEW PHYSICS: Residence Time Calculation ===
+        # Performed after mixing to use final density and flow
+        if self.output_stream and self.lut_manager:
+            try:
+                # 1. Get Outlet Density (Real Gas)
+                # T_final and P_out are calculated in the existing mixing logic
+                rho_mix = self.lut_manager.lookup(
+                    'H2O', 'D', self.output_stream.pressure_pa, self.output_stream.temperature_k
+                )
+                
+                # 2. Calculate Volumetric Flow (m3/s)
+                # mass_flow is in kg/h -> convert to kg/s
+                m_dot_s = self.output_stream.mass_flow_kg_h / 3600.0
+                if rho_mix > 1e-3:
+                    vol_flow_m3_s = m_dot_s / rho_mix
+                    
+                    # 3. Calculate Residence Time (tau = V / Q)
+                    if vol_flow_m3_s > 1e-6:
+                        self.residence_time_s = self.volume_m3 / vol_flow_m3_s
+                    else:
+                        self.residence_time_s = 0.0
+            except Exception:
+                self.residence_time_s = 0.0
             
         else:
             self._set_idle_state()
@@ -270,7 +367,10 @@ class Attemperator(Component):
             **super().get_state(),
             'water_injected_kg_h': self.water_injected_kg_h,
             'outlet_temp_k': self.output_stream.temperature_k if self.output_stream else 0.0,
-            'is_saturated': self.is_saturated
+            'is_saturated': self.is_saturated,
+            'steam_velocity_m_s': self.steam_velocity_m_s,
+            'residence_time_s': self.residence_time_s,
+            'volume_m3': self.volume_m3
         }
 
     def _set_idle_state(self):
@@ -278,3 +378,5 @@ class Attemperator(Component):
         self.drain_stream = None
         self.water_injected_kg_h = 0.0
         self.outlet_superheat_k = 0.0
+        self.steam_velocity_m_s = 0.0
+        self.residence_time_s = 0.0

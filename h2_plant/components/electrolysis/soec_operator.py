@@ -161,6 +161,9 @@ class SOECOperator(Component):
 
             # UPDATE: Default pressure to 1.0 bar. Check config first.
             self.out_pressure_pa = config.get("out_pressure_pa", 100000.0)
+            
+            # Flow Control: Target steam utilization for setpoint calculation
+            self.target_steam_utilization = config.get("target_steam_utilization", 0.80)
 
         # Lifecycle parameter for degradation reset (hours)
         if isinstance(config, dict):
@@ -263,6 +266,9 @@ class SOECOperator(Component):
         self._power_setpoint_mw = 0.0
         self.available_water_kg_h = float('inf')
         self.current_water_input_kg = 0.0
+        
+        # Flow setpoint for cascade control
+        self.required_flow_kg_h = 0.0
 
     def _update_virtual_map(self) -> None:
         """
@@ -464,6 +470,13 @@ class SOECOperator(Component):
              self.last_water_output_kg = max(0.0, theoretical_input_kg - reaction_steam_kg)
 
         self.previous_total_power = current_total_power
+        
+        # Calculate Flow Setpoint for cascade control (next timestep)
+        if h2_produced_kg > 0 and self.dt > 0:
+            stoich_flow = h2_produced_kg * 8.936 / self.dt  # kg/h at 100% utilization
+            self.required_flow_kg_h = stoich_flow / self.target_steam_utilization
+        else:
+            self.required_flow_kg_h = 0.0
 
         return current_total_power, h2_produced_kg, self.last_step_steam_input_kg
 
@@ -597,6 +610,16 @@ class SOECOperator(Component):
                 phase='gas'
             )
 
+        elif port_name == 'flow_setpoint':
+            # Signal for cascade control to downstream mixer
+            return Stream(
+                mass_flow_kg_h=self.required_flow_kg_h,
+                temperature_k=298.15,
+                pressure_pa=101325.0,
+                composition={'Signal': 1.0},
+                phase='signal'
+            )
+
         else:
             raise ValueError(f"Unknown output port '{port_name}' on {self.component_id}")
 
@@ -615,7 +638,8 @@ class SOECOperator(Component):
             'power_in': {'type': 'input', 'resource_type': 'electricity', 'units': 'MW'},
             'steam_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
             'h2_out': {'type': 'output', 'resource_type': 'gas', 'units': 'kg/h'},  # Wet H2
-            'o2_out': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'}
+            'o2_out': {'type': 'output', 'resource_type': 'oxygen', 'units': 'kg/h'},
+            'flow_setpoint': {'type': 'output', 'resource_type': 'signal', 'units': 'kg/h'}
         }
 
     def get_status(self) -> Dict[str, Any]:
@@ -648,5 +672,7 @@ class SOECOperator(Component):
             **super().get_state(),
             **self.get_status(),
             # Expose unreacted steam for external logging (was previously steam_out)
-            'last_water_output_kg': getattr(self, 'last_water_output_kg', 0.0)
+            'last_water_output_kg': getattr(self, 'last_water_output_kg', 0.0),
+            'required_flow_kg_h': self.required_flow_kg_h,
+            'target_steam_utilization': self.target_steam_utilization
         }

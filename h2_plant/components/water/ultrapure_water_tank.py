@@ -199,6 +199,12 @@ class UltraPureWaterTank(Component):
         """
         super().step(t)
 
+        # CRITICAL: Clear inlet_stream at start of step
+        # This prevents stale flow rates from persisting when no new water arrives
+        # (FlowNetwork skips transfers when upstream produces 0/None)
+        current_inlet = self.inlet_stream
+        self.inlet_stream = None  # Clear for next cycle
+
         # 1. Update Fill Level
         self.fill_level = self.mass_kg / self.capacity_kg if self.capacity_kg > 0 else 0.0
 
@@ -215,9 +221,9 @@ class UltraPureWaterTank(Component):
 
         # 4. Process Inflow with Enthalpy Mixing
         self.overflow_kg = 0.0
-        if self.inlet_stream and self.inlet_stream.mass_flow_kg_h > 0:
-            m_in = self.inlet_stream.mass_flow_kg_h * self.dt
-            T_in = self.inlet_stream.temperature_k
+        if current_inlet and current_inlet.mass_flow_kg_h > 0:
+            m_in = current_inlet.mass_flow_kg_h * self.dt
+            T_in = current_inlet.temperature_k
 
             space = self.capacity_kg - self.mass_kg
 
@@ -227,7 +233,9 @@ class UltraPureWaterTank(Component):
                 if self.overflow_kg > 0.1:
                     logger.warning(
                         f"UltraPureWaterTank {self.component_id}: "
-                        f"{self.overflow_kg:.1f} kg overflow (tank full)"
+                        f"{self.overflow_kg:.1f} kg overflow (tank full) | "
+                        f"Zone={self.control_zone}, Request={self.requested_production_kg_h:.0f} kg/h, "
+                        f"Inflow={current_inlet.mass_flow_kg_h:.0f} kg/h"
                     )
             else:
                 m_accepted = m_in
@@ -296,6 +304,12 @@ class UltraPureWaterTank(Component):
         # 9. Clear Demands for Next Timestep
         self.demands.clear()
         self.outlet_requests.clear()
+
+    @property
+    def control_zone_int(self) -> int:
+        """Return integer representation of control zone for data logging."""
+        mapping = {'A': 1, 'B': 2, 'C': 3}
+        return mapping.get(self.control_zone, 0)
 
     def _update_control_zone(self) -> None:
         """
@@ -391,16 +405,38 @@ class UltraPureWaterTank(Component):
         # Multi-channel water output (pattern: water_out_{channel_id})
         if port_name.startswith('water_out_'):
             channel_id = port_name.split('_', 2)[2]  # Extract 'PEM' from 'water_out_PEM'
-            return self.channel_outputs.get(channel_id, None)
+            
+            # Return allocated stream or empty stream if no allocation
+            return self.channel_outputs.get(channel_id, Stream(
+                mass_flow_kg_h=0.0,
+                temperature_k=self.temperature_k,
+                pressure_pa=self.pressure_pa,
+                composition={'H2O': 1.0},
+                phase='liquid'
+            ))
 
         # Legacy single consumer output
         if port_name == 'consumer_out':
             vals = list(self.outlet_streams.values())
             if vals:
                 return vals[0]
+            else:
+                 return Stream(
+                    mass_flow_kg_h=0.0,
+                    temperature_k=self.temperature_k,
+                    pressure_pa=self.pressure_pa,
+                    composition={'H2O': 1.0},
+                    phase='liquid'
+                )
 
         # Direct lookup by consumer ID
-        return self.outlet_streams.get(port_name)
+        return self.outlet_streams.get(port_name, Stream(
+            mass_flow_kg_h=0.0,
+            temperature_k=self.temperature_k,
+            pressure_pa=self.pressure_pa,
+            composition={'H2O': 1.0},
+            phase='liquid'
+        ))
 
     def get_state(self) -> Dict[str, Any]:
         """

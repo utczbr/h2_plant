@@ -18,6 +18,7 @@ from h2_plant.components.control.valve import ThrottlingValve as Valve
 from h2_plant.components.external.biogas_source import BiogasSource
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 from h2_plant.components.water.makeup_mixer import MakeupMixer
+from h2_plant.components.water.signal_makeup_mixer import SignalMakeupMixer
 from h2_plant.components.atr.atr_makeup_mixer import ProportionalMakeupMixer
 from h2_plant.components.external.oxygen_makeup import OxygenMakeupNode
 from h2_plant.components.water.water_balance_tracker import WaterBalanceTracker
@@ -311,10 +312,23 @@ class PlantGraphBuilder:
             
         elif node.type == "UltraPureWaterTank":
             from h2_plant.components.water.ultrapure_water_tank import UltraPureWaterTank
-            # Convert volume_m3 (from GUI) to capacity_kg (approx 1000 kg/m3)
-            vol = float(node.params.get('volume_m3', 5.0))
-            cap_kg = vol * 1000.0
-            return UltraPureWaterTank(node.id, capacity_kg=cap_kg)
+            # Check for direct capacity (kg) or volume (m3) -> kg
+            if 'capacity_kg' in node.params:
+                cap_kg = float(node.params['capacity_kg'])
+            else:
+                vol = float(node.params.get('volume_m3', 5.0))
+                cap_kg = vol * 1000.0
+            
+            # Pass other params if present
+            nominal_prod = float(node.params.get('nominal_production_kg_h', 10000.0))
+            init_fill = float(node.params.get('initial_fill_fraction', 0.5))
+            
+            return UltraPureWaterTank(
+                node.id, 
+                capacity_kg=cap_kg, 
+                nominal_production_kg_h=nominal_prod,
+                initial_fill_fraction=init_fill
+            )
             
         elif node.type == "Battery":
             from h2_plant.components.storage.battery_storage import BatteryStorage
@@ -409,6 +423,14 @@ class PlantGraphBuilder:
                 makeup_pressure_bar=float(node.params.get("makeup_pressure_bar", 1.0))
             )
 
+        elif node.type == "SignalMakeupMixer":
+            return SignalMakeupMixer(
+                component_id=node.id,
+                target_flow_kg_h=float(node.params.get("target_flow_kg_h", 100.0)),
+                makeup_temp_c=float(node.params.get("makeup_temp_c", 20.0)),
+                makeup_pressure_bar=float(node.params.get("makeup_pressure_bar", 1.0))
+            )
+
         elif node.type == "ProportionalMakeupMixer":
             return ProportionalMakeupMixer(
                 component_id=node.id,
@@ -466,12 +488,17 @@ class PlantGraphBuilder:
             )
 
         elif node.type == "Attemperator":
+            # Optional pipe_diameter_m for velocity monitoring (default None preserves legacy behavior)
+            pipe_diam = node.params.get('pipe_diameter_m', None)
+            if pipe_diam is not None:
+                pipe_diam = float(pipe_diam)
             return Attemperator(
                 component_id=node.id,
                 target_temp_k=float(node.params.get('target_temp_k', 623.15)),
                 max_water_flow_kg_h=float(node.params.get('max_water_flow_kg_h', 1000.0)),
                 pressure_drop_bar=float(node.params.get('pressure_drop_bar', 0.5)),
-                min_superheat_delta_k=float(node.params.get('min_superheat_delta_k', 5.0))
+                min_superheat_delta_k=float(node.params.get('min_superheat_delta_k', 5.0)),
+                pipe_diameter_m=pipe_diam
             )
 
         elif node.type == "StreamSplitter":

@@ -43,6 +43,7 @@ from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 from h2_plant.components.storage.h2_tank import TankArray
 from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
 from h2_plant.components.storage.detailed_tank import DetailedTankArray
+from h2_plant.components.water.ultrapure_water_tank import UltraPureWaterTank
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self,
         registry: 'ComponentRegistry',
         context: 'SimulationContext',
-        total_steps: int
+        total_steps: int,
+        output_dir: 'Path' = None,
+        use_chunked_history: bool = False
     ) -> None:
         self._registry = registry
         self._context = context
@@ -185,57 +188,101 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         if self._pem:
             self._pem_max = context.physics.pem_system.max_power_mw
 
-        # 1. Allocate Base History Arrays
-        self._history = {
-            'minute': np.zeros(total_steps, dtype=np.int32),
-            'P_offer': np.zeros(total_steps, dtype=np.float64),
-            'P_soec_actual': np.zeros(total_steps, dtype=np.float64),
-            'P_pem': np.zeros(total_steps, dtype=np.float64),
-            'P_sold': np.zeros(total_steps, dtype=np.float64),
-            'spot_price': np.zeros(total_steps, dtype=np.float64),
-            'h2_kg': np.zeros(total_steps, dtype=np.float64),
-            'H2_soec_kg': np.zeros(total_steps, dtype=np.float64),
-            'H2_pem_kg': np.zeros(total_steps, dtype=np.float64),
-            'H2_atr_kg': np.zeros(total_steps, dtype=np.float64),
-            'cumulative_h2_kg': np.zeros(total_steps, dtype=np.float64),
-            'steam_soec_kg': np.zeros(total_steps, dtype=np.float64),
-            'H2O_soec_out_kg': np.zeros(total_steps, dtype=np.float64),
-            'soec_active_modules': np.zeros(total_steps, dtype=np.int32),
-            'H2O_pem_kg': np.zeros(total_steps, dtype=np.float64),
-            'O2_pem_kg': np.zeros(total_steps, dtype=np.float64),
-            'pem_V_cell': np.zeros(total_steps, dtype=np.float64),
-            'P_bop_mw': np.zeros(total_steps, dtype=np.float64),
-            'tank_level_kg': np.zeros(total_steps, dtype=np.float64),
-            'tank_pressure_bar': np.zeros(total_steps, dtype=np.float64),
-            'compressor_power_kw': np.zeros(total_steps, dtype=np.float64),
-            'sell_decision': np.zeros(total_steps, dtype=np.int8),
-            # Specific PEM Impurity
-            'PEM_o2_impurity_ppm_mol': np.zeros(total_steps, dtype=np.float64),
+        # =====================================================================
+        # HISTORY STORAGE: Chunked (memory-efficient) or In-Memory (fast)
+        # =====================================================================
+        self._use_chunked_history = use_chunked_history
+        self._history_manager = None
+        
+        if use_chunked_history and output_dir:
+            # Use chunked storage for long simulations (constant ~100MB memory)
+            from h2_plant.storage.history_manager import ChunkedHistoryManager, HistoryDictProxy
             
-            # --- STORAGE CONTROL HISTORY (APC) ---
-            'storage_soc': np.zeros(total_steps, dtype=np.float64),
-            'storage_dsoc_per_h': np.zeros(total_steps, dtype=np.float64),
-            'storage_zone': np.zeros(total_steps, dtype=np.int8),
-            'storage_action_factor': np.zeros(total_steps, dtype=np.float64),
-            'storage_time_to_full_h': np.zeros(total_steps, dtype=np.float64),
+            self._history_manager = ChunkedHistoryManager(
+                output_dir=output_dir,
+                total_steps=total_steps,
+                chunk_size=10_000  # ~7 simulated days
+            )
             
-            # --- RFNBO CLASSIFICATION (Economic Spot Dispatch) ---
-            'h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
-            'h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
-            'cumulative_h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
-            'cumulative_h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
-            'spot_purchased_mw': np.zeros(total_steps, dtype=np.float64),
-            'spot_threshold_eur_mwh': np.zeros(total_steps, dtype=np.float64),
+            # Register all base columns
+            base_columns = [
+                'minute', 'P_offer', 'P_soec_actual', 'P_pem', 'P_sold',
+                'spot_price', 'h2_kg', 'H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg',
+                'cumulative_h2_kg', 'steam_soec_kg', 'H2O_soec_out_kg',
+                'soec_active_modules', 'H2O_pem_kg', 'O2_pem_kg', 'pem_V_cell',
+                'P_bop_mw', 'tank_level_kg', 'tank_pressure_bar', 'compressor_power_kw',
+                'sell_decision', 'PEM_o2_impurity_ppm_mol',
+                'storage_soc', 'storage_dsoc_per_h', 'storage_zone',
+                'storage_action_factor', 'storage_time_to_full_h',
+                'h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'cumulative_h2_rfnbo_kg',
+                'cumulative_h2_non_rfnbo_kg', 'spot_purchased_mw', 'spot_threshold_eur_mwh',
+                'bop_grid_import_mw', 'bop_price_eur_mwh', 'bop_cost_eur',
+                'cumulative_bop_cost_eur', 'ppa_price_effective_eur_mwh'
+            ]
+            for col in base_columns:
+                self._history_manager.register_column(col)
             
-            # --- BOP GRID IMPORT ---
-            'bop_grid_import_mw': np.zeros(total_steps, dtype=np.float64),
-            'bop_price_eur_mwh': np.zeros(total_steps, dtype=np.float64),
-            'bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
-            'cumulative_bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
+            # Allocate first chunk
+            self._history_manager.allocate_chunk()
             
-            # --- DUAL PPA PRICING ---
-            'ppa_price_effective_eur_mwh': np.zeros(total_steps, dtype=np.float64)
-        }
+            # Use HistoryDictProxy as drop-in replacement for _history
+            self._history = HistoryDictProxy(self._history_manager)
+            
+            logger.info(f"Using CHUNKED history storage: {total_steps} steps, "
+                       f"chunk_size=10,000, output={output_dir}")
+        else:
+            # Traditional in-memory storage (faster, but uses more RAM)
+            # 1. Allocate Base History Arrays
+            self._history = {
+                'minute': np.zeros(total_steps, dtype=np.int32),
+                'P_offer': np.zeros(total_steps, dtype=np.float64),
+                'P_soec_actual': np.zeros(total_steps, dtype=np.float64),
+                'P_pem': np.zeros(total_steps, dtype=np.float64),
+                'P_sold': np.zeros(total_steps, dtype=np.float64),
+                'spot_price': np.zeros(total_steps, dtype=np.float64),
+                'h2_kg': np.zeros(total_steps, dtype=np.float64),
+                'H2_soec_kg': np.zeros(total_steps, dtype=np.float64),
+                'H2_pem_kg': np.zeros(total_steps, dtype=np.float64),
+                'H2_atr_kg': np.zeros(total_steps, dtype=np.float64),
+                'cumulative_h2_kg': np.zeros(total_steps, dtype=np.float64),
+                'steam_soec_kg': np.zeros(total_steps, dtype=np.float64),
+                'H2O_soec_out_kg': np.zeros(total_steps, dtype=np.float64),
+                'soec_active_modules': np.zeros(total_steps, dtype=np.int32),
+                'H2O_pem_kg': np.zeros(total_steps, dtype=np.float64),
+                'O2_pem_kg': np.zeros(total_steps, dtype=np.float64),
+                'pem_V_cell': np.zeros(total_steps, dtype=np.float64),
+                'P_bop_mw': np.zeros(total_steps, dtype=np.float64),
+                'tank_level_kg': np.zeros(total_steps, dtype=np.float64),
+                'tank_pressure_bar': np.zeros(total_steps, dtype=np.float64),
+                'compressor_power_kw': np.zeros(total_steps, dtype=np.float64),
+                'sell_decision': np.zeros(total_steps, dtype=np.int8),
+                # Specific PEM Impurity
+                'PEM_o2_impurity_ppm_mol': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- STORAGE CONTROL HISTORY (APC) ---
+                'storage_soc': np.zeros(total_steps, dtype=np.float64),
+                'storage_dsoc_per_h': np.zeros(total_steps, dtype=np.float64),
+                'storage_zone': np.zeros(total_steps, dtype=np.int8),
+                'storage_action_factor': np.zeros(total_steps, dtype=np.float64),
+                'storage_time_to_full_h': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- RFNBO CLASSIFICATION (Economic Spot Dispatch) ---
+                'h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+                'h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+                'cumulative_h2_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+                'cumulative_h2_non_rfnbo_kg': np.zeros(total_steps, dtype=np.float64),
+                'spot_purchased_mw': np.zeros(total_steps, dtype=np.float64),
+                'spot_threshold_eur_mwh': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- BOP GRID IMPORT ---
+                'bop_grid_import_mw': np.zeros(total_steps, dtype=np.float64),
+                'bop_price_eur_mwh': np.zeros(total_steps, dtype=np.float64),
+                'bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
+                'cumulative_bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- DUAL PPA PRICING ---
+                'ppa_price_effective_eur_mwh': np.zeros(total_steps, dtype=np.float64)
+            }
 
         # 2. Identify Components & Pre-Bind Arrays
         self._recorders = []
@@ -271,7 +318,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             DryCooler: ('outlet_stream', [('heat_rejected_kw', 'dc_duty_kw'), ('fan_power_kw', 'fan_power_kw')]),
             ElectricBoiler: ('_output_stream', [('power_input_kw', 'power_kw')]),
             Interchanger: ('hot_out', [('q_transferred_kw', 'q_transferred_kw')]),
-            DetailedTankArray: ('h2_out', [('inventory_kg', 'total_mass_kg'), ('avg_pressure_bar', 'avg_pressure_bar')])
+            DetailedTankArray: ('h2_out', [('inventory_kg', 'total_mass_kg'), ('avg_pressure_bar', 'avg_pressure_bar')]),
+            UltraPureWaterTank: ('consumer_out', [('mass_kg', 'mass_kg'), ('control_zone_int', 'control_zone_int')])
         }
 
         # Also add SOEC Cluster if it has a stream
@@ -282,6 +330,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
              self._alloc_stream_history(cid, total_steps)
              # SOEC stream is often constructed on fly, handled specially in loop
         
+        # Separate dict for 2D matrix arrays (not compatible with HistoryDictProxy)
+        # These are always in-memory numpy arrays regardless of chunked mode
+        self._matrix_history: Dict[str, np.ndarray] = {}
         self._detailed_tank_recorders = []  # List of (component, pressure_matrix, mass_matrix)
 
         for cid, comp in registry.list_components():
@@ -290,17 +341,17 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             # Special Matrix Recording for DetailedTankArray
             if isinstance(comp, DetailedTankArray):
                 n_tanks = comp.n_tanks
-                # Allocate (Time, Tank) matrices
+                # Allocate (Time, Tank) matrices - use separate dict for 2D arrays
                 p_matrix_key = f"{cid}_tank_pressures_bar"
                 m_matrix_key = f"{cid}_tank_masses_kg"
                 
-                self._history[p_matrix_key] = np.zeros((total_steps, n_tanks), dtype=np.float32)
-                self._history[m_matrix_key] = np.zeros((total_steps, n_tanks), dtype=np.float32)
+                self._matrix_history[p_matrix_key] = np.zeros((total_steps, n_tanks), dtype=np.float32)
+                self._matrix_history[m_matrix_key] = np.zeros((total_steps, n_tanks), dtype=np.float32)
                 
                 self._detailed_tank_recorders.append((
                     comp, 
-                    self._history[p_matrix_key],
-                    self._history[m_matrix_key]
+                    self._matrix_history[p_matrix_key],
+                    self._matrix_history[m_matrix_key]
                 ))
             
             # Special handling for inheritance or if exact type in map
@@ -884,10 +935,34 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             m_matrix[step_idx, :] = [t.mass_kg for t in comp.tanks]
 
         self._state.step_idx += 1
+        
+        # 4. Chunked Storage: Trigger chunk flush if needed
+        if self._use_chunked_history and self._history_manager:
+            self._history_manager.step_complete(step_idx)
 
     def get_history(self) -> Dict[str, np.ndarray]:
+        """
+        Get the recorded history.
+        
+        Returns dict of column -> array for in-memory mode.
+        For chunked mode, finalizes and returns DataFrame-based dict.
+        """
         actual_steps = self._state.step_idx
-        return {k: v[:actual_steps] for k, v in self._history.items()}
+        
+        if self._use_chunked_history and self._history_manager:
+            # Finalize chunks and load from disk
+            self._history_manager.finalize()
+            df = self._history_manager.get_dataframe()
+            result = {col: df[col].values for col in df.columns}
+        else:
+            # Traditional in-memory mode
+            result = {k: v[:actual_steps] for k, v in self._history.items()}
+        
+        # Merge matrix history (2D arrays stored separately)
+        for k, v in self._matrix_history.items():
+            result[k] = v[:actual_steps]
+        
+        return result
 
     def _find_soec(self, registry):
         for _, comp in registry.list_components():

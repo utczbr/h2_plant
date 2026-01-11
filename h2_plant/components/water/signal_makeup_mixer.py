@@ -80,6 +80,7 @@ class SignalMakeupMixer(Component):
         super().__init__()
         self.component_id = component_id
         self.target_flow_kg_h = target_flow_kg_h
+        self.current_target_kg_h = target_flow_kg_h  # Dynamic target (updated by flow_setpoint)
         self.default_makeup_temp_k = makeup_temp_c + 273.15
         self.outlet_pressure_pa = makeup_pressure_bar * 1e5
 
@@ -139,8 +140,8 @@ class SignalMakeupMixer(Component):
         self.actual_drain_kg_h = drain_flow
 
         # 2. Calculate Demand (Deficit) for NEXT timestep signal
-        # This is what we want the tank to provide in the next step
-        deficit = self.target_flow_kg_h - drain_flow
+        # Use dynamic target (from electrolyzer setpoint if connected)
+        deficit = self.current_target_kg_h - drain_flow
         self.current_demand_kg_h = max(0.0, deficit)
 
         # 3. Measure Makeup Water Actually Received THIS step
@@ -245,6 +246,14 @@ class SignalMakeupMixer(Component):
             self.makeup_stream = value
             return value.mass_flow_kg_h
             
+        elif port_name == 'flow_setpoint':
+            # Dynamic setpoint from upstream electrolyzer
+            if isinstance(value, Stream):
+                self.current_target_kg_h = value.mass_flow_kg_h
+            elif isinstance(value, (int, float)):
+                self.current_target_kg_h = float(value)
+            return 0.0
+            
         return 0.0
 
     def get_output(self, port_name: str) -> Any:
@@ -287,6 +296,7 @@ class SignalMakeupMixer(Component):
         return {
             'drain_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
             'makeup_water_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
+            'flow_setpoint': {'type': 'input', 'resource_type': 'signal', 'units': 'kg/h'},
             'mixture_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'},
             'demand_signal': {'type': 'output', 'resource_type': 'signal', 'units': 'kg/h'}
         }
@@ -301,6 +311,7 @@ class SignalMakeupMixer(Component):
         return {
             **super().get_state(),
             'target_flow_kg_h': self.target_flow_kg_h,
+            'current_target_kg_h': self.current_target_kg_h,
             'current_demand_kg_h': self.current_demand_kg_h,
             'actual_makeup_kg_h': self.actual_makeup_kg_h,
             'actual_drain_kg_h': self.actual_drain_kg_h,

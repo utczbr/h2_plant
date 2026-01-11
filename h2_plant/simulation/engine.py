@@ -509,21 +509,30 @@ class SimulationEngine:
         self._dispatch_wind = wind
         logger.info(f"Dispatch data loaded: {len(prices)} price points, {len(wind)} wind points")
 
-    def initialize_dispatch_strategy(self, context: 'SimulationContext', total_steps: int) -> None:
+    def initialize_dispatch_strategy(
+        self, 
+        context: 'SimulationContext', 
+        total_steps: int,
+        use_chunked_history: bool = False
+    ) -> None:
         """
         Initialize the dispatch strategy with context and pre-allocate arrays.
 
         Args:
             context (SimulationContext): Physics configuration context.
             total_steps (int): Total number of timesteps for pre-allocation.
+            use_chunked_history (bool): If True, use memory-efficient chunked storage
+                                        (recommended for simulations > 7 days).
         """
         if self.dispatch_strategy:
             self.dispatch_strategy.initialize(
                 registry=self.registry,
                 context=context,
-                total_steps=total_steps
+                total_steps=total_steps,
+                output_dir=self.output_dir,
+                use_chunked_history=use_chunked_history
             )
-            logger.info("Dispatch strategy initialized")
+            logger.info(f"Dispatch strategy initialized (chunked_history={use_chunked_history})")
 
     def get_dispatch_history(self) -> Optional[Dict[str, np.ndarray]]:
         """
