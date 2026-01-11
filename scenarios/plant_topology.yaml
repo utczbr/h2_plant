@@ -591,11 +591,11 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
 
-  # Split: 91.54% to Heat Recovery Loop, 8.46% to Bypass (Attemperator)
+  # Split: 92.12% to Heat Recovery Loop, 7.88% to Bypass (Attemperator)
   - id: "SOEC_Water_Splitter"
     type: "StreamSplitter"
     params:
-      split_ratio: 0.9154  # Fraction to Outlet 1 (Heat Recovery)
+      split_ratio: 0.9212  # Exact match for 430.05K outlet (prevents drain)
     connections:
       - source_port: "outlet_1"
         target_name: "ATR_Syngas_Cooler"
@@ -658,7 +658,7 @@ nodes:
     connections:
       - source_port: "outlet"
         target_name: "SOEC_Feed_Attemperator"
-        target_port: "inlet_1"
+        target_port: "steam_in"
         resource_type: "stream"
 
   # --- BYPASS LOOP: ATTEMPERATION WATER (8.46%) ---
@@ -668,21 +668,27 @@ nodes:
     params:
       pump_id: "SOEC_Feed_Pump"
       capacity_kg_h: 3600.0
-      target_pressure_pa: 500000.0 # 5 bar
+      target_pressure_pa: 550000.0 # 5.5 bar
     connections:
       - source_port: "water_out"
-        target_name: "SOEC_Feed_Attemperator"  # Inject into mixer
-        target_port: "inlet_2"
+        target_name: "SOEC_Feed_Attemperator"  # Inject into attemperator
+        target_port: "water_in"
         resource_type: "stream"
 
   # --- RECOMBINATION & FEED ---
 
   - id: "SOEC_Feed_Attemperator"
-    type: "WaterMixer" # Use WaterMixer or Mixer. WaterMixer handles simple P mixing well.
+    type: "Attemperator"
     params:
-      outlet_pressure_kpa: 500.0 # 5 bar
+      target_temp_k: 430.05  # 156.9°C (5°C superheat at 5.0 bar)
+      min_superheat_delta_k: 5.0
+      pipe_diameter_m: 0.1541  # 6" Schedule 40
+      volume_m3: 0.050  # Adj. to 0.035m3 for <0.1s residence time
+      pressure_drop_bar: 0.5  # Venturi nozzle pressure drop
+      heat_loss_kw: 0.0
+      max_water_flow_kg_h: 500.0
     connections:
-      - source_port: "outlet"
+      - source_port: "steam_out"
         target_name: "SOEC_Cluster"
         target_port: "steam_in"
         resource_type: "stream"
@@ -1311,7 +1317,7 @@ nodes:
     type: "Interchanger"
     params:
       min_approach_temp_k: 10.0
-      target_cold_out_temp_c: 180.0  # Preheat water toward steam
+      target_cold_out_temp_c: 105.0  # Preheat water toward steam
       efficiency: 0.95
       system_group: "ATR_Unit"
     connections:
@@ -1435,11 +1441,11 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       max_flow_kg_h: 1500.0
-    connections: []
-      #- source_port: "outlet"
-      #  target_name: "H2_Production_Mixer"
-      #  target_port: "inlet_3"
-      #  resource_type: "stream"
+    connections: 
+      - source_port: "outlet"
+        target_name: "H2_Production_Mixer"
+        target_port: "inlet_3"
+        resource_type: "stream"
 
 
   # =================================================================================
@@ -1508,7 +1514,7 @@ nodes:
     type: "DetailedTank"
     params:
       n_tanks: 30
-      volume_per_tank_m3: 80.0 # From HP spec, assumed consistent
+      volume_per_tank_m3: 107.37 # From HP spec, assumed consistent
       max_pressure_bar: 70.0
       initial_pressure_bar: 1.0
       min_discharge_pressure_bar: 30.0
@@ -1625,14 +1631,14 @@ nodes:
       n_stations: 5  # Simulating 5 identical truck bays
       truck_capacity_kg: 280.0    # Reference: 280kg
       delivery_pressure_bar: 500.0
-      max_fill_rate_kg_min: 90.0  # Reference: 90 kg/min
-      min_fill_rate_kg_min: 35.0  # Simulation of lower demand/night shift
-      h_in_day_max: 12.0         # ~770 minutes operating at max rate
+      max_fill_rate_kg_min: 1.5  # Reference: 90 kg/h
+      min_fill_rate_kg_min: 0.583  # Simulation of lower demand/night shift
+      h_in_day_max: 16.0        
       valves_close_time_min: 5.0  # Time to close valves
       arrival_probability: 0.3    # Ignored when h_in_day_max is set
       isen_efficiency: 0.65       # Reference: 0.65
       mech_efficiency: 0.90       # Reference: 0.90
-      cooldown_minutes: 180.0     # Reference: 3 hours
+      cooldown_minutes: 187.0     # Reference: 3 hours
     connections:
       # Feedback loop: Demand Signal flows back to Tank
       - source_port: "demand_signal"
