@@ -505,3 +505,87 @@ These parameters drive the Ergun pressure drop calculation.
 | 21 | **Valves:** Diameter | **Not Specified** | mm | Modeled as `ThrottlingValve` (Isenthalpic). |
 | 22 | **UPW (Ultra-Pure Water):** Flow Rate | **3600 - 4000** | kg/h | **RO Recovery:** 75%. **Energy:** 0.004 kWh/kg. Target: SOEC/PEM makeup. |
 | 23 | **UPWT (Ultra-Pure Water Tank):** Volume | **N/A** | m³ | Modeled as infinite source. |
+
+
+### 10. Water Balance & Treatment Systems
+
+**Service**: Plant-wide water management (Purification, Storage, Distribution, and Recovery).
+
+**Design Basis**: Net Fresh Water Demand of **5,889 kg/h** (Peak) vs. Installed Supply of **12,000 kg/h**.
+
+#### 10.1 Water Purifier (Reverse Osmosis)
+
+**Type**: `WaterPurifier` (Layer 1 Component)
+
+**Physics**: Includes Temperature Correction Factor (TCF) for viscosity-based derating. .
+
+| Parameter | Value | Unit | Sizing Logic |
+| --- | --- | --- | --- |
+| **Rated Capacity** | **12,000** | kg/h | Max capacity @ 25°C. Provides ~100% safety margin over 5.9t/h demand. |
+| **Nominal Flow** | **10,000** | kg/h | Operating point for control loop (Zone B). |
+| **Cold Weather Cap** | **8,243** | kg/h | Derated capacity at 10°C feed (). **Status: OK** (> 5,889 kg/h demand). |
+| **Recovery Ratio** | **0.75** | - | Standard RO efficiency. |
+| **Feed Buffer** | **400** | kg | Internal buffer for 2 timesteps at max flow. |
+
+#### 10.2 Ultra-Pure Water Tank (Buffer)
+
+**Type**: `UltraPureWaterTank`
+
+**Function**: Multi-channel hydraulic decoupler with Zone-based production control.
+
+| Parameter | Value | Unit | Description |
+| --- | --- | --- | --- |
+| **Capacity** | **20,000** | kg | **Volume:** 20 . Provides ~3.4 hours autonomy at peak demand. |
+| **Control Logic** | **Zone A/B/C** | - | **Zone A (<60%):** Request 12,000 kg/h. **Zone B:** 10,000 kg/h. **Zone C (>90%):** Stop. |
+| **Channels** | **3** | - | Dedicated allocation ports for **PEM** (778 kg/h), **SOEC** (2780 kg/h), **ATR** (2332 kg/h). |
+
+#### 10.3 Process Water Mixers (Loop Control)
+
+**Type**: `SignalMakeupMixer`
+
+**Logic**: Calculates deficit () and pulls makeup from UPW Tank.
+
+| Tag | Target Flow | Fresh Demand | Recirculation | Application |
+| --- | --- | --- | --- | --- |
+| **PEM_Makeup_Mixer** | **4,000 kg/h** | ~778 kg/h | ~3,222 kg/h | Maintains high loop flow for cooling/stack stability. |
+| **SOEC_Makeup_Mixer** | **3,600 kg/h** | ~2,780 kg/h | ~820 kg/h | Feeds steam generation loop. |
+| **ATR_Makeup_Mixer** | **2,332 kg/h** | ~2,332 kg/h | 0 kg/h | Stoichiometric feed for Reforming + WGS. |
+
+#### 10.4 Water Pumps
+
+**Type**: `WaterPumpThermodynamic`
+
+**Model**: Isentropic compression with efficiency losses (, ).
+
+| Tag | Flow (kg/h) | Head (bar) | Shaft Power | NPSH Status |
+| --- | --- | --- | --- | --- |
+| **PEM_Water_Pump** | 4,000 | 40.0 | **5.7 kW** | **OK** ( bar > ). |
+| **SOEC_Feed_Pump** | 284 | 5.5 | **0.41 kW** | **OK** (Low pressure dosing). |
+
+---
+
+### Updated Summary of Technical Parameters
+
+
+| Item ID | Equipment/Parameter Name | Value | Unit | Notes |
+| --- | --- | --- | --- | --- |
+| 1 | **ATR Reactor:** Volume | **5.0** | m³ | Feed Mixer Buffer. Capacity: ~5,050 kg/h. |
+| 2 | **Attemperator:** Diameter | **150** | mm | (DN150) Sized for steam velocity control. |
+| 3 | **Dry Cooler:** Heat Exchange Area | **453.6** | m² | H2 Service. O2 Service: 93.0 m². |
+| 4 | **Chiller:** Thermal Load | **500.0** | kW | Design capacity. Actual PEM load ~50 kW/unit. |
+| 5 | **Coalescer:** Contact Area | **0.5** | m² | Shell D=0.32m. Efficiency >99.9% liquid removal. |
+| 6 | **Deoxygenator:** Volume | **0.11** | m³ | Bed Volume. PFR Model. |
+| 7 | **Electric Boiler:** Power Rating | **2,500** | kW | `SOEC_Steam_Generator` (Peak 2.7 MW). Aux units: 25-50 kW. |
+| 8 | **Hydrogen Tank:** Volume | **107.4** | m³ | Per tank (`LP_Storage_Tank`). |
+| 9 | **Heat Exchanger:** Duty | **~310** | kW | `SOEC_H2_Interchanger_1` (Recuperator). |
+| 10 | **KOD (Knock-Out Drum):** Diameter | **0.5 - 0.8** | m | Sized by Souders-Brown (). |
+| 11 | **Compressor:** Shaft Power | **~20** | kW | Per stage (HP Train). Total Train ~100 kW. |
+| 12 | **Multicyclone:** Tube Velocity | **22.0** | m/s | Dynamic tube count allocation. |
+| 13 | **Process Mixer:** Capacity | **2.5 - 4.0** | t/h | `SignalMakeupMixer` (SOEC/PEM loops). |
+| 14 | **Drain Mixer:** Capacity | **0.8 - 3.2** | t/h | `DrainRecorderMixer`. PEM Drain: ~3.2 t/h. |
+| 15 | **Process Pump:** Shaft Power | **5.7** | kW | `PEM_Water_Pump` (40 bar). |
+| 16 | **Rectifier:** Nominal Power | **5.0** | MW | Per PEM unit. |
+| 17 | **Water Purifier:** Capacity | **12.0** |  | Rated @ 25°C. Cold weather derating to ~8.2 . |
+| 18 | **UPW Tank:** Volume | **20.0** |  | 20,000 kg capacity (~3.4h autonomy). |
+| 19 | **PSA:** Recovery Rate | **90.0** | % | 99.99% Purity. |
+| 20 | **Valves:** Delta P | **39.0** | bar | `PEM_Water_Return` (Joule-Thomson). |
