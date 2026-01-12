@@ -160,8 +160,8 @@ class ExternalWaterSource(Component):
                 # This prevents overfilling if the controller hasn't initialized
                 self.current_flow_kg_h = 0.0
             
-            # DEBUG: Log signal and flow at WARNING level for visibility
-            logger.warning(f"WATER_SOURCE STEP: signal_buffer={self._signal_request_kg_h}, flow={self.current_flow_kg_h:.0f} kg/h")
+            logger.debug(f"WATER_SOURCE STEP: signal_buffer={self._signal_request_kg_h}, flow={self.current_flow_kg_h:.0f} kg/h")
+
                 
             # NOTE: We do NOT reset _signal_request_kg_h to None here.
             # We implement a Zero-Order Hold, maintaining the last valid setpoint
@@ -208,7 +208,7 @@ class ExternalWaterSource(Component):
                 # Signal Stream: mass_flow_kg_h encodes the request
                 self._signal_request_kg_h = value.mass_flow_kg_h
                 # DEBUG: Log signal reception at WARNING level for visibility
-                logger.warning(
+                logger.debug(
                     f"WATER_SOURCE RECEIVE: signal={self._signal_request_kg_h:.0f} kg/h"
                 )
             elif isinstance(value, (int, float)):

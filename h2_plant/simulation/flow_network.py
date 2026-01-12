@@ -92,7 +92,7 @@ class FlowNetwork:
         Raises:
             ConfigurationError: If component or port validation fails.
         """
-        logger.info(
+        logger.debug(
             f"Initializing FlowNetwork with {len(self._connections)} legacy "
             f"and {len(self._indexed_connections)} indexed connections"
         )
@@ -188,7 +188,7 @@ class FlowNetwork:
         # DEBUG: Log signal transfers
         if is_signal:
             flow_val = output_value.mass_flow_kg_h if isinstance(output_value, Stream) else output_value
-            logger.info(f"SIGNAL TRANSFER: {conn.source_id}:{conn.source_port} -> {conn.target_id}:{conn.target_port} = {flow_val:.0f} kg/h")
+            logger.debug(f"SIGNAL TRANSFER: {conn.source_id}:{conn.source_port} -> {conn.target_id}:{conn.target_port} = {flow_val:.0f} kg/h")
 
         # Notify source of extraction (only for physical flows, not signals)
         if accepted_amount > 0 and not is_signal:

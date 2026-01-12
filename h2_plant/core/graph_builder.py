@@ -63,6 +63,13 @@ class PlantGraphBuilder:
         self.components[ComponentID.LUT_MANAGER.value] = lut_manager
         logger.info(f"Registered LUTManager for component optimization")
         
+        # Create and register CoolingManager for centralized cooling utilities
+        from h2_plant.core.cooling_manager import CoolingManager
+        cooling_manager = CoolingManager()
+        cooling_manager.set_component_id("cooling_manager")
+        self.components["cooling_manager"] = cooling_manager
+        logger.info("Registered CoolingManager for centralized cooling utilities")
+        
         for node in self.context.topology.nodes:
             component = self._create_component(node)
             if component:

@@ -7,7 +7,12 @@ Components:
 """
 
 from h2_plant.components.cooling.dry_cooler import DryCooler
-from h2_plant.components.cooling.dry_cooler_simplified import DryCoolerSimplified
+
+# Optional import for DryCoolerSimplified (may not exist yet)
+try:
+    from h2_plant.components.cooling.dry_cooler_simplified import DryCoolerSimplified
+except ImportError:
+    DryCoolerSimplified = None  # type: ignore
 
 __all__ = [
     'DryCooler',

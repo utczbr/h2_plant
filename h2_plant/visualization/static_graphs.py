@@ -946,17 +946,53 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     """Create temporal averages chart."""
     fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
     
-    df_indexed = df.copy()
-    df_indexed.index = pd.date_range(start="2024-01-01 00:00", periods=len(df_indexed), freq='min')
-    df_indexed['H2_total'] = df_indexed['H2_soec'] + df_indexed['H2_pem']
+    # MEMORY OPTIMIZATION: Do NOT copy the full DataFrame (could be GBs)
+    # Instead, create a lightweight DataFrame with ONLY the columns we need
+    required_cols = ['H2_soec', 'H2_pem', 'P_soec', 'P_pem', 'Spot']
     
-    numeric_cols = df_indexed.select_dtypes(include=[np.number]).columns
-    df_hourly = df_indexed[numeric_cols].resample('h').mean()
+    # Handle column aliases if missing
+    data = {}
+    if 'H2_soec' not in df.columns and 'H2_soec_kg' in df.columns:
+        data['H2_soec'] = df['H2_soec_kg']
+    elif 'H2_soec' in df.columns:
+        data['H2_soec'] = df['H2_soec']
+        
+    if 'H2_pem' not in df.columns and 'H2_pem_kg' in df.columns:
+        data['H2_pem'] = df['H2_pem_kg']
+    elif 'H2_pem' in df.columns:
+        data['H2_pem'] = df['H2_pem']
+        
+    if 'P_soec' in df.columns: data['P_soec'] = df['P_soec']
+    if 'P_pem' in df.columns: data['P_pem'] = df['P_pem']
+    if 'Spot' in df.columns: data['Spot'] = df['Spot']
+    elif 'spot_price' in df.columns: data['Spot'] = df['spot_price']
+    
+    if not data:
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, 'Missing data for temporal averages', ha='center', va='center')
+        return fig
+        
+    df_lite = pd.DataFrame(data)
+    df_lite['H2_total'] = df_lite.get('H2_soec', 0) + df_lite.get('H2_pem', 0)
+    
+    # Set index on minimal DF
+    try:
+        df_lite.index = pd.date_range(start="2024-01-01 00:00", periods=len(df_lite), freq='min')
+    except Exception:
+        # Fallback if length/freq mismatch
+        df_lite.index = pd.Index(range(len(df_lite)), name='minute')
+        
+    # Resample ONLY the columns we extracted (much faster/lighter)
+    df_hourly = df_lite.resample('h').mean()
     
     if len(df_hourly) < 2:
-        ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, 'Simulation too short for hourly averages', ha='center', va='center', transform=ax.transAxes, fontsize=12)
-        return fig
+        # If simulation is very short (e.g. < 2 hours), just use raw data or fail gracefully
+        if len(df_lite) > 0:
+            df_hourly = df_lite  # Fallback to minute resolution
+        else:
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, 'Simulation too short for averages', ha='center', va='center')
+            return fig
     
     ax1 = fig.add_subplot(311)
     ax1.plot(df_hourly.index, df_hourly['Spot'], color='black', marker='.', linestyle='-', linewidth=1, label='Avg Spot Price')
@@ -983,21 +1019,38 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
 
 def _prepare_monthly_data(df: pd.DataFrame) -> Dict[str, Any]:
     """Helper to prepare monthly aggregated data for performance graphs."""
-    # Create time index
-    df_indexed = df.copy()
-    start_date = df.attrs.get('start_date', "2024-01-01 00:00")
-    df_indexed.index = pd.date_range(start=start_date, periods=len(df_indexed), freq='min')
     
-    # Check sufficiency
-    if (df_indexed.index[-1] - df_indexed.index[0]).days < 30:
-        return {'valid': False, 'reason': 'Simulation too short (< 1 month)'}
-
-    # Resample Monthly
+    # Identify minimal columns needed for resampling
     cols_to_sum = ['P_soec', 'P_pem', 'H2_soec', 'H2_pem']
+    mod_cols = [c for c in df.columns if 'soec_module_powers_' in c]
+    mod_cols.sort(key=lambda s: int(s.split('_')[-1]))
+    
+    required_cols = list(set(cols_to_sum + mod_cols))
+    
+    # Filter only columns present in df
+    existing_cols = [c for c in required_cols if c in df.columns]
+    
+    # MEMORY OPTIMIZATION: Extract only needed columns
+    df_indexed = df[existing_cols].copy()
+    
+    # Fill missing base columns with 0.0 IN THE LITE FRAME
     for col in cols_to_sum:
         if col not in df_indexed.columns:
             df_indexed[col] = 0.0
+            
+    start_date = df.attrs.get('start_date', "2024-01-01 00:00")
+    try:
+        df_indexed.index = pd.date_range(start=start_date, periods=len(df_indexed), freq='min')
+    except Exception:
+         # Fallback for index mismatch - just assume minute freq
+        df_indexed.index = pd.date_range(start=start_date, periods=len(df_indexed), freq='min')
+    
+    # Check sufficiency
+    if len(df_indexed) > 0 and (df_indexed.index[-1] - df_indexed.index[0]).days < 30:
+        return {'valid': False, 'reason': 'Simulation too short (< 1 month)'}
 
+    # Resample Monthly (Perform heavy lifting on lite frame)
+    # We only need to resample the columns we extracted
     df_monthly = df_indexed[cols_to_sum].resample('ME').sum()
     
     # Energy MWh = Power(MW) / 60
@@ -1200,28 +1253,34 @@ def create_soec_module_power_stacked_figure(df: pd.DataFrame, dpi: int = DPI_FAS
     fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
 
-    # Prepare data
-    df_indexed = df.copy()
-    if 'time' not in df_indexed.columns:
-        if 'minute' in df_indexed.columns:
-            df_indexed['time'] = df_indexed['minute'] / 60.0
-        else:
-            df_indexed['time'] = df_indexed.index  # Fallback
-            
-    # Find module columns
-    mod_cols = [c for c in df_indexed.columns if 'soec_module_powers_' in c]
+    # Find module columns first (zero cost)
+    mod_cols = [c for c in df.columns if 'soec_module_powers_' in c]
     mod_cols.sort(key=lambda s: int(s.split('_')[-1]))
     
     if not mod_cols:
         ax.text(0.5, 0.5, 'No individual module power data available', ha='center')
         return fig
 
-    # Downsample if needed for performance
-    if len(df_indexed) > 10000:
-        factor = len(df_indexed) // 5000
-        df_plot = df_indexed.iloc[::factor]
+    # Create lightweight viewing frame with ONLY module columns + time source
+    # Determine time source
+    time_col = 'minute' if 'minute' in df.columns else None
+    
+    # MEMORY OPTIMIZATION: Downsample slicing directly from original DF
+    # Instead of df.copy() -> df_indexed -> downsample
+    
+    N = len(df)
+    stride = 1
+    if N > 10000:
+        stride = N // 5000
+    
+    # Extract only needed data with stride
+    df_plot = df[mod_cols].iloc[::stride].copy()
+    
+    # Add time column to small DF
+    if time_col:
+        df_plot['time'] = df[time_col].iloc[::stride].values / 60.0
     else:
-        df_plot = df_indexed
+        df_plot['time'] = df.index[::stride] / 60.0 if hasattr(df.index, 'is_numeric') else np.arange(0, N, stride) / 60.0
 
     x = df_plot['time']
     y_stack = [df_plot[col] for col in mod_cols]

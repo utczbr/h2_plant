@@ -164,8 +164,21 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
+        target_name: "SOEC_DRAIN_PUMP_1"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "SOEC_DRAIN_PUMP_1"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "SOEC_DRAIN_PUMP_1"
+      capacity_kg_h: 2000.0
+      target_pressure_pa: 100000.0
+      process_step: 45
+    connections:
+      - source_port: "water_out"
         target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_KOD_1"
+        target_port: "SOEC_DRAIN_PUMP_1"
         resource_type: "stream"
 
   - id: "SOEC_H2_Chiller_1"
@@ -192,8 +205,21 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
       - source_port: "liquid_drain"
+        target_name: "SOEC_DRAIN_PUMP_2"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "SOEC_DRAIN_PUMP_2"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "SOEC_DRAIN_PUMP_2"
+      capacity_kg_h: 2000.0
+      target_pressure_pa: 100000.0
+      process_step: 65
+    connections:
+      - source_port: "water_out"
         target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_KOD_2"
+        target_port: "SOEC_DRAIN_PUMP_2"
         resource_type: "stream"
 
   - id: "SOEC_H2_Cyclone_1"
@@ -234,6 +260,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      design_capacity_kw: 1800.0
       process_step: 101
     connections:
       - source_port: "fluid_out"
@@ -259,6 +286,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      design_capacity_kw: 1800.0
       process_step: 111
     connections:
       - source_port: "fluid_out"
@@ -297,6 +325,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      design_capacity_kw: 1800.0
       process_step: 121
     connections:
       - source_port: "fluid_out"
@@ -335,6 +364,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      design_capacity_kw: 1800.0
       process_step: 131
     connections:
       - source_port: "fluid_out"
@@ -373,6 +403,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      design_capacity_kw: 1800.0
       process_step: 141
     connections:
       - source_port: "fluid_out"
@@ -411,6 +442,7 @@ nodes:
     type: "DryCooler"
     params:
       target_temp_c: 40.0
+      design_capacity_kw: 1800.0
       process_step: 151
     connections:
       - source_port: "fluid_out"
@@ -442,6 +474,19 @@ nodes:
       process_step: 210
     connections:
       - source_port: "fluid_out"
+        target_name: "SOEC_H2_Cyclone_6"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "SOEC_H2_Cyclone_6"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
+      process_step: 215
+    connections:
+      - source_port: "outlet"
         target_name: "SOEC_H2_Coalescer_2"
         target_port: "inlet"
         resource_type: "stream"
@@ -615,7 +660,7 @@ nodes:
   - id: "SOEC_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2"]
+      source_ids: ["SOEC_DRAIN_PUMP_1", "SOEC_DRAIN_PUMP_2"]
     connections:
       - source_port: "outlet"
         target_name: "SOEC_Drain_Pump"
@@ -715,8 +760,9 @@ nodes:
     params:
       max_flow_kg_h: 4000.0
       inlet_pressure_bar: 1.0
-      outlet_pressure_bar: 2.3
-      max_temp_c: 270.0
+      outlet_pressure_bar: 5.0
+      max_temp_c: 260.0
+      temperature_limited: true
     connections:
       - source_port: "outlet"
         target_name: "SOEC_Steam_Drycooler"
@@ -726,7 +772,7 @@ nodes:
   - id: "SOEC_Steam_Drycooler"
     type: "DryCooler"
     params:
-      target_temp_c: 140.0
+      target_temp_c: 150.0
       system_group: "SOEC_Steam_Loop"
     connections:
       - source_port: "fluid_out"
@@ -740,7 +786,8 @@ nodes:
       max_flow_kg_h: 4000.0
       inlet_pressure_bar: 2.3
       outlet_pressure_bar: 5.0
-      max_temp_c: 270.0
+      max_temp_c: 260.0
+      temperature_limited: true
     connections:
       - source_port: "outlet"
         target_name: "SOEC_Feed_Attemperator"

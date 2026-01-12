@@ -93,7 +93,8 @@ class Chiller(Component):
         target_temp_k: float = 298.15,
         cop: float = 4.0,
         pressure_drop_bar: float = 0.2,
-        enable_dynamics: bool = False
+        enable_dynamics: bool = False,
+        use_central_utility: bool = True
     ):
         """
         Initialize the chiller.
@@ -118,6 +119,9 @@ class Chiller(Component):
         self.cop = cop
         self.pressure_drop_bar = pressure_drop_bar
         self.enable_dynamics = enable_dynamics
+        self.use_central_utility = use_central_utility
+        self.cooling_manager = None  # Set during initialize()
+        self.cop_nominal = cop  # Store nominal COP for correction
 
         self.logger = logging.getLogger(f"chiller.{component_id}")
 
@@ -166,6 +170,12 @@ class Chiller(Component):
             registry (ComponentRegistry): Central registry for component access.
         """
         super().initialize(dt, registry)
+        
+        # Look up CoolingManager if using centralized cooling
+        if self.use_central_utility:
+            self.cooling_manager = registry.get("cooling_manager") if registry else None
+            if not self.cooling_manager:
+                self.logger.warning(f"{self.component_id}: CoolingManager not found. Using fixed COP.")
 
     def _calculate_cooling_fallback(self) -> float:
         """
@@ -370,11 +380,25 @@ class Chiller(Component):
 
         cooling_load_kw = Q_dot_W / 1000.0
 
+        # Dynamic COP based on cooling water temperature (from CoolingManager)
+        # Physics: Carnot Efficiency degradation as condenser temp rises
+        # COP approx = COP_nominal * (1 - k * (T_condenser - T_design))
+        cw_temp_c = 25.0  # Default design condition
+        if self.cooling_manager:
+            cw_temp_c = self.cooling_manager.cw_supply_temp_c
+        
+        cop_correction = 1.0 - 0.03 * (cw_temp_c - 25.0)
+        actual_cop = max(1.5, self.cop_nominal * cop_correction)
+        self.cop = actual_cop  # Update for state reporting
+
         # COP-based electrical consumption
         if self.cop > 0:
             batch_electrical_kw = abs(cooling_load_kw) / self.cop
         else:
             batch_electrical_kw = 0.0
+        
+        # Heat rejected to cooling water
+        batch_heat_rejected_kw = abs(cooling_load_kw) + batch_electrical_kw
 
         # Create outlet stream with flash condensation
         # Flash calculation: determine how much water condenses at outlet T/P
@@ -508,11 +532,18 @@ class Chiller(Component):
         # So positive means heat removed.
         self.sensible_heat_kw = max(0.0, self.cooling_load_kw - self.latent_heat_kw)
 
-        # Accumulate timestep totals
         self.timestep_cooling_load_kw += cooling_load_kw
-        batch_heat_rejected = abs(cooling_load_kw) + batch_electrical_kw
-        self.timestep_heat_rejected_kw += batch_heat_rejected
+        self.timestep_heat_rejected_kw += batch_heat_rejected_kw
         self.timestep_electrical_power_kw += batch_electrical_kw
+
+        # Register heat rejection with CoolingManager (centralized utility mode)
+        if self.cooling_manager:
+            # Estimate CW flow needed for 10K delta T
+            cw_flow_kg_s = batch_heat_rejected_kw / (4.18 * 10.0) if batch_heat_rejected_kw > 0 else 0.0
+            self.cooling_manager.register_cw_load(
+                duty_kw=batch_heat_rejected_kw,
+                flow_kg_s=cw_flow_kg_s
+            )
 
         # Update public state
         self.cooling_load_kw = self.timestep_cooling_load_kw

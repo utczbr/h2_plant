@@ -9,6 +9,68 @@
 
 nodes:
   # =================================================================================
+  # WATER SUPPLY CHAIN (Push Architecture with Feedback Control)
+  # =================================================================================
+  # Architecture: Source -> Purifier -> Tank -> Pumps -> Mixers
+  # Tank sends control_signal to Source (Zone A/B/C based on fill level)
+  # Mixers send demand_signal to Tank (PEM, SOEC channels)
+
+  # 0.1 External Water Source (Municipal/Reservoir)
+  - id: "Water_Source"
+    type: "ExternalWaterSource"
+    params:
+      mode: "external_control"
+      flow_rate_kg_h: 12000.0  # Max capacity
+      pressure_bar: 5.0
+      temperature_c: 25.0
+      system_group: "Water_Supply"
+      process_step: 1
+    connections:
+      - source_port: "water_out"
+        target_name: "Water_Purifier"
+        target_port: "raw_water_in"
+        resource_type: "stream"
+
+  # 0.2 Reverse Osmosis Water Purifier
+  - id: "Water_Purifier"
+    type: "WaterPurifier"
+    params:
+      max_flow_kg_h: 12000.0  # Rated @ 25°C
+      recovery_ratio: 0.75
+      system_group: "Water_Supply"
+      process_step: 2
+    connections:
+      - source_port: "ultrapure_out"
+        target_name: "UltraPure_Tank"
+        target_port: "ultrapure_in"
+        resource_type: "stream"
+
+  # 0.3 Ultra-Pure Water Tank (Multi-Channel Distribution)
+  - id: "UltraPure_Tank"
+    type: "UltraPureWaterTank"
+    params:
+      capacity_kg: 20000.0
+      nominal_production_kg_h: 10000.0
+      initial_fill_fraction: 0.7
+      system_group: "Water_Supply"
+      process_step: 3
+    connections:
+      # Control signal to upstream source (feedback)
+      - source_port: "control_signal"
+        target_name: "Water_Source"
+        target_port: "control_signal"
+        resource_type: "signal"
+      # Water distribution to loops (no ATR channel)
+      - source_port: "water_out_SOEC"
+        target_name: "SOEC_Makeup_Mixer"
+        target_port: "makeup_water_in"
+        resource_type: "stream"
+      - source_port: "water_out_PEM"
+        target_name: "PEM_Makeup_Mixer"
+        target_port: "makeup_water_in"
+        resource_type: "stream"
+
+  # =================================================================================
   # MAIN GAS TRAIN: SOEC -> SEPARATION -> COMPRESSION -> PURIFICATION
   # =================================================================================
 
@@ -83,8 +145,21 @@ nodes:
         target_port: "fluid_in"
         resource_type: "stream"
       - source_port: "liquid_drain"
+        target_name: "SOEC_DRAIN_PUMP_1"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "SOEC_DRAIN_PUMP_1"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "SOEC_DRAIN_PUMP_1"
+      capacity_kg_h: 2000.0
+      target_pressure_pa: 100000.0
+      process_step: 45
+    connections:
+      - source_port: "water_out"
         target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_KOD_1"
+        target_port: "SOEC_DRAIN_PUMP_1"
         resource_type: "stream"
 
   - id: "SOEC_H2_Chiller_1"
@@ -111,8 +186,21 @@ nodes:
         target_port: "inlet"
         resource_type: "stream"
       - source_port: "liquid_drain"
+        target_name: "SOEC_DRAIN_PUMP_2"
+        target_port: "water_in"
+        resource_type: "stream"
+
+  - id: "SOEC_DRAIN_PUMP_2"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "SOEC_DRAIN_PUMP_2"
+      capacity_kg_h: 2000.0
+      target_pressure_pa: 100000.0
+      process_step: 65
+    connections:
+      - source_port: "water_out"
         target_name: "SOEC_Drain_Mixer"
-        target_port: "SOEC_H2_KOD_2"
+        target_port: "SOEC_DRAIN_PUMP_2"
         resource_type: "stream"
 
   - id: "SOEC_H2_Cyclone_1"
@@ -361,6 +449,19 @@ nodes:
       process_step: 210
     connections:
       - source_port: "fluid_out"
+        target_name: "SOEC_H2_Cyclone_6"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  - id: "SOEC_H2_Cyclone_6"
+    type: "HydrogenMultiCyclone"
+    params:
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
+      process_step: 215
+    connections:
+      - source_port: "outlet"
         target_name: "SOEC_H2_Coalescer_2"
         target_port: "inlet"
         resource_type: "stream"
@@ -534,7 +635,7 @@ nodes:
   - id: "SOEC_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["SOEC_H2_KOD_1", "SOEC_H2_KOD_2"]
+      source_ids: ["SOEC_DRAIN_PUMP_1", "SOEC_DRAIN_PUMP_2"]
     connections:
       - source_port: "outlet"
         target_name: "SOEC_Drain_Pump"
@@ -581,15 +682,20 @@ nodes:
         resource_type: "stream"
   
   - id: "SOEC_Makeup_Mixer"
-    type: "MakeupMixer"
+    type: "SignalMakeupMixer"
     params:
       target_flow_kg_h: 3600.0  # SOEC theoretical demand
       makeup_temp_c: 25.0
+      system_group: "SOEC_Water_Loop"
     connections:
-      - source_port: "water_out"
+      - source_port: "mixture_out"
         target_name: "SOEC_Water_Splitter"
         target_port: "inlet"
         resource_type: "stream"
+      - source_port: "demand_signal"
+        target_name: "UltraPure_Tank"
+        target_port: "demand_SOEC"
+        resource_type: "signal"
 
   # Split: 91.54% to Steam Boiler, 8.46% to Bypass (Attemperator)
   - id: "SOEC_Water_Splitter"
@@ -674,11 +780,17 @@ nodes:
   # --- RECOMBINATION & FEED ---
 
   - id: "SOEC_Feed_Attemperator"
-    type: "WaterMixer" # Use WaterMixer or Mixer. WaterMixer handles simple P mixing well.
+    type: "Attemperator"
     params:
-      outlet_pressure_kpa: 500.0 # 5 bar
+      target_temp_k: 430.05  # 156.9°C (5°C superheat at 5.0 bar)
+      min_superheat_delta_k: 5.0
+      pipe_diameter_m: 0.1541  # 6" Schedule 40
+      volume_m3: 0.050  # Adj. to 0.035m3 for <0.1s residence time
+      pressure_drop_bar: 0.5  # Venturi nozzle pressure drop
+      heat_loss_kw: 0.0
+      max_water_flow_kg_h: 500.0
     connections:
-      - source_port: "outlet"
+      - source_port: "steam_out"
         target_name: "SOEC_Cluster"
         target_port: "steam_in"
         resource_type: "stream"
@@ -733,14 +845,20 @@ nodes:
         resource_type: "stream"
 
   - id: "PEM_Makeup_Mixer"
-    type: "MakeupMixer"
+    type: "SignalMakeupMixer"
     params:
       target_flow_kg_h: 4000.0  # PEM theoretical demand (~5 MW)
+      makeup_temp_c: 20.0
+      system_group: "PEM_Water_Loop"
     connections:
-      - source_port: "water_out"
+      - source_port: "mixture_out"
         target_name: "PEM_Water_Pump"
         target_port: "water_in"
         resource_type: "stream"
+      - source_port: "demand_signal"
+        target_name: "UltraPure_Tank"
+        target_port: "demand_PEM"
+        resource_type: "signal"
 
   - id: "PEM_Water_Pump"
     type: "WaterPumpThermodynamic"
@@ -1208,7 +1326,7 @@ nodes:
     type: "DischargeStation"
     params:
       station_id: 1
-      n_stations: 5  # Simulating 5 identical truck bays
+      n_stations: 14  # Simulating 14 identical truck bays
       truck_capacity_kg: 280.0    # Reference: 280kg
       delivery_pressure_bar: 500.0
       max_fill_rate_kg_min: 1.5  # Reference: 90 kg/h

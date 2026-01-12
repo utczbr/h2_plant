@@ -201,6 +201,9 @@ class DetailedTankArray(Component):
             val = stream.mass_flow_kg_h if stream else 0.0
             if val is not None:
                 self._h2_in_rate = float(val)
+                # DEBUG: Trace inflow (commented after verification)
+                # if port_name == 'h2_in':
+                #     logger.info(f"DetailedTankArray({self.component_id}) RECEIVE h2_in: flow={self._h2_in_rate:.2f} kg/h")
                 return self._h2_in_rate
             else:
                 logger.warning(f"DetailedTankArray: Stream on port '{port_name}' has None mass_flow_kg_h. Defaulting to 0.0.")
@@ -243,6 +246,7 @@ class DetailedTankArray(Component):
         # 2. Distribute Incoming Hydrogen
         if self._h2_in_rate > 0:
             step_mass = self._h2_in_rate * self.dt
+            # logger.info(f"DetailedTankArray STEP: h2_in={self._h2_in_rate}, dt={self.dt}, adding {step_mass:.4f} kg")
             overflow = self._distribute_filling(step_mass)
             if overflow > 0:
                 logger.warning(f"DetailedTankArray: {overflow:.2f} kg overflow (all tanks full)")
@@ -253,8 +257,14 @@ class DetailedTankArray(Component):
         
         if self._demand_signal_rate > 0:
             requested_mass = self._demand_signal_rate * self.dt
+            # logger.info(f"DetailedTankArray STEP: demand={self._demand_signal_rate}, discharging {requested_mass:.4f} kg")
             discharge_mass, avg_pressure = self._distribute_emptying(requested_mass)
             self._last_discharge_pressure_pa = avg_pressure
+
+        # Log total mass at end of step (commented after verification)
+        # total_mass = sum(t.mass_kg for t in self.tanks)
+        # if self._h2_in_rate > 0 or self._demand_signal_rate > 0:
+        #      logger.info(f"DetailedTankArray STEP END: Mass={total_mass:.2f} kg, P_avg={self.avg_pressure_bar:.1f} bar")
         
         # 4. Buffer Output Stream
         self._h2_out_stream = Stream(

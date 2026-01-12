@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, TYPE_CHECKING, List, Tuple
 import numpy as np
+import pandas as pd
+from pathlib import Path
 import logging
 
 from h2_plant.control.dispatch import (
@@ -281,7 +283,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'cumulative_bop_cost_eur': np.zeros(total_steps, dtype=np.float64),
                 
                 # --- DUAL PPA PRICING ---
-                'ppa_price_effective_eur_mwh': np.zeros(total_steps, dtype=np.float64)
+                'ppa_price_effective_eur_mwh': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- CENTRALIZED COOLING UTILITY ---
+                'cooling_manager_glycol_supply_temp_c': np.zeros(total_steps, dtype=np.float64),
+                'cooling_manager_glycol_duty_kw': np.zeros(total_steps, dtype=np.float64),
+                'cooling_manager_cw_supply_temp_c': np.zeros(total_steps, dtype=np.float64),
+                'cooling_manager_cw_duty_kw': np.zeros(total_steps, dtype=np.float64)
             }
 
         # 2. Identify Components & Pre-Bind Arrays
@@ -416,7 +424,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         
         # Scan registry for storage components
         for cid, comp in registry.list_components():
+            logger.debug(f"Storage APC Scan: {cid} type={type(comp).__name__}")
             if isinstance(comp, (TankArray, H2StorageTankEnhanced, DetailedTankArray)):
+                logger.info(f"Storage APC: Found storage component {cid} (type={type(comp).__name__})")
                 self._storage_components.append(comp)
 
         # Calculate Total System Capacity (Max Mass in kg)
@@ -440,11 +450,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             elif isinstance(comp, DetailedTankArray):
                 # Calculate max mass via Ideal Gas Law at max pressure
                 try:
-                    V = comp.volume_per_tank_m3
+                    V = comp.volume_per_tank
                     n = comp.n_tanks
-                    P_max = comp.max_pressure_bar * 1e5
-                    R = 4124.0 # H2
-                    T = 293.15 # 20C (Approx ambient)
+                    P_max = comp.max_pressure_pa  # Already in Pa
+                    R = 4124.0  # H2 specific gas constant (J/(kg·K))
+                    T = comp.ambient_temp_k  # Use configured ambient temperature
                     cap = n * (P_max * V) / (R * T)
                 except Exception:
                     cap = 0.0
@@ -489,10 +499,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             if hasattr(comp, 'get_inventory_kg'):
                 current_mass += comp.get_inventory_kg()
             elif hasattr(comp, 'get_total_mass'): # DetailedTankArray
-                current_mass += comp.get_total_mass()
+                val = comp.get_total_mass()
+                # logger.info(f"APC Mass Check: {comp.component_id} via get_total_mass() = {val}")
+                current_mass += val
             elif hasattr(comp, 'masses'):  # TankArray direct
                 current_mass += np.sum(comp.masses)
             elif hasattr(comp, 'mass_kg'):  # Enhanced direct
+                val = comp.mass_kg
+                logger.info(f"APC Mass Check: {comp.component_id} via mass_kg = {val} (Typo/Wrong Branch?)")
                 current_mass += comp.mass_kg
 
         soc = current_mass / self._storage_total_capacity_kg
@@ -660,6 +674,10 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._ctrl_state['prev_soc'] = soc
         
         action_factor = self._calculate_action_factor(zone, soc, dsoc_dt)
+
+        # APC DEBUG: Commented after verification
+        # if True:
+        #      logger.info(f\"APC DEBUG: Step={step_idx}, Mass={current_mass:.1f}kg, SOC={soc*100:.2f}%, Zone={zone}, Factor={action_factor:.4f}, dSOC/dt={dsoc_dt:.5f}/h\")
 
         # E. Modulate Power (Apply action factor to reduce production)
         P_soec_final = result.P_soec * action_factor
@@ -890,6 +908,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     key = f"soec_module_powers_{i+1}"
                     if key in self._history: self._history[key][step_idx] = power_mw
 
+        # 2. CoolingManager State Recording
+        cooling_manager = self._registry.get('cooling_manager') if self._registry else None
+        if cooling_manager:
+            self._history['cooling_manager_glycol_supply_temp_c'][step_idx] = getattr(cooling_manager, 'glycol_supply_temp_c', 0.0)
+            self._history['cooling_manager_glycol_duty_kw'][step_idx] = getattr(cooling_manager, 'glycol_duty_kw', 0.0)
+            self._history['cooling_manager_cw_supply_temp_c'][step_idx] = getattr(cooling_manager, 'cw_supply_temp_c', 0.0)
+            self._history['cooling_manager_cw_duty_kw'][step_idx] = getattr(cooling_manager, 'cw_duty_kw', 0.0)
+
         # 2. Optimized Component Recording Loop
         # Iterate over pre-bound recorders (O(N) where N is component count, no string hashing)
         for rec in self._recorders:
@@ -963,6 +989,23 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             result[k] = v[:actual_steps]
         
         return result
+
+    def export_history_to_csv(self, output_path: Path) -> bool:
+        """
+        Stream history to CSV if using chunked storage.
+        Returns True if streamed, False if not (caller should use get_history).
+        """
+        if self._use_chunked_history and self._history_manager:
+            self._history_manager.export_to_csv(output_path)
+            return True
+        return False
+        
+    def get_matrix_history(self):
+        """Return the matrix history (non-scalar data) separately."""
+        # Ensure we return a copy or the dict itself.
+        # Check if we need to slice it to actual steps
+        actual_steps = self._state.step_idx
+        return {k: v[:actual_steps] for k, v in self._matrix_history.items()}
 
     def _find_soec(self, registry):
         for _, comp in registry.list_components():

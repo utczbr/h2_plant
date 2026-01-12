@@ -371,6 +371,42 @@ class ChunkedHistoryManager:
         
         return result
     
+    def export_to_csv(self, output_path: Path) -> None:
+        """
+        Stream history to CSV file chunk by chunk to keep memory usage low.
+        Replaces the need to load the full DataFrame into memory.
+        
+        Args:
+            output_path: Path to the output CSV file
+        """
+        self.finalize()
+        chunk_files = sorted(self.chunks_dir.glob("chunk_*.parquet"))
+        
+        if not chunk_files:
+            logger.warning("No chunks to export")
+            return
+
+        logger.info(f"Streaming {len(chunk_files)} chunks to {output_path} (additive write)...")
+        
+        # Write first chunk with header
+        first_chunk = True
+        for chunk_file in chunk_files:
+            try:
+                df = pd.read_parquet(chunk_file)
+                mode = 'w' if first_chunk else 'a'
+                header = first_chunk
+                
+                df.to_csv(output_path, mode=mode, header=header, index=False)
+                
+                first_chunk = False
+                del df
+                gc.collect()
+            except Exception as e:
+                logger.error(f"Failed to export chunk {chunk_file}: {e}")
+                raise
+        
+        logger.info(f"Streamed export complete: {output_path}")
+
     def get_column(self, column: str) -> np.ndarray:
         """
         Load a single column as NumPy array.

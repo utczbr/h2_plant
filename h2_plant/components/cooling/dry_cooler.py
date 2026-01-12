@@ -89,7 +89,7 @@ class DryCooler(Component):
         dc_effectiveness (float): Realized effectiveness $\varepsilon_{DC}$ [0-1].
     """
 
-    def __init__(self, component_id: str = "dry_cooler", **kwargs) -> None:
+    def __init__(self, component_id: str = "dry_cooler", use_central_utility: bool = True, **kwargs) -> None:
         """
         Initialize the DryCooler component.
 
@@ -99,13 +99,14 @@ class DryCooler(Component):
 
         Args:
             component_id (str): Unique identifier for this component instance.
-        Args:
-            component_id (str): Unique identifier for this component instance.
                 Used for logging and registry lookup. Default: "dry_cooler".
+            use_central_utility (bool): If True, use CoolingManager for glycol.
             **kwargs: Configuration overrides (e.g., target_outlet_temp_c).
         """
         super().__init__()
         self.component_id = component_id
+        self.use_central_utility = use_central_utility
+        self.cooling_manager = None  # Set during initialize()
 
         # Process stream state
         self.fluid_type = "Unknown"
@@ -161,6 +162,12 @@ class DryCooler(Component):
             registry (ComponentRegistry): Central services provider.
         """
         super().initialize(dt, registry)
+        
+        # Look up CoolingManager if using centralized cooling
+        if self.use_central_utility:
+            self.cooling_manager = registry.get("cooling_manager") if registry else None
+            if not self.cooling_manager:
+                logger.warning(f"{self.component_id}: CoolingManager not found. Using local loop.")
 
     def _configure_geometry(self, stream: Stream) -> None:
         """
@@ -301,7 +308,12 @@ class DryCooler(Component):
         # Counter-flow achieves higher effectiveness than parallel-flow
         # for the same NTU, making it preferred for process applications.
         T_gas_in_k = self.inlet_stream.temperature_k
-        T_glycol_in_k = self.t_glycol_cold_c + 273.15
+        
+        # Get glycol inlet temperature from CoolingManager or local state
+        if self.cooling_manager:
+            T_glycol_in_k = self.cooling_manager.glycol_supply_temp_c + 273.15
+        else:
+            T_glycol_in_k = self.t_glycol_cold_c + 273.15
 
         C_min_tqc = min(C_hot_gas, C_coolant)
         C_max_tqc = max(C_hot_gas, C_coolant)
@@ -332,6 +344,14 @@ class DryCooler(Component):
             T_glycol_out_k = T_glycol_in_k
             
         self.t_glycol_hot_c = T_glycol_out_k - 273.15
+
+        # Register load with CoolingManager (centralized utility mode)
+        if self.cooling_manager:
+            self.cooling_manager.register_glycol_load(
+                duty_kw=self.tqc_duty_kw,
+                flow_kg_s=self.glycol_flow_kg_s,
+                return_temp_c=self.t_glycol_hot_c
+            )
 
         # ================================================================
         # Stage 2: DC (Cross-Flow Air Cooler)

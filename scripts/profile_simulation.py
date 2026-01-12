@@ -9,56 +9,29 @@ import cProfile
 import pstats
 from io import StringIO
 import time
-
-def run_profiled_simulation():
-    """Run a short simulation with profiling enabled."""
-    from h2_plant.run_integrated_simulation import main
-    
-    # Override to run shorter simulation
-    import h2_plant.run_integrated_simulation as sim_module
-    
-    # Run simulation
-    main()
+from h2_plant.run_integrated_simulation import run_with_dispatch_strategy
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("PERFORMANCE PROFILING - 60 step benchmark")
+    print("PERFORMANCE PROFILING - 1 Hour Simulation Benchmark")
     print("=" * 60)
-    
-    # Time the imports first
-    t0 = time.perf_counter()
-    from h2_plant.simulation.engine import SimulationEngine
-    from h2_plant.core.plant_graph_builder import PlantGraphBuilder
-    import_time = time.perf_counter() - t0
-    print(f"Import time: {import_time:.2f}s")
-    
-    # Load topology
-    t0 = time.perf_counter()
-    builder = PlantGraphBuilder('scenarios/plant_topology.yaml')
-    plant = builder.build()
-    build_time = time.perf_counter() - t0
-    print(f"Build time: {build_time:.2f}s")
-    
-    # Initialize engine
-    t0 = time.perf_counter()
-    engine = SimulationEngine(plant)
-    init_time = time.perf_counter() - t0
-    print(f"Engine init time: {init_time:.2f}s")
-    
-    # Profile the step execution
-    print("\nProfiling 60 simulation steps...")
     
     profiler = cProfile.Profile()
     profiler.enable()
     
     t0 = time.perf_counter()
-    engine.run(steps=60)
+    
+    # Run using the standard entry point to ensure correct setup
+    run_with_dispatch_strategy(
+        scenarios_dir='scenarios',
+        hours=1  # Short duration for benchmarking
+    )
+    
     run_time = time.perf_counter() - t0
     
     profiler.disable()
     
-    steps_per_sec = 60 / run_time
-    print(f"\nRun time: {run_time:.2f}s ({steps_per_sec:.1f} steps/sec)")
+    print(f"\nTotal Run time: {run_time:.2f}s")
     
     # Get stats
     s = StringIO()

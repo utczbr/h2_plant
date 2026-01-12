@@ -136,11 +136,11 @@ def run_scenario(scenario: dict) -> dict:
     Args:
         scenario (dict): Scenario definition with 'name' and 'topology' keys.
         
-    Returns:
-        dict: Summary metrics for the scenario.
+    dict: Summary metrics for the scenario.
     """
     name = scenario["name"]
     topology_file = scenario["topology"]
+    override_hours = scenario.get("hours")
     
     print(f"\n=== Running Scenario: {name} ===")
     print(f"Topology: {topology_file}")
@@ -150,7 +150,7 @@ def run_scenario(scenario: dict) -> dict:
     loader = ConfigLoader(scenarios_dir)
     context = loader.load_context(topology_file=topology_file)
     
-    hours = context.simulation.duration_hours
+    hours = override_hours if override_hours is not None else context.simulation.duration_hours
     
     # 2. Build Component Graph
     builder = PlantGraphBuilder(context)
@@ -204,56 +204,73 @@ def run_scenario(scenario: dict) -> dict:
         dispatch_strategy=dispatch_strategy
     )
 
-    # 7. Set up history collection and run the simulation
-    component_history_records = []
-    def collect_component_states(hour: float):
-        """Callback to collect detailed state from all components at each step."""
-        # The engine runs at 1-minute steps.
-        step_idx = int(round(hour * 60))
-        record = {'minute': step_idx}
-        for comp_id, comp in registry.list_components():
-             if hasattr(comp, 'get_state'):
-                try:
-                    state = comp.get_state()
-                    if state: # Ensure state is not None
-                        for k, v in state.items():
-                            record[f"{comp_id}_{k}"] = v
-                except Exception:
-                    pass # Ignore components that fail get_state
-        component_history_records.append(record)
-
     engine.set_dispatch_data(prices, wind)
     engine.initialize()
-    engine.initialize_dispatch_strategy(context=context, total_steps=total_steps)
-    engine.set_callbacks(post_step=collect_component_states)
+    
+    # Use chunked history for simulations > 7 days (memory optimization)
+    # Threshold: 7 days × 24 hours × 60 minutes = 10,080 steps
+    use_chunked_history = total_steps > 10_080
+    engine.initialize_dispatch_strategy(context=context, total_steps=total_steps, use_chunked_history=use_chunked_history)
 
     print(f"Running simulation for {hours} hours ({total_steps} steps)...")
     engine.run()
     print("Simulation finished.")
 
-    # 8. Merge dispatch history with detailed component history
-    dispatch_history_df = pd.DataFrame(dispatch_strategy.get_history())
-    component_history_df = pd.DataFrame(component_history_records)
+    # Define output directories
+    output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")
+    graphs_dir = os.path.join(output_dir, "graphs")
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(graphs_dir, exist_ok=True)
 
-    # Merge dataframes to create a comprehensive history
-    if not component_history_df.empty:
-        # Ensure 'minute' column is of the same type for merging
-        dispatch_history_df['minute'] = dispatch_history_df['minute'].astype(int)
-        component_history_df['minute'] = component_history_df['minute'].astype(int)
-        history_df = pd.merge(dispatch_history_df, component_history_df, on='minute', how='outer')
-    else:
-        history_df = dispatch_history_df
-
-    history_dict = history_df.to_dict(orient='list')
-
+    # 8. Export History to CSV
+    # PRIORITY: Stream to CSV if supported (Memory Efficient)
+    history_path = os.path.join(output_dir, "simulation_history.csv")
+    history_exported = False
+    
+    if hasattr(dispatch_strategy, 'export_history_to_csv'):
+        if dispatch_strategy.export_history_to_csv(Path(history_path)):
+            print(f"Streamed history to {history_path} (Additive Mode)")
+            history_exported = True
+            
+    # If not streamed, load into memory and save standard way
+    history_dict = None
+    if not history_exported:
+        history_dict = dispatch_strategy.get_history()
+        history_df = pd.DataFrame(history_dict)
+        if 'minute' in history_df.columns:
+            history_df['minute'] = history_df['minute'].astype(int)
+        
+        history_df.to_csv(history_path, index=False)
+        print(f"Saved history to {history_path}")
+        
+    # 9. Generate Graphs (Requires Data in Memory)
+    # If we streamed for memory reasons, we might skip graphs or try to load optimized
     from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY, GraphLibrary
     from h2_plant.visualization import static_graphs
-    from h2_plant.visualization.dashboard_generator import DashboardGenerator
+    
+    # Reload history_dict if we streamed and it's missing (needed for graphs)
+    if history_dict is None:
+        # OPTIONAL: Skip graphs if memory is tight? 
+        # For now, let's try to load it back from the CSV or get_history() 
+        # but warn about memory
+        try:
+             # Just use get_history() which will concat chunks
+             # This might spike RAM, but it's the only way to get graphs currently
+             print("Loading history for graph generation...")
+             history_dict = dispatch_strategy.get_history()
+             history_df = pd.DataFrame(history_dict) # Needed for merge later if used
+        except Exception as e:
+             print(f"Skipping graph generation due to memory constraints: {e}")
+             history_dict = {}
+
+    # Convert to dict format if we have a DF
+    if history_dict is None and 'history_df' in locals():
+         history_dict = history_df.to_dict(orient='list')    
     
     # Get topology order for summary table generation
     topo_order = [node.id for node in context.topology.nodes] if context.topology and context.topology.nodes else []
 
-    # 9. Print Enhanced Stream Summary Table
+    # 10. Print Enhanced Stream Summary Table
     from h2_plant.reporting.stream_table import print_stream_summary_table
     
     # Build connection map: source_id -> list of target_ids
@@ -265,19 +282,20 @@ def run_scenario(scenario: dict) -> dict:
     
     profile_data = print_stream_summary_table(components, topo_order)
 
-    # 10. Save History and Generate Graphs
-    output_dir = os.path.join(BASE_DIR, f"simulation_output/{name}")
-    graphs_dir = os.path.join(output_dir, "graphs")
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(graphs_dir, exist_ok=True)
+    # 11. Save History and Generate Graphs
+    # (Output path created earlier)
     
-    history_path = os.path.join(output_dir, "simulation_history.csv")
-    history_df.to_csv(history_path, index=False)
-    print(f"Saved history to {history_path}")
-
-    # Generate Graphs via Catalog
+    # Graphs generation
     print("Generating graphs...")
+    if not history_dict:
+        print("  Skipping graphs (history streamed to disk, not in memory)")
+    
     try:
+        if not history_dict:
+            # Create a dummy empty dict to allow flow to proceed to 'enable_graphs' check
+            # effectively minimizing logic changes while skipping actual graph generation
+            pass 
+        
         # 1. Apply Configuration
         enabled_graphs_config = load_enabled_graphs()
         if enabled_graphs_config is not None:
@@ -396,6 +414,12 @@ Examples:
         default=None,
         help='Path to specific topology YAML file. If omitted, runs all topologies in scenarios/topologies/'
     )
+    parser.add_argument(
+        '--hours',
+        type=int,
+        default=None,
+        help='Override simulation duration in hours'
+    )
     
     args = parser.parse_args()
     
@@ -409,7 +433,8 @@ Examples:
         
         scenarios = [{
             "name": Path(topology_path).stem,
-            "topology": topology_path
+            "topology": topology_path,
+            "hours": args.hours
         }]
     else:
         # Discover all topologies
@@ -419,6 +444,7 @@ Examples:
             sys.exit(1)
         print(f"Discovered {len(scenarios)} topology file(s):")
         for s in scenarios:
+            s["hours"] = args.hours
             print(f"  - {s['name']}")
     
     # Run scenarios

@@ -249,6 +249,12 @@ visualization:
         - title: "O2 Train Water Removal (PEM Only)"
           components: ["PEM_O2_KOD_1", "PEM_O2_KOD_2", "PEM_O2_Coalescer_1"]
 
+    central_cooling_performance:
+      enabled: true
+      plots:
+        - title: "Central Cooling Performance (24h Diurnal)"
+          components: []  # Uses fixed CoolingManager columns
+
     # 7. PROCESS TRAIN PROFILES
     # ----------------------------------------------------------------------
     process_train_profile:

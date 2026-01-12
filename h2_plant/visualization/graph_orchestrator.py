@@ -51,6 +51,7 @@ class GraphOrchestrator:
             # Thermal & Separation
             'thermal_load_breakdown': thermal.plot_load_breakdown,
             'water_removal_bar': separation.plot_water_removal,
+            'central_cooling_performance': thermal.plot_central_cooling_performance,
             
             # Economics/Dispatch
             'dispatch_stack': economics.plot_dispatch,

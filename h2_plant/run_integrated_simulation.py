@@ -169,8 +169,9 @@ def run_with_dispatch_strategy(
     logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
     results = engine.run(end_hour=hours)
 
-    # Get history from dispatch strategy
-    history = engine.get_dispatch_history()
+    # Get history from dispatch strategy (MOVED to later to allow for streaming export)
+    # history = engine.get_dispatch_history() 
+    history = None # Placeholder
 
     # Print dispatch summary
     if dispatch_strategy:
@@ -221,33 +222,75 @@ def run_with_dispatch_strategy(
         csv_path = output_dir / "simulation_history.csv"
         npz_path = output_dir / "simulation_matrices.npz"
         
-        # Split history into 1D (scalar) and >1D (matrix)
-        scalar_history = {}
-        matrix_history = {}
+        # Save Scalars to CSV (Additive/Streaming Priority)
+        # ---------------------------------------------------------------------
+        # If dispatch strategy supports streaming export (ChunkedHistoryManager),
+        # use it to save memory.
+        exported_via_stream = False
+        if hasattr(dispatch_strategy, 'export_history_to_csv'):
+            try:
+                if dispatch_strategy.export_history_to_csv(csv_path):
+                    logger.info(f"Streamed history to {csv_path} (Additive Mode)")
+                    exported_via_stream = True
+            except Exception as e:
+                logger.error(f"Streaming export failed: {e}. Falling back to standard write.")
         
-        for k, v in history.items():
-            if isinstance(v, np.ndarray) and v.ndim > 1:
-                matrix_history[k] = v
-            else:
-                scalar_history[k] = v
-        
-        # Save Scalars to CSV
-        df_history = pd.DataFrame(scalar_history)
-        logger.info(f"Writing CSV: {len(df_history)} rows, {len(df_history.columns)} columns...")
-        df_history.to_csv(csv_path, index=False)
-        
-        # Force sync to disk to ensure file is complete before graph generation
+        # Fallback / Standard Write
+        if not exported_via_stream:
+            # Split history into 1D (scalar) and >1D (matrix)
+            scalar_history = {}
+            matrix_history = {}
+            
+            for k, v in history.items():
+                if isinstance(v, np.ndarray) and v.ndim > 1:
+                    matrix_history[k] = v
+                else:
+                    scalar_history[k] = v
+
+            df_history = pd.DataFrame(scalar_history)
+            logger.info(f"Writing CSV: {len(df_history)} rows, {len(df_history.columns)} columns...")
+            df_history.to_csv(csv_path, index=False)
+            
+            file_size_mb = csv_path.stat().st_size / (1024 * 1024)
+            logger.info(f"Simulation history exported to: {csv_path} ({file_size_mb:.1f} MB)")
+        else:
+             # If streamed, we still need to separate matrices if any exist in the return dict
+             # The ChunkedHistoryManager might export everything to CSV, but matrices 
+             # are usually stored in 'matrix_history' separate from the chunked manager?
+             # EngineDispatchStrategy deals with this.
+             
+             # Fetch ONLY matrices if possible to save RAM
+             if hasattr(dispatch_strategy, 'get_matrix_history'):
+                 matrix_history = dispatch_strategy.get_matrix_history()
+             else:
+                 # Fallback: We might have to load full history to extract matrices?
+                 # Or just skip matrix export if we are strictly in low-memory mode.
+                 pass
+
+        # Force sync to disk
         import os
-        with open(csv_path, 'r') as f:
-            os.fsync(f.fileno())
-        
-        file_size_mb = csv_path.stat().st_size / (1024 * 1024)
-        logger.info(f"Simulation history exported to: {csv_path} ({file_size_mb:.1f} MB)")
+        if csv_path.exists():
+             with open(csv_path, 'r') as f:
+                os.fsync(f.fileno())
         
         # Save Matrices to NPZ
         if matrix_history:
              np.savez_compressed(npz_path, **matrix_history)
              logger.info(f"Simulation matrices exported to: {npz_path}")
+
+        # Visualization Generation (Requires Data)
+        # ---------------------------------------------------------------------
+        # If we streamed, 'history' is currently None. We try to load it now for graphs.
+        if history is None:
+             try:
+                 logger.info("loading history for visualization...")
+                 history = engine.get_dispatch_history()
+             except Exception as e:
+                 logger.warning(f"Could not load history for visualization (likely OOM): {e}")
+                 history = {} # Empty dict to skip graphs
+        
+        # Proceed to graphing with whatever 'history' we obtained
+        # (Remaining code expects 'history' dict)
              
     except Exception as e:
         logger.warning(f"Failed to export history CSV/NPZ: {e}")
