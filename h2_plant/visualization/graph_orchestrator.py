@@ -37,6 +37,12 @@ class GraphOrchestrator:
     """
     
     def __init__(self, output_dir: Path):
+        import warnings
+        warnings.warn(
+            "GraphOrchestrator is deprecated. Use h2_plant.visualization.unified_executor.UnifiedGraphExecutor instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -50,6 +56,7 @@ class GraphOrchestrator:
             
             # Thermal & Separation
             'thermal_load_breakdown': thermal.plot_load_breakdown,
+            'thermal_time_series': thermal.plot_thermal_time_series,
             'water_removal_bar': separation.plot_water_removal,
             'central_cooling_performance': thermal.plot_central_cooling_performance,
             

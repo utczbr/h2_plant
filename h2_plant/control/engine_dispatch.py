@@ -42,6 +42,7 @@ from h2_plant.components.cooling.dry_cooler import DryCooler
 from h2_plant.components.thermal.heat_exchanger import HeatExchanger
 from h2_plant.components.thermal.electric_boiler import ElectricBoiler
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
+from h2_plant.components.water.water_pump import WaterPumpThermodynamic
 from h2_plant.components.storage.h2_tank import TankArray
 from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
 from h2_plant.components.storage.detailed_tank import DetailedTankArray
@@ -70,6 +71,7 @@ class StreamRecorder:
     press_arr: np.ndarray
     flow_arr: np.ndarray
     h2o_frac_arr: np.ndarray
+    h2o_vapor_arr: np.ndarray  # Water vapor mass flow (kg/h)
     mole_arrs: Tuple[np.ndarray, ...] # (H2, O2, N2, H2O, CH4, CO2)
     
     # Specific component metric arrays (optional)
@@ -82,6 +84,11 @@ class StreamRecorder:
             self.press_arr[step_idx] = stream.P_bar
             self.flow_arr[step_idx] = stream.mass_flow_kg_h
             self.h2o_frac_arr[step_idx] = stream.h2o_mass_fraction
+            
+            # Water vapor mass flow (kg/h) = total_flow * H2O_mass_fraction (vapor only)
+            # Note: H2O in composition is gas-phase water vapor, H2O_liq is separate
+            h2o_vap_frac = stream.composition.get('H2O', 0.0)
+            self.h2o_vapor_arr[step_idx] = stream.mass_flow_kg_h * h2o_vap_frac
             
             # Mole fractions
             mole_fractions = stream.mole_fractions_dict()
@@ -97,12 +104,18 @@ class StreamRecorder:
             self.press_arr[step_idx] = 0.0
             self.flow_arr[step_idx] = 0.0
             self.h2o_frac_arr[step_idx] = 0.0
+            self.h2o_vapor_arr[step_idx] = 0.0
             for arr in self.mole_arrs:
                 arr[step_idx] = 0.0
 
-        # Record extra metrics
+        # Record extra metrics (try direct attribute, fallback to get_state())
         for obj_attr, arr in self.extra_metric_arrs:
-            arr[step_idx] = getattr(self.component, obj_attr, 0.0)
+            val = getattr(self.component, obj_attr, None)
+            if val is None:
+                # Fallback: Check get_state() dict (for metrics not exposed as attributes)
+                state = self.component.get_state() if hasattr(self.component, 'get_state') else {}
+                val = state.get(obj_attr, 0.0)
+            arr[step_idx] = val if val is not None else 0.0
 
 
 class EngineDispatchStrategy(ABC):
@@ -315,19 +328,21 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         """
         # Mapping: Class Type -> (Stream Attribute Name, List of (Metric Name, Metric Attribute))
         CONFIG_MAP = {
-            Chiller: ('outlet_stream', [('cooling_load_kw', 'cooling_load_kw'), ('electrical_power_kw', 'electrical_power_kw')]),
+            Chiller: ('outlet_stream', [('cooling_load_kw', 'cooling_load_kw'), ('electrical_power_kw', 'electrical_power_kw'), ('latent_heat_kw', 'latent_heat_kw'), ('sensible_heat_kw', 'sensible_heat_kw')]),
             Coalescer: ('output_stream', [('delta_p_bar', 'delta_p_bar'), ('drain_flow_kg_h', 'drain_flow_kg_h')]),
-            DeoxoReactor: ('output_stream', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol'), ('peak_temp_c', 'peak_temp_c')]),
+            DeoxoReactor: ('output_stream', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol'), ('peak_temp_c', 'peak_temp_c'), ('inlet_temp_c', 'inlet_temp_c'), ('o2_in_kg_h', 'o2_in_kg_h'), ('mass_flow_kg_h', 'mass_flow_kg_h')]),
             PSA: ('product_outlet', [('outlet_o2_ppm_mol', 'outlet_o2_ppm_mol')]), 
             SyngasPSA: ('product_outlet', []),  # ATR Syngas PSA 
-            KnockOutDrum: ('_gas_outlet_stream', [('water_removed_kg_h', 'water_removed_kg_h')]),
+            KnockOutDrum: ('_gas_outlet_stream', [('water_removed_kg_h', 'water_removed_kg_h'), ('m_dot_H2O_liq_accomp_kg_s', 'm_dot_H2O_liq_accomp_kg_s')]),
             HydrogenMultiCyclone: ('_outlet_stream', [('pressure_drop_mbar', 'pressure_drop_mbar')]),
             CompressorSingle: ('outlet', [('power_kw', 'power_kw')]),
-            DryCooler: ('outlet_stream', [('heat_rejected_kw', 'dc_duty_kw'), ('fan_power_kw', 'fan_power_kw')]),
+            DryCooler: ('outlet_stream', [('heat_rejected_kw', 'dc_duty_kw'), ('fan_power_kw', 'fan_power_kw'), ('latent_heat_kw', 'latent_heat_kw')]),
             ElectricBoiler: ('_output_stream', [('power_input_kw', 'power_kw')]),
             Interchanger: ('hot_out', [('q_transferred_kw', 'q_transferred_kw')]),
             DetailedTankArray: ('h2_out', [('inventory_kg', 'total_mass_kg'), ('avg_pressure_bar', 'avg_pressure_bar')]),
-            UltraPureWaterTank: ('consumer_out', [('mass_kg', 'mass_kg'), ('control_zone_int', 'control_zone_int')])
+            UltraPureWaterTank: ('consumer_out', [('mass_kg', 'mass_kg'), ('control_zone_int', 'control_zone_int')]),
+            DrainRecorderMixer: ('outlet_stream', [('outlet_mass_flow_kg_h', 'outlet_mass_flow_kg_h'), ('dissolved_gas_ppm', 'dissolved_gas_ppm')]),
+            WaterPumpThermodynamic: ('water_out', [('power_kw', 'power_kw')])
         }
 
         # Also add SOEC Cluster if it has a stream
@@ -393,6 +408,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     press_arr=self._history[f"{cid}_outlet_pressure_bar"],
                     flow_arr=self._history[f"{cid}_outlet_mass_flow_kg_h"],
                     h2o_frac_arr=self._history[f"{cid}_outlet_h2o_frac"],
+                    h2o_vapor_arr=self._history[f"{cid}_h2o_vapor_kg_h"],
                     mole_arrs=(
                         self._history[f"{cid}_outlet_H2_molf"],
                         self._history[f"{cid}_outlet_O2_molf"],
@@ -411,6 +427,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history[f"{cid}_outlet_pressure_bar"] = np.zeros(total_steps, dtype=np.float64)
         self._history[f"{cid}_outlet_mass_flow_kg_h"] = np.zeros(total_steps, dtype=np.float64)
         self._history[f"{cid}_outlet_h2o_frac"] = np.zeros(total_steps, dtype=np.float64)
+        self._history[f"{cid}_h2o_vapor_kg_h"] = np.zeros(total_steps, dtype=np.float64)  # Water vapor mass flow
         for sp in ['H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2']:
             self._history[f"{cid}_outlet_{sp}_molf"] = np.zeros(total_steps, dtype=np.float64)
 
@@ -833,6 +850,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         for comp in self._compressors:
             if hasattr(comp, 'power_kw'):
                 total_comp_power += comp.power_kw
+        if total_comp_power < 0.0:
+            total_comp_power = 0.0
         self._history['compressor_power_kw'][step_idx] = total_comp_power
 
         # Tank Levels

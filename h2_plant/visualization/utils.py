@@ -272,6 +272,39 @@ def auto_convert_pressure(df: pd.DataFrame, column: str,
 
 
 # ==============================================================================
+# TIME BASIS CONTRACT
+# ==============================================================================
+
+def get_dt_hours(df: pd.DataFrame) -> float:
+    """
+    Get loop time step in hours.
+    
+    Standardizes the conversion from discrete steps to energy (MWh).
+    Derives from metadata if available, defaults to 1 minute (1/60 h).
+    """
+    dt_seconds = df.attrs.get('dt_seconds', 60.0)
+    return dt_seconds / 3600.0
+
+def get_time_axis_hours(df: pd.DataFrame) -> np.ndarray:
+    """
+    Get standardized time axis in hours.
+    
+    Unified source of truth for x-axis.
+    """
+    if 'minute' in df.columns:
+        return df['minute'].values / 60.0
+    elif hasattr(df.index, 'is_numeric') and df.index.is_numeric():
+         # Fallback to index assuming minute steps if not specified
+         dt_h = get_dt_hours(df)
+         # If index is integers, multiply by dt_h * 60? No, assume index is "steps"
+         # But usually index IS minutes in this sim.
+         return df.index.values * (dt_h * 60.0) 
+    else:
+        # Fallback for non-numeric index or raw arrays
+        return np.arange(len(df)) * get_dt_hours(df)
+
+
+# ==============================================================================
 # CONFIGURATION HELPERS
 # ==============================================================================
 

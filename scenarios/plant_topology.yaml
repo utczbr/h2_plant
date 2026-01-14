@@ -9,11 +9,25 @@
 
 nodes:
   # =================================================================================
+  # CENTRALIZED COOLING UTILITY (Configurable via Topology)
+  # =================================================================================
+  - id: "cooling_manager"
+    type: "CoolingManager"
+    params:
+      dc_total_area_m2: 20000.0       # Central dry cooler bank area (m²)
+      dc_air_flow_kg_s: 5000.0        # Air flow through dry cooler bank (kg/s)
+      dc_u_value: 35.0                # Overall U-value (W/m²K)
+      glycol_inventory_kg: 50000.0    # Total glycol mass in loop (kg)
+      tower_design_load_kw: 50000.0   # Cooling tower design capacity (kW)
+      t_dry_bulb_c: 25.0              # Ambient dry bulb (°C)
+      t_wet_bulb_c: 18.0              # Ambient wet bulb (°C)
+      inertia_alpha: 0.3              # Thermal inertia (0=slow, 1=instant)
+      system_group: "Utilities"
+      process_step: 0
+
+  # =================================================================================
   # WATER SUPPLY CHAIN (Push Architecture with Feedback Control)
   # =================================================================================
-  # Architecture: Source -> Purifier -> Tank -> Pumps -> Mixers
-  # Tank sends control_signal to Source (Zone A/B/C based on fill level)
-  # Mixers send demand_signal to Tank (PEM, SOEC, ATR channels)
 
   # 0.1 External Water Source (Municipal/Reservoir)
   - id: "Water_Source"
@@ -231,6 +245,20 @@ nodes:
       process_step: 70
     connections:
       - source_port: "outlet"
+        target_name: "SOEC_H2_Boiler"
+        target_port: "fluid_in"
+        resource_type: "stream"
+
+  - id: "SOEC_H2_Boiler"
+    type: "ElectricBoiler"
+    params:
+      target_temp_c: 15.0
+      max_power_kw: 100.0
+      efficiency: 0.99
+      k_friction: 0.0
+      process_step: 80
+    connections:
+      - source_port: "fluid_out"
         target_name: "SOEC_H2_Compressor_S1"
         target_port: "h2_in"
         resource_type: "stream"
@@ -261,6 +289,7 @@ nodes:
     params:
       target_temp_c: 40.0
       design_capacity_kw: 1800.0
+      use_central_utility: true
       process_step: 101
     connections:
       - source_port: "fluid_out"
@@ -672,7 +701,7 @@ nodes:
     params:
       pump_id: "SOEC_Drain_Pump"
       capacity_kg_h: 3600.0
-      target_pressure_pa: 100000.0  # 1 bar
+      target_pressure_pa: 120000.0  # Increased to provide head for power calc
     connections:
       - source_port: "water_out"
         target_name: "SOEC_Interchanger_Splitter"
@@ -835,41 +864,80 @@ nodes:
   - id: "PEM_H2_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["PEM_H2_KOD_1", "PEM_H2_KOD_2", "PEM_H2_KOD_3"]
+      source_ids: ["PEM_H2_KOD_1", "PEM_H2_Cyclone_1", "PEM_H2_Cyclone_2"]
     connections:
       - source_port: "outlet"
-        target_name: "PEM_Drains_Combiner"
-        target_port: "inlet_1"
+        target_name: "PEM_Water_Return_Valve_1"
+        target_port: "inlet"
         resource_type: "stream"
 
   - id: "PEM_O2_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      source_ids: ["PEM_O2_KOD_1", "PEM_O2_KOD_2"]
+      source_ids: ["PEM_O2_KOD_1", "PEM_O2_Cyclone_1"]
     connections:
       - source_port: "outlet"
+        target_name: "PEM_Water_Return_Valve_2"
+        target_port: "inlet"
+        resource_type: "stream"
+
+  # Path 1: H2 Side Degassing
+  - id: "PEM_Water_Return_Valve_1"
+    type: "Valve"
+    params:
+      component_id: "PEM_Water_Return_Valve_1"
+      P_out_pa: 400000.0 # 4 bar
+      fluid: "H2O"
+    connections: 
+      - source_port: "outlet"
+        target_name: "PEM_Degasser_1"
+        target_port: "mixture_in"
+        resource_type: "stream"
+
+  - id: "PEM_Degasser_1"
+    type: "SeparationTank"
+    params:
+      volume_m3: 2.0
+      efficiency: 1.0
+    connections:
+      - source_port: "liquid_out"
+        target_name: "PEM_Drains_Combiner"
+        target_port: "inlet_1"
+        resource_type: "stream"
+      # Gas out is vented (open port)
+
+  # Path 2: O2 Side Degassing
+  - id: "PEM_Water_Return_Valve_2"
+    type: "Valve"
+    params:
+      component_id: "PEM_Water_Return_Valve_2"
+      P_out_pa: 400000.0 # 4 bar
+      fluid: "H2O"
+    connections: 
+      - source_port: "outlet"
+        target_name: "PEM_Degasser_2"
+        target_port: "mixture_in"
+        resource_type: "stream"
+
+  - id: "PEM_Degasser_2"
+    type: "SeparationTank"
+    params:
+      volume_m3: 1.0
+      efficiency: 1.0
+    connections:
+      - source_port: "liquid_out"
         target_name: "PEM_Drains_Combiner"
         target_port: "inlet_2"
         resource_type: "stream"
+      # Gas out is vented (open port)
 
+  # Common Return
   - id: "PEM_Drains_Combiner"
     type: "Mixer"
     params:
       volume_m3: 0.5
       continuous_flow: true
     connections:
-      - source_port: "outlet"
-        target_name: "PEM_Water_Return_Valve"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  - id: "PEM_Water_Return_Valve"
-    type: "Valve"
-    params:
-      component_id: "PEM_Water_Return_Valve"
-      P_out_pa: 100000.0 # 1 bar
-      fluid: "H2O"
-    connections: 
       - source_port: "outlet"
         target_name: "PEM_Makeup_Mixer"
         target_port: "drain_in"
@@ -959,24 +1027,25 @@ nodes:
       pressure_drop_bar: 0.0
     connections:
       - source_port: "fluid_out"
-        target_name: "PEM_H2_KOD_2"
-        target_port: "gas_inlet"
+        target_name: "PEM_H2_Cyclone_1"
+        target_port: "inlet"
         resource_type: "gas"
 
-  - id: "PEM_H2_KOD_2"
-    type: "KnockOutDrum"
+  - id: "PEM_H2_Cyclone_1"
+    type: "HydrogenMultiCyclone"
     params:
-      diameter_m: 0.5
-      delta_p_bar: 0.05
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
       gas_species: "H2"
     connections:
-      - source_port: "gas_outlet"
+      - source_port: "outlet"
         target_name: "PEM_H2_Coalescer_1"
         target_port: "inlet"
-        resource_type: "gas_mixture"
-      - source_port: "liquid_drain"
+        resource_type: "stream"
+      - source_port: "drain"
         target_name: "PEM_H2_Drain_Mixer"
-        target_port: "PEM_H2_KOD_2"
+        target_port: "PEM_H2_Cyclone_1"
         resource_type: "stream"
 
   - id: "PEM_H2_Coalescer_1"
@@ -1019,25 +1088,35 @@ nodes:
       pressure_drop_bar: 0.0
     connections:
       - source_port: "fluid_out"
-        target_name: "PEM_H2_KOD_3"
-        target_port: "gas_inlet"
+        target_name: "PEM_H2_Cyclone_2"
+        target_port: "inlet"
         resource_type: "gas"
     
-  - id: "PEM_H2_KOD_3"
-    type: "KnockOutDrum"
+  - id: "PEM_H2_Cyclone_2"
+    type: "HydrogenMultiCyclone"
     params:
-      diameter_m: 0.5
-      delta_p_bar: 0.05
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 22.0
       gas_species: "H2"
     connections:
-      - source_port: "gas_outlet"
+      - source_port: "outlet"
+        target_name: "PEM_H2_Coalescer_2"
+        target_port: "inlet"
+        resource_type: "stream"
+      - source_port: "drain"
+        target_name: "PEM_H2_Drain_Mixer"
+        target_port: "PEM_H2_Cyclone_2"
+        resource_type: "stream"
+
+  - id: "PEM_H2_Coalescer_2"
+    type: "Coalescer"
+    params:
+      component_id: "PEM_H2_Coalescer_2"
+    connections:
+      - source_port: "outlet"
         target_name: "PEM_H2_ElectricBoiler_2"
         target_port: "fluid_in"
-        resource_type: "stream"
-      - source_port: "liquid_drain"
-        target_name: "PEM_H2_Drain_Mixer"
-        target_port: "PEM_H2_KOD_3"
-        resource_type: "stream"
         resource_type: "stream"
 
   - id: "PEM_H2_ElectricBoiler_2"
@@ -1104,24 +1183,25 @@ nodes:
       cooling_capacity_kw: 8000.0 # Upsized for bulk cooling
     connections:
       - source_port: "fluid_out"
-        target_name: "PEM_O2_KOD_2"
-        target_port: "gas_inlet"
+        target_name: "PEM_O2_Cyclone_1"
+        target_port: "inlet"
         resource_type: "stream"
 
-  - id: "PEM_O2_KOD_2"
-    type: "KnockOutDrum"
+  - id: "PEM_O2_Cyclone_1"
+    type: "HydrogenMultiCyclone"
     params:
-      diameter_m: 0.5
-      delta_p_bar: 0.05
+      element_diameter_mm: 50.0
+      vane_angle_deg: 45.0
+      target_velocity_ms: 20.0
       gas_species: "O2"
     connections:
-      - source_port: "gas_outlet"
+      - source_port: "outlet"
         target_name: "PEM_O2_Coalescer_1"
         target_port: "inlet"
         resource_type: "stream"
-      - source_port: "liquid_drain"
+      - source_port: "drain"
         target_name: "PEM_O2_Drain_Mixer"
-        target_port: "PEM_O2_KOD_2"
+        target_port: "PEM_O2_Cyclone_1"
         resource_type: "stream"
 
   - id: "PEM_O2_Coalescer_1"
@@ -1184,7 +1264,7 @@ nodes:
     params:
       min_target_flow_kg_h: 229.45  # Minimum O2 for ATR operation (from regression table min)
       max_limit_flow_kg_h: 757.54  # Vent excess above max ATR capacity
-      supply_pressure_bar: 15.0
+      supply_pressure_bar: 1.05
       supply_temperature_c: 25.0
       system_group: "O2_Header"
       process_step: 42
@@ -1311,8 +1391,8 @@ nodes:
   - id: "ATR_Drain_Mixer"
     type: "DrainRecorderMixer"
     params:
-      # Source from Separator water output
-      source_ids: ["ATR_ProductSeparator"] 
+      # Source from Cyclone Drain Pumps
+      source_ids: ["ATR_Drain_Pump_1", "ATR_Drain_Pump_2","ATR_ProductSeparator"] 
       system_group: "ATR_Water_Loop"
       process_step: 43
     connections:
@@ -1320,6 +1400,36 @@ nodes:
         target_name: "ATR_Makeup_Mixer"
         target_port: "drain_in"
         resource_type: "stream"
+
+  - id: "ATR_Drain_Pump_1"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "ATR_Drain_Pump_1"
+      capacity_kg_h: 200.0  # Sized for expected drain flow
+      target_pressure_pa: 1500000.0  # 15 bar
+      eta_is: 0.80
+      eta_m: 0.95
+      system_group: "ATR_Water_Loop"
+    connections:
+      - source_port: "water_out"
+        target_name: "ATR_Drain_Mixer"
+        target_port: "ATR_Drain_Pump_1"
+        resource_type: "water"
+
+  - id: "ATR_Drain_Pump_2"
+    type: "WaterPumpThermodynamic"
+    params:
+      pump_id: "ATR_Drain_Pump_2"
+      capacity_kg_h: 200.0
+      target_pressure_pa: 1500000.0  # 15 bar
+      eta_is: 0.80
+      eta_m: 0.95
+      system_group: "ATR_Water_Loop"
+    connections:
+      - source_port: "water_out"
+        target_name: "ATR_Drain_Mixer"
+        target_port: "ATR_Drain_Pump_2"
+        resource_type: "water"
 
   # NOTE: ATR_Feed_Pump is defined in Water Supply Chain section (line ~70)
   # It handles fresh makeup water from UltraPure_Tank to ATR_Makeup_Mixer
@@ -1485,6 +1595,10 @@ nodes:
         target_name: "ATR_Chiller_1"
         target_port: "fluid_in"
         resource_type: "stream"
+      - source_port: "drain"
+        target_name: "ATR_Drain_Pump_1"
+        target_port: "water_in"
+        resource_type: "water"
 
   - id: "ATR_Chiller_1"
     type: "Chiller"
@@ -1511,6 +1625,10 @@ nodes:
         target_name: "ATR_Coalescer_1"
         target_port: "inlet"
         resource_type: "stream"
+      - source_port: "drain"
+        target_name: "ATR_Drain_Pump_2"
+        target_port: "water_in"
+        resource_type: "water"
 
   - id: "ATR_Coalescer_1"
     type: "Coalescer"
@@ -1667,7 +1785,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 30.0
-      outlet_pressure_bar: 60.0 # Balanced Stage 1/4
+      outlet_pressure_bar: 500.0 # Balanced Stage 1/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_2"
@@ -1692,7 +1810,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 60.0 
-      outlet_pressure_bar: 125.0 # Balanced Stage 2/4
+      outlet_pressure_bar: 500.0 # Balanced Stage 2/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_3"
@@ -1717,7 +1835,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 125.0 
-      outlet_pressure_bar: 250.0 # Balanced Stage 3/4
+      outlet_pressure_bar: 500.0 # Balanced Stage 3/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_4"

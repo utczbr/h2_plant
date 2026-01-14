@@ -7,6 +7,9 @@ import numpy as np
 from matplotlib.figure import Figure
 import logging
 
+import logging
+from h2_plant.visualization import utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,42 +26,63 @@ def plot_load_breakdown(df: pd.DataFrame, component_ids: list, title: str, confi
     Returns:
         matplotlib Figure object.
     """
-    data = {}
+    sensible_values = []
+    latent_values = []
+    comp_names = []
+    
     for comp_id in component_ids:
-        load = 0.0
+        total_load = 0.0
+        latent_load = 0.0
+        
+        # 1. Determine Total Load (as before)
         for suffix in ['cooling_load_kw', 'heat_rejected_kw', 'heat_removed_kw', 'tqc_duty_kw', 'dc_duty_kw']:
             col = f"{comp_id}_{suffix}"
             if col in df.columns:
                 val = df[col].mean()
                 if val > 0: 
-                    load = val
+                    total_load = val
                     break
-        data[comp_id] = load
         
-    fig = Figure(figsize=(10, 6), constrained_layout=True)
+        # 2. Determine Latent Load (new)
+        latent_col = f"{comp_id}_latent_heat_kw"
+        if latent_col in df.columns:
+             latent_val = df[latent_col].mean()
+             if latent_val > 0:
+                 latent_load = latent_val
+        
+        # 3. Calculate Sensible Load
+        # Ensure non-negative sensible load (Total should be >= Latent)
+        sensible_load = max(0.0, total_load - latent_load)
+        
+        comp_names.append(comp_id)
+        sensible_values.append(sensible_load)
+        latent_values.append(latent_load)
+        
+    fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
     
-    names = list(data.keys())
-    values = list(data.values())
+    indices = range(len(comp_names))
+    width = 0.6
     
-    bars = ax.bar(names, values, color='salmon', edgecolor='black', alpha=0.8)
+    # Plot Stacked Bars
+    p1 = ax.bar(indices, sensible_values, width, label='Sensible Heat', color='#87CEFA', edgecolor='black', alpha=0.9)
+    p2 = ax.bar(indices, latent_values, width, bottom=sensible_values, label='Latent Heat', color='#FFA500', edgecolor='black', alpha=0.9)
     
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_ylabel("Average Thermal Load (kW)")
     ax.grid(axis='y', linestyle='--', alpha=0.5)
     
-    for bar in bars:
-        height = bar.get_height()
-        if height > 0:
-            ax.annotate(f'{height:.1f}', xy=(bar.get_x() + bar.get_width() / 2, height),
+    # Annotate Total Values
+    total_values = [s + l for s, l in zip(sensible_values, latent_values)]
+    for i, total in enumerate(total_values):
+        if total > 0:
+            ax.annotate(f'{total:.1f}', xy=(i, total),
                         xytext=(0, 3), textcoords="offset points",
-                        ha='center', va='bottom', fontsize=9)
+                        ha='center', va='bottom', fontsize=9, fontweight='bold')
     
-    if len(names) > 5:
-        ax.set_xticks(range(len(names)))
-        ax.set_xticklabels(names, rotation=30, ha='right')
-        
-
+    ax.set_xticks(indices)
+    ax.set_xticklabels(comp_names, rotation=30, ha='right')
+    ax.legend()
     
     return fig
 
@@ -80,12 +104,11 @@ def plot_central_cooling_performance(df: pd.DataFrame, component_ids: list, titl
     ax1, ax2 = fig.subplots(2, 1, sharex=True)
     
     # Extract data
-    if 'minute' in df.columns:
-        hours_axis = df['minute'] / 60.0
-        x_label = "Simulation Time [Hours]"
-    else:
-        hours_axis = df.index
-        x_label = "Timestep"
+    ax1, ax2 = fig.subplots(2, 1, sharex=True)
+    
+    # Extract data
+    hours_axis = utils.get_time_axis_hours(df)
+    x_label = "Simulation Time [Hours]"
     
     # Cooling Manager Data
     glycol_temp = df.get('cooling_manager_glycol_supply_temp_c', np.zeros_like(hours_axis))
@@ -135,4 +158,50 @@ def plot_central_cooling_performance(df: pd.DataFrame, component_ids: list, titl
     
     ax2.set_xlabel(x_label)
     
+    return fig
+
+
+def plot_thermal_time_series(df: pd.DataFrame, component_ids: list, title: str, config: dict) -> Figure:
+    """
+    Plots thermal load (kW) over time for specified components.
+    
+    Searches for standard thermal columns (cooling_load, heat_rejected, etc.)
+    """
+    variable = config.get('variable', 'thermal_load')
+    fig = Figure(figsize=(12, 6), constrained_layout=True)
+    ax = fig.add_subplot(111)
+    
+    x = utils.get_time_axis_hours(df)
+    has_data = False
+    
+    # Define suffixes based on variable
+    if variable == 'outlet_temperature':
+         suffixes = ['outlet_temp_c', 'outlet_temperature_c', 'temp_c', 'temperature_c']
+         y_label = "Outlet Temperature (°C)"
+    else:
+         # Default to thermal load
+         suffixes = ['cooling_load_kw', 'heat_rejected_kw', 'heat_removed_kw', 'tqc_duty_kw', 'dc_duty_kw', 'duty_kw', 'q_transferred_kw']
+         y_label = "Thermal Load (kW)"
+
+    for comp_id in component_ids:
+        col_name = None
+        for suffix in suffixes:
+            candidate = f"{comp_id}_{suffix}"
+            if candidate in df.columns:
+                col_name = candidate
+                break
+        
+        if col_name:
+            ax.plot(x, df[col_name], label=comp_id, linewidth=1.5)
+            has_data = True
+            
+    if not has_data:
+        ax.text(0.5, 0.5, f'No {variable} data found for specified components', 
+                ha='center', va='center', transform=ax.transAxes)
+
+    ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.set_xlabel("Time (hours)")
+    ax.set_ylabel(y_label)
+    ax.legend(loc='upper right')
+    ax.grid(True, alpha=0.3)
     return fig

@@ -429,10 +429,10 @@ class Interchanger(Component):
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         return {
-            'hot_in': {'type': 'input', 'resource_type': 'gas'},
-            'cold_in': {'type': 'input', 'resource_type': 'water'},
-            'hot_out': {'type': 'output', 'resource_type': 'gas'},
-            'cold_out': {'type': 'output', 'resource_type': 'water'}
+            'hot_in': {'type': 'input', 'resource_type': 'stream'},
+            'cold_in': {'type': 'input', 'resource_type': 'stream'},
+            'hot_out': {'type': 'output', 'resource_type': 'stream'},
+            'cold_out': {'type': 'output', 'resource_type': 'stream'}
         }
 
     def get_state(self) -> Dict[str, Any]:

@@ -312,9 +312,9 @@ class ProportionalMakeupMixer(Component):
             Dict[str, Dict[str, str]]: Port definitions.
         """
         return {
-            'drain_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
-            'makeup_water_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
-            'water_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'},
+            'drain_in': {'type': 'input', 'resource_type': 'stream', 'units': 'kg/h'},
+            'makeup_water_in': {'type': 'input', 'resource_type': 'stream', 'units': 'kg/h'},
+            'water_out': {'type': 'output', 'resource_type': 'stream', 'units': 'kg/h'},
             'demand_signal': {'type': 'output', 'resource_type': 'signal', 'units': 'kg/h'}
         }
 

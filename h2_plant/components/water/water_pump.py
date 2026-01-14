@@ -148,6 +148,11 @@ class WaterPumpThermodynamic(Component):
 
         self._lut_manager = None
 
+    @property
+    def power_kw(self) -> float:
+        """Expose power consumption in kW for dispatch tracking."""
+        return self.power_shaft_kw
+
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the component for simulation execution.
@@ -480,9 +485,9 @@ class WaterPumpThermodynamic(Component):
             Dict[str, Dict[str, str]]: Port definitions.
         """
         return {
-            'water_in': {'type': 'input', 'resource_type': 'water', 'units': 'kg/h'},
+            'water_in': {'type': 'input', 'resource_type': 'stream', 'units': 'kg/h'},
             'electricity_in': {'type': 'input', 'resource_type': 'electricity', 'units': 'kW'},
-            'water_out': {'type': 'output', 'resource_type': 'water', 'units': 'kg/h'}
+            'water_out': {'type': 'output', 'resource_type': 'stream', 'units': 'kg/h'}
         }
 
     def get_state(self) -> Dict[str, Any]:

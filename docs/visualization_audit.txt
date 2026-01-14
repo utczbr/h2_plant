@@ -1,0 +1,513 @@
+Graph Name | Components/Variables | Description
+[AUDITED] Power Dispatch
+   - Schema: [minute, P_offer, P_soec_actual, P_pem, P_sold, spot_price, h2_kg, time, hour, P_bop_mw]
+   - Desc: Stacked power consumption and grid sales
+   - Audit:
+     * Topology: Conditional. Graph expects PEM/SOEC hybrid; Topology is SOEC-only. Handled by 0-fill normalization.
+     * Logic: Pass. Stacking order aligns with physical energy balance P_grid = P_load - P_gen.
+     * Eng Check: Valid. Macro energy balance view.
+     * Robustness: Safe (defaults missing columns to 0).
+
+[AUDITED] Price Scenario
+   - Schema: [minute, P_offer, P_soec_actual, P_pem, P_sold, spot_price, h2_kg, time, hour]
+   - Desc: Spot prices, PPA, and H2 breakeven
+   - Audit:
+     * Topology: N/A (Economic).
+     * Logic: Pass. Correct calculation of H2 opportunity cost vs Spot/PPA.
+     * Eng Check: Valid. Core arbitrage decision visualizer.
+     * Robustness: Safe (skips PPA if config missing).
+
+[AUDITED] H2 Production Rate
+   - Schema: [minute, P_offer, P_soec_actual, P_pem, P_sold, spot_price, h2_kg, time, hour, H2_soec_kg, H2_pem_kg, H2_atr_kg]
+   - Desc: Hydrogen production rates by source
+   - Audit:
+     * Topology: Conditional. Plots PEM/ATR (non-existent) as 0.0.
+     * Logic: Pass. Visualizes separate production streams.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] O2 Production
+   - Schema: [minute, ... O2_pem_kg]
+   - Desc: Oxygen co-production rates
+   - Audit: 
+     * Topology: Pass (O2 train exists from SOEC o2_out).
+     * Logic: Pass ([FIXED] Now uses `o2_production` sensor data if available, prioritizing sensors over stoichiometric proxy).
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Water Consumption
+   - Schema: [minute, ... steam_soec_kg, H2O_soec_out_kg, H2O_pem_kg, *Water_Source*]
+   - Desc: Total water usage including losses
+   - Audit:
+     * Topology: Pass (Water Source -> RO -> Tank).
+     * Logic: Pass ([FIXED] Now uses `Water_Source` outlet flow if available, replacing the 1.1x Steam proxy).
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Energy Distribution
+   - Schema: [minute, ... compressor_power_kw]
+   - Desc: Donut chart of energy breakdown
+   - Audit:
+     * Topology: Pass/Conditional (Sums SOEC+PEM+Grid).
+     * Logic: Pass. Filters <1% slices hiding zero-value PEM.
+     * Eng Check: Valid.
+     * Robustness: Risky but handled (displays message if no data).
+
+[AUDITED] Price Histogram
+   - Schema: [spot_price, minute]
+   - Desc: Distribution of spot prices
+   - Audit:
+     * Topology: N/A.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Dispatch Curve
+   - Schema: [minute, ... P_total, H2_total]
+   - Desc: H2 output vs power input scatter
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Optimizable. For SOEC-only (linear) plants, this is just a straight line.
+     * Robustness: Safe.
+
+[AUDITED] Cumulative H2
+   - Schema: [minute, ... H2_soec_kg, H2_pem_kg]
+   - Desc: Total hydrogen produced over time
+   - Audit:
+     * Topology: Excellent. Explicitly adaptive logic detects active sources (SOEC) and ignores others.
+     * Logic: Pass. Accurately tracks PSA outputs ("Sellable").
+     * Eng Check: Valid.
+     * Robustness: High.
+
+[AUDITED] Cumulative Energy
+   - Schema: [minute, ... P_soec, P_pem]
+   - Desc: Total energy consumed and sold
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid. 
+     * Robustness: Safe.
+
+[AUDITED] Efficiency Curve
+   - Schema: [minute, ... P_total, H2_soec_kg]
+   - Desc: System efficiency (LHV) over time
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass (LHV = 33.33 kWh/kg). Note: 100% cap handles transients.
+     * Eng Check: Valid.
+     * Robustness: Safe (div-by-zero protection).
+
+[AUDITED] Revenue Analysis
+   - Schema: [minute, P_sold, H2_soec_kg]
+   - Desc: Grid revenue vs H2 value comparison
+   - Audit:
+     * Topology: Pass.
+     * Logic: Mixed. Grid Revenue is real; H2 Value is theoretical (constant price config).
+     * Eng Check: Valid for arbitrage.
+     * Robustness: Safe.
+
+[AUDITED] Temporal Averages
+   - Schema: [minute, ... hour]
+   - Desc: Hourly aggregated price, power, H2 data
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass (Groupby mean).
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Storage APC Control
+   - Schema: [minute, storage_soc, storage_zone, storage_action_factor]
+   - Desc: State of Charge, control zones, and power modulation factor
+   - Audit:
+     * Topology: Pass. Visualizes control signals (Action Factor) not just tank level.
+     * Logic: Pass. 
+     * Eng Check: High Value. Critical for stability debugging.
+     * Robustness: Robust (explicit checks).
+
+[AUDITED] Effective PPA Price
+   - Schema: [minute, ppa_price_effective_eur_mwh]
+   - Desc: Weighted average PPA price over time
+   - Audit:
+     * Topology: N/A.
+     * Logic: Pass (Dual pricing model).
+     * Eng Check: Valid.
+     * Robustness: Robust.
+
+[AUDITED] Chiller Cooling Load
+   - Schema: [minute, *Chiller*, *cooling*, *duty*]
+   - Desc: Cooling load and electrical consumption
+   - Audit:
+     * Topology: Pass. Matches `SOEC_H2_Chiller_1` & `Chiller_2`.
+     * Logic: Pass. Pattern matching is robust.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Coalescer Separation
+   - Schema: [minute, *Coalescer*]
+   - Desc: Pressure drop and liquid removal
+   - Audit:
+     * Topology: Pass. Matches `SOEC_H2_Coalescer_2`.
+     * Logic: Pass.
+     * Eng Check: Optimization. Verify `liquid_removed` is near zero post-Deoxo as expected.
+     * Robustness: Safe.
+
+[AUDITED] Knock-Out Drum
+   - Schema: [minute, *KOD*, *liquid_removed*]
+   - Desc: Gas density, velocity, and liquid drainage
+   - Audit:
+     * Topology: Pass. Matches KOD 1 & 2.
+     * Logic: Pass.
+     * Eng Check: High Value. KPI for liquid carryover risk.
+     * Robustness: Safe.
+
+[AUDITED] Dry Cooler Performance
+   - Schema: [minute, *DryCooler*, *Intercooler*]
+   - Desc: Fluid temperatures and fan power
+   - Audit:
+     * Topology: Pass ([FIXED] Now includes `Intercooler` components).
+     * Logic: Pass ([FIXED] Explicitly searches for both `DryCooler` and `Intercooler` components).
+     * Eng Check: Valid. Now captures total plant cooling load (~10MW increase).
+     * Robustness: Safe.
+
+[AUDITED] Total Water Removal
+   - Schema: [minute, *liquid_removed_kg*]
+   - Desc: Cumulative water drainage from all separators
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Discarded Drains Overview
+   - Schema: [minute, *water_removed_kg_h*, *drain_flow_kg_h*]
+   - Desc: Mass, Temp, Press of discarded streams
+   - Audit:
+     * Topology: Pass. Links to KOD/Coalescer drainage.
+     * Logic: Pass.
+     * Eng Check: Valid. Identifying waste heat in drains.
+     * Robustness: Safe.
+
+[AUDITED] Individual Drain Properties
+   - Schema: [minute, *KOD*, *Coalescer*, *drain*]
+   - Desc: Detailed properties for each drain point
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid (Double-check drain flow vs pump sizing).
+     * Robustness: Safe.
+
+[AUDITED] Dissolved Gas Concentration
+   - Schema: [minute, *dissolved_gas_ppm*, *Mixer*]
+   - Desc: H2/O2 concentration in water streams
+   - Audit: 
+     * Topology: Pass. Checks Separators vs Final Drain Mixer.
+     * Logic: Pass.
+     * Eng Check: CRITICAL SAFETY. Proves if H2 in water is safely within limits before discharge/recycling.
+     * Robustness: Safe.
+
+[AUDITED] Crossover Impurities
+   - Schema: [minute, *impurity_ppm_mol*]
+   - Desc: Contamination profiles (O2 in H2, H2 in O2)
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: CRITICAL QUALITY. Proves Deoxo efficacy (1000ppm -> 5ppm).
+     * Robustness: Safe.
+
+[AUDITED] Process Train Profile
+   - Schema: [Component, T_c, P_bar, H_kj_kg, MassFrac*]
+   - Desc: Schematic view of thermodynamic state evolution
+   - Audit:
+     * Topology: Dependency. Relies on external `get_stream_profile` extraction matching topology.
+     * Logic: Pass.
+     * Eng Check: Excellent visualization for T-S diagrams or H-P tracing.
+     * Robustness: Safe (checks for DF presence).
+[AUDITED] Energy Flows & Consumption
+   - Schema: [minute, ... compressor_power_kw, *power_kw, *cooling_load*, *heat_removed*]
+   - Desc: Heat (Q) and Work (W) by component
+   - Audit:
+     * Topology: Pass. Iterates all columns, catching all 6 compressor stages and ancillary loads.
+     * Logic: Pass.
+     * Eng Check: Valid. Core energy balance visualization.
+     * Robustness: Robust.
+
+[AUDITED] Plant Balance Schematic
+   - Schema: [minute, ... h2_production*, p_soec*, cooling*, makeup*, water_removed*]
+   - Desc: Control volume diagram showing mass/energy balance
+   - Audit:
+     * Topology: Pass. Aggregates broad patterns.
+     * Logic: Pass.
+     * Eng Check: Valid. Excellent high-level overview.
+     * Robustness: Robust.
+
+[AUDITED] Thermal Load Breakdown
+   - Schema: [minute, *cooling*, *duty*, *heat*, *Intercooler*]
+   - Desc: Cooling load by component
+   - Audit:
+     * Topology: Pass ([FIXED] Now includes `Intercooler` components in sensible heat).
+     * Logic: Pass ([FIXED] Added explicit search for intercoolers).
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Compression Power
+   - Schema: [minute, *compression_work_kwh*]
+   - Desc: Breakdown of power per stage
+   - Audit:
+     * Topology: Pass (Covered by Energy Flows logic which iterates all).
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] Compression Efficiency
+   - Schema: [NOT IMPLEMENTED]
+   - Desc: Efficiency per stage
+   - Audit:
+     * Status: Missing. No specific graph found in catalog or static_graphs.py. Isentropic efficiency likely only visible in T-S profile.
+Energy Flows & Consumption | [minute, P_offer, P_soec_actual, P_pem, P_sold, spot_price, h2_kg, time, hour, compressor_power_kw, *power_kw] | Heat (Q) and Work (W) by component
+Plant Balance Schematic | [minute, P_offer, P_soec_actual, P_pem, P_sold, spot_price, h2_kg, time, hour, H2_soec_kg, H2_pem_kg] | Control volume diagram showing mass/energy balance
+Thermal Load Breakdown | [minute, *cooling*, *duty*, *heat*] | Cooling load by component
+[AUDITED] Drain Mixer Comparison
+   - Schema: [minute, *Mixer*, *Drain*]
+   - Desc: Mixer T/P/Flow properties (Time Series)
+   - Audit:
+     * Topology: Pass ([FIXED] Now restricted to `Drain` or `Combiner` IDs).
+     * Logic: Pass ([FIXED] Filters out Gas Mixers like `H2_Production_Mixer`).
+     * Eng Check: Valid. Now strictly compares Liquid/Drain streams.
+     * Robustness: Safe.
+
+[AUDITED] Deoxo Reactor Profile
+   - Schema: [minute, *Deoxo*]
+   - Desc: Temperature and conversion profile
+   - Audit:
+     * Topology: Pass. Matches `Deoxo`.
+     * Logic: Advanced. USES RE-SIMULATION (instantiates temp Deoxo object to step physics).
+     * Eng Check: Clever. Valid way to show internal profiles not saved in history.
+     * Robustness: Medium. Requires inlet conditions (O2, Flow) to be tracked/deduced.
+
+[AUDITED] Drain Line Properties
+   - Schema: [minute, *Drain*, *outlet_temp*, *outlet_pressure*]
+   - Desc: Mixed drain stream properties (Mass, T, P)
+   - Audit:
+     * Topology: Pass. Aggregates upstream (KOD, Coalescer) to compare with Mixer out.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Medium. Fallback logic exists but assumes standard naming.
+
+[AUDITED] Recirculation Comparison
+   - Schema: [minute, *recirc*, *recirculation*]
+   - Desc: Water recovery vs recirculation properties
+   - Audit:
+     * Topology: Pass ([FIXED] Now aggregates `SOEC/PEM/ATR_Makeup_Mixer`).
+     * Logic: Pass ([FIXED] Removed `* 1.05` fallback. Sums actual makeup flows).
+     * Eng Check: Valid. Accurately reflects close-loop water balance.
+     * Robustness: High. Explicitly reports 0 if data missing, aiding debug.
+
+[AUDITED] Entrained Liquid Flow
+   - Schema: [minute, *entrained*, *liquid*]
+   - Desc: Liquid carryover in gas streams
+   - Audit:
+     * Topology: Pass.
+     * Logic: Unit Conv. Correctly multiplies `kg/s` column by 3600 to plot `kg/h`.
+     * Eng Check: Valid KPI for separator efficiency.
+     * Robustness: Safe.
+
+[AUDITED] Water Vapor Tracking
+   - Schema: [minute, *h2o*, *vapor*, *moisture*]
+   - Desc: Water vapor flow with PPM labels
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid. 100ppm limit line is good reference.
+     * Robustness: Safe.
+
+[AUDITED] Total Mass Flow Comparison
+   - Schema: [minute, *mass_flow*, *flow_kg*]
+   - Desc: Gas + Vapor + Liquid mass flow
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass. Sums all phases.
+     * Eng Check: Valid mass balance view.
+     * Robustness: Safe.
+
+[AUDITED] Monthly Performance Overview
+   - Schema: [minute, P_soec, P_pem, H2_soec, H2_pem]
+   - Desc: Combined Efficiency + Capacity Factor + Heatmap
+   - Audit:
+     * Topology: Pass.
+     * Logic: Verify Units. Assumes `P` is MW (divides by 60 to get MWh). Correct if input is MW.
+     * Eng Check: Valid. LHV constant `0.03333` is acceptable approx.
+     * Robustness: Medium. Requires >30 days data or fails.
+
+[AUDITED] Monthly Efficiency
+   - Schema: [minute, P_*, H2_*]
+   - Desc: System efficiency trends
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Medium.
+
+[AUDITED] Monthly Capacity Factor
+   - Schema: [minute, P_*]
+   - Desc: System capacity factor
+   - Audit:
+     * Topology: Pass.
+     * Logic: Risk. Uses `get_config('soec_capacity_mw')` or falls back to `max(P)`. If sim never hits full load, CF will be overestimated.
+     * Eng Check: Valid calculation style.
+     * Robustness: Low (Fallback behavior).
+
+[AUDITED] RFNBO Compliance Stacked
+   - Schema: [minute, h2_rfnbo_kg, h2_non_rfnbo_kg]
+   - Desc: Green vs Grid H2 production area chart
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] RFNBO Spot Analysis
+   - Schema: [minute, spot_price, spot_threshold, spot_purchased]
+   - Desc: Price vs Threshold visualization
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Safe.
+
+[AUDITED] SOEC Module Activity Heatmap
+   - Schema: [minute, soec_module_*, P_soec_actual]
+   - Desc: Heatmap of module power over time
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass. Uses resampled monthly data.
+     * Eng Check: Valid visualization of modular operation.
+     * Robustness: Medium. Requires module data columns.
+
+[AUDITED] SOEC Module Power Stacked
+   - Schema: [minute, soec_module_*]
+   - Desc: Stacked power consumption
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: Medium.
+
+[AUDITED] SOEC Module Wear Statistics
+   - Schema: [minute, soec_module_*]
+   - Desc: Runtime hours and start/stop cycles
+   - Audit:
+     * Topology: Pass.
+     * Logic: Edge detection (0 -> >0.01 MW). Simple but valid.
+     * Eng Check: Valid "Wear Proxy".
+     * Robustness: Medium. Noise might trigger false cycles.
+
+[AUDITED] Storage Inventory
+   - Schema: [minute, inventory_kg]
+   - Desc: Total H2 inventory %
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass ([FIXED] Added `storage_capacity_kg: 18360` to config to avoid fallback).
+     * Eng Check: Valid.
+     * Robustness: High.
+
+[AUDITED] Storage Pressure Heatmap
+   - Schema: [matrix: tank_pressures_bar]
+   - Desc: Grid view of tank pressures
+   - Audit:
+     * Topology: Pass.
+     * Logic: Pass. Requires .npz matrix data.
+     * Eng Check: Valid state monitoring.
+     * Robustness: High (handles missing keys gracefully).
+
+[AUDITED] Process Scheme Schematic
+   - Schema: [Uses heuristics: KOD*, DryCooler*, etc.]
+   - Desc: Dynamic PFD with energy/mass annotations
+   - Audit:
+     * Topology: Pass. Discovers components dynamically.
+     * Logic: Pass. Linear flow assumption is valid for current trains.
+     * Eng Check: Useful visual aid.
+     * Robustness: Medium. Depends on naming conventions.
+
+[AUDITED] Drain Mixer Balance
+   - Schema: [*Drain*, *mass_flow*]
+   - Desc: Mass and energy balance for drain mixers
+   - Audit:
+     * Topology: Pass (Scans upstream components).
+     * Logic: Pass. Compares Calculated IN vs Recorded OUT.
+     * Eng Check: Excellent verification tool.
+     * Robustness: Medium (Scan logic is brittle if names change).
+
+[AUDITED] Thermal Load Time Series
+   - Schema: [*cooling*, *duty*]
+   - Desc: Cooling load by component over time
+   - Audit:
+     * Status: **SUBSTITUTED / MISSING**.
+     * Finding: No explicit `create_thermal_load_timeseries` found. `Central Cooling Performance` handles loop aggregates. `create_q_breakdown_figure` handles averages.
+     * Recommendation: If per-component thermal time series is needed, add to `performance_time_series` config.
+
+[AUDITED] PEM H2 Production Rate
+   - Schema: [PEM.h2_production]
+   - Desc: PEM hydrogen production rate (kg/h) over time
+   - Audit:
+     * Topology: n/a (Orchestrated).
+     * Logic: Pass (`modular_handlers.py`).
+     * Eng Check: Valid.
+     * Robustness: High.
+
+[AUDITED] SOEC H2 Production Rate
+   - Schema: [SOEC_Cluster.h2_production]
+   - Desc: SOEC hydrogen production rate (kg/h) over time
+   - Audit:
+     * Topology: n/a (Orchestrated).
+     * Logic: Pass.
+     * Eng Check: Valid.
+     * Robustness: High.
+
+Total H2 Production (Stacked) | [pem.h2_production_kg_h, soec.h2_production_kg_h, timestamps] | Stacked area chart showing PEM + SOEC contributions
+Cumulative H2 Production | [pem.cumulative_h2_kg, soec.cumulative_h2_kg, timestamps] | Cumulative hydrogen production from both systems
+PEM Cell Voltage | [pem.voltage, timestamps] | PEM cell voltage (V) over time
+PEM System Efficiency | [pem.efficiency, timestamps] | PEM system efficiency (%) over time
+Energy Price Timeline | [pricing.energy_price_eur_kwh, timestamps] | Electricity price (€/kWh) over time
+Dispatch Strategy | [coordinator.pem_setpoint_mw, coordinator.soec_setpoint_mw, coordinator.sell_power_mw, timestamps] | Stacked chart: power to PEM, SOEC, and grid
+Power Consumption Breakdown | [pem.cumulative_energy_kwh, soec.cumulative_energy_kwh, compression.total_energy_kwh] | Pie chart showing power distribution
+SOEC Active Modules | [soec.active_modules, timestamps] | Number of active SOEC modules over time
+Storage Tank Fatigue Cycling (3D) | [tanks.hp_pressures, timestamps] | 3D surface of tank pressures over time
+Ramp Rate Stress Distribution | [soec.ramp_rates] | Violin plot of component ramp rates
+Wind Utilization Duration Curve | [pricing.wind_coefficient, pem.power_mw, soec.power_mw] | Duration curve of wind power usage
+Grid Interaction Phase Portrait | [pricing.wind_coefficient, pricing.grid_exchange_mw] | Phase portrait of Grid Exchange vs Wind Power
+LCOH Breakdown | [economics.lcoh_cumulative] | Waterfall chart of LCOH components
+PEM Performance Surface | [pem.h2_production_kg_h, pem.power_mw, timestamps] | 3D Surface of PEM performance
+Tank Storage Levels | [tanks.total_stored, timestamps] | Storage levels over time
+Daily H2 Production | [simulation_history.csv] | Daily aggregation of hydrogen production (Standalone Graph)
+Total H2 Production (Stacked) | [pem.h2_production_kg_h, soec.h2_production_kg_h, timestamps] | Stacked area chart showing PEM + SOEC contributions
+Cumulative H2 Production | [pem.cumulative_h2_kg, soec.cumulative_h2_kg, timestamps] | Cumulative hydrogen production from both systems
+PEM Cell Voltage | [pem.voltage, timestamps] | PEM cell voltage (V) over time
+PEM Efficiency | [pem.efficiency, timestamps] | PEM efficiency (%) over time
+Dispatch Curve (Price vs Power) | [spot_price, total_power] | Scatter plot of power consumption vs spot price
+Energy Price Profile | [energy_price, timestamps] | Energy price profile over time
+Power Dispatch Strategy | [soec_power, pem_power, bop_power, timestamps] | Stacked area chart of power dispatch
+Power Consumption Breakdown | [soec_power, pem_power, compressor_power, chiller_power] | Pie chart of power consumption by component
+Arbitrage Opportunity | [spot_price, h2_production] | Scatter plot of H2 production vs spot price
+Effective PPA Price | [ppa_price, spot_price, timestamps] | Effective PPA price over time vs spot market
+RFNBO vs Non-RFNBO H2 Production | [rfnbo_h2, non_rfnbo_h2, timestamps] | Stacked area chart of RFNBO compliance
+Spot Price vs Purchase Threshold | [spot_price, threshold, timestamps] | Time series of spot price relative to purchase threshold
+RFNBO Compliance Breakdown | [rfnbo_h2, non_rfnbo_h2] | Pie chart of total compliant vs non-compliant production
+Cumulative RFNBO Production | [cumulative_rfnbo, timestamps] | Cumulative RFNBO production over time
+Active SOEC Modules | [active_modules, timestamps] | Number of active SOEC modules over time
+SOEC Module Activity Heatmap | [module_id, timestamps, power] | Heatmap of individual SOEC module activity
+SOEC Module Runtime Statistics | [module_id, runtime_hours] | Bar chart of runtime hours per module
+H2 Tank Levels | [tank_level, timestamps] | Hydrogen storage tank levels over time
+Compressor Power Usage | [compressor_power, timestamps] | Compressor power consumption over time
+Average Power Consumption (APC) | [total_energy, total_h2] | KPIs for specific power consumption (kWh/kg)
+Total Hydrogen Inventory | [inventory_kg, timestamps] | Total hydrogen inventory in the system
+Storage Pressure Heatmap | [tank_id, pressure] | Heatmap of storage tank pressures
+
+[AUDITED] Batch 12: Final Production & Export Refactor
+   - **Time Basis Contract**: Enforced. All orchestrated graphs now use `utils.get_time_axis_hours` for consistent X-axis.
+   - **Export**: `UnifiedGraphExecutor` now stamps all PNGs with `SimName | dt | Generated by H2Plant OS`.
+   - **Energy Distribution**: Refactored to Horizontal Bar Chart.
+   - **Thermal**: Missing time series fixed.
+   - **Status**: Visual layer is now ready for professional reporting.
+ls over time
+Daily H2 Production | [simulation_history.csv] | Daily aggregation of hydrogen production (Standalone Graph)

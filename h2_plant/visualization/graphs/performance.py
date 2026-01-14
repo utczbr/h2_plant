@@ -7,6 +7,8 @@ import numpy as np
 from matplotlib.figure import Figure
 import logging
 
+from h2_plant.visualization import utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,7 +17,7 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
     variable = config.get('variable', 'voltage')
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
-    x = df['minute'] / 60.0 if 'minute' in df.columns else df.index
+    x = utils.get_time_axis_hours(df)
     has_data = False
 
     for comp_id in component_ids:

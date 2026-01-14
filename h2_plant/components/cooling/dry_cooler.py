@@ -142,6 +142,7 @@ class DryCooler(Component):
         self.outlet_temp_c = 0.0
         self.tqc_effectiveness = 0.0
         self.dc_effectiveness = 0.0
+        self.latent_heat_kw = 0.0
 
     @property
     def power_kw(self) -> float:
@@ -482,6 +483,40 @@ class DryCooler(Component):
         else:
              m_H2O_liq_out = m_H2O_liq_in
              m_H2O_vapor_out = m_H2O_vap_in
+        
+        # Calculate Latent Heat of Condensation Rigorously
+        # Mass condensed = Initial Vapor - Final Vapor (kg/h)
+        m_condensed_kg_h = max(0.0, m_H2O_vap_in - m_H2O_vapor_out)
+        
+        # Calculate Delta H_vap using rigorous CoolProp properties at saturation
+        # Uses T_gas_out_k as the saturation temperature
+        try:
+            # Enthalpy of Saturated Vapor (Q=1)
+            h_vap_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 1.0, 'Water')
+            # Enthalpy of Saturated Liquid (Q=0)
+            h_liq_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 0.0, 'Water')
+            
+            # Check for valid return values (CoolPropLUT returns 0.0 on failure)
+            if h_vap_sat == 0.0 or h_liq_sat == 0.0:
+                 delta_h_vap = 2400.0 * 1000.0 # Fallback J/kg
+            else:
+                 delta_h_vap = h_vap_sat - h_liq_sat # J/kg
+                 
+        except Exception as e:
+            logger.warning(f"DryCooler thermodynamic property error: {e}")
+            delta_h_vap = 2400.0 * 1000.0 # Fallback J/kg
+            
+        q_latent_kw = (m_condensed_kg_h / 3600.0) * (delta_h_vap / 1000.0) # kW
+        
+        # Add latent load to reported duties (Sensible + Latent)
+        self.tqc_duty_kw += q_latent_kw
+        self.dc_duty_kw += q_latent_kw
+        self.latent_heat_kw = q_latent_kw
+        
+        # Update rejected heat alias for graph consistency
+        # Note: In a rigorous physical solve, this extra heat would raise T_glycol_hot,
+        # reducing LMTD and potentially limiting condensation. Here we assume
+        # the cooler has capacity and just report the total load.
 
         # 3. Update Composition & Mass Balance
         # Incorporate 'extra' liquid water from upstream sources (if any)
@@ -491,9 +526,9 @@ class DryCooler(Component):
         
 
 
-        # New total mass - DO NOT add extra liquid (it's already in inlet mass_flow if present)
-        # Prevents double-counting when upstream (e.g., Cyclone) includes entrained liquid in mass_flow
-        m_total_new = m_total_out
+        # New total mass - We MUST add extra liquid if we are merging it into composition
+        # This ensures species mass conservation (e.g. H2 kg/h) when Stream normalizes.
+        m_total_new = m_total_out + m_H2O_liq_extra_in
         
         if m_total_new > 0:
              # Recalculate fractions based on new total mass
@@ -611,5 +646,7 @@ class DryCooler(Component):
             'glycol_cold_c': self.t_glycol_cold_c,
             'tqc_effectiveness': self.tqc_effectiveness,
             'dc_effectiveness': self.dc_effectiveness,
+            'latent_heat_kw': self.latent_heat_kw,
+            'heating_load_kw': 0.0, # Interface consistency
             'outlet_o2_ppm_mol': (self.outlet_stream.get_total_mole_frac('O2') * 1e6) if self.outlet_stream else 0.0
         }

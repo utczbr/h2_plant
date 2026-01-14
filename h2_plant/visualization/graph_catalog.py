@@ -1,5 +1,10 @@
 """
 GraphCatalog: Registry of available visualization graphs with metadata.
+
+This module provides the authoritative source of truth for:
+1. Graph metadata (title, description, priority, category)
+2. Column requirements for memory-efficient data loading
+3. Enable/disable state for YAML-driven configuration
 """
 
 from typing import Dict, Any, List, Callable, Optional
@@ -8,6 +13,171 @@ from enum import Enum
 import logging
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# COLUMN REQUIREMENTS (Migrated from run_integrated_simulation.py)
+# =============================================================================
+# These patterns are used by UnifiedGraphExecutor to load only required columns,
+# reducing memory usage by 80-90% for year-long simulations.
+#
+# Pattern syntax:
+#   - Exact column names: 'minute', 'P_offer'
+#   - Glob patterns: '*_outlet_temp*', 'soec_module_*'
+#
+# Note: 'minute' is always included by the executor.
+
+CORE_COLUMNS = [
+    'minute', 'P_offer', 'P_soec_actual', 'P_pem', 'P_sold', 
+    'spot_price', 'h2_kg', 'time', 'hour'
+]
+
+COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
+    # =========================================================================
+    # CORE DISPATCH & ECONOMICS
+    # =========================================================================
+    'dispatch': CORE_COLUMNS + ['P_bop_mw'],
+    'dispatch_strategy_stacked': CORE_COLUMNS + ['P_bop_mw'],
+    'arbitrage': CORE_COLUMNS,
+    'arbitrage_scatter': CORE_COLUMNS,
+    'effective_ppa': CORE_COLUMNS + ['ppa_price_effective_eur_mwh'],
+    
+    # =========================================================================
+    # H2 PRODUCTION
+    # =========================================================================
+    'h2_production': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
+    'total_h2_production_stacked': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
+    'cumulative_h2': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg'],
+    'cumulative_h2_production': CORE_COLUMNS + [
+        'H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg',
+        'h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg',
+        '*_PSA_*_outlet_mass_flow_kg_h'
+    ],
+    
+    # =========================================================================
+    # O2 PRODUCTION
+    # =========================================================================
+    'oxygen_production': CORE_COLUMNS + ['O2_pem_kg'],
+    'oxygen_production_stacked': CORE_COLUMNS + ['O2_pem_kg', '*_O2_*'],
+    
+    # =========================================================================
+    # WATER CONSUMPTION
+    # =========================================================================
+    'water_consumption': CORE_COLUMNS + ['steam_soec_kg', 'H2O_soec_out_kg', 'H2O_pem_kg'],
+    'water_consumption_stacked': CORE_COLUMNS + ['steam_soec_kg', 'H2O_soec_out_kg', 'H2O_pem_kg'],
+    'water_tank_inventory': ['minute', '*UltraPure_Tank*', '*mass_kg*', '*control_zone*'],
+    
+    # =========================================================================
+    # ECONOMICS & ENERGY
+    # =========================================================================
+    'energy_pie': CORE_COLUMNS + ['compressor_power_kw'],
+    'power_consumption_breakdown_pie': CORE_COLUMNS + ['compressor_power_kw', '*_cooling_load_kw'],
+    'price_histogram': ['spot_price', 'minute'],
+    'dispatch_curve': CORE_COLUMNS,
+    'dispatch_curve_scatter': CORE_COLUMNS,
+    'efficiency_curve': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'revenue_analysis': CORE_COLUMNS + ['cumulative_h2_kg'],
+    'temporal_averages': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'cumulative_energy': CORE_COLUMNS,
+    
+    # =========================================================================
+    # RFNBO COMPLIANCE
+    # =========================================================================
+    'rfnbo_compliance_stacked': CORE_COLUMNS + ['h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'purchase_threshold_eur_mwh'],
+    'rfnbo_spot_analysis': CORE_COLUMNS + ['purchase_threshold_eur_mwh'],
+    'rfnbo_pie': ['h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'minute'],
+    'cumulative_rfnbo': CORE_COLUMNS + ['cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg'],
+    
+    # =========================================================================
+    # SOEC MODULES
+    # =========================================================================
+    'soec_module_heatmap': ['minute', 'soec_module_*', 'P_soec_actual', 'soec_active_modules'],
+    'soec_module_power_stacked': ['minute', 'soec_module_*', 'P_soec_actual'],
+    'soec_module_wear_stats': ['minute', 'soec_module_*'],
+    
+    # =========================================================================
+    # MONTHLY/PERFORMANCE
+    # =========================================================================
+    'monthly_performance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'monthly_efficiency': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'monthly_capacity_factor': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    
+    # =========================================================================
+    # THERMAL & SEPARATION (Pattern-based)
+    # =========================================================================
+    'water_removal_total': ['minute', '*_liquid_removed_kg*', '*_water_removed*'],
+    'drains_discarded': ['minute', '*_liquid_removed_kg*', '*_drain*'],
+    'chiller_cooling': ['minute', '*Chiller*', '*_cooling*', '*_duty*'],
+    'coalescer_separation': ['minute', '*Coalescer*'],
+    'kod_separation': ['minute', '*KOD*', '*_liquid_removed*'],
+    'dry_cooler_performance': ['minute', '*DryCooler*', '*Drycooler*', '*_cooling*'],
+    
+    # =========================================================================
+    # ENERGY/SCHEMATIC
+    # =========================================================================
+    'energy_flows': CORE_COLUMNS + ['compressor_power_kw', '*_power_kw'],
+    'energy_flow': CORE_COLUMNS + ['*_power_kw', 'compressor_power_kw'],
+    'q_breakdown': ['minute', '*_cooling*', '*_duty*', '*_heat*'],
+    'thermal_load_breakdown_time_series': ['minute', '*_cooling*', '*_duty*', '*Chiller*', '*Intercooler*'],
+    'plant_balance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'mixer_comparison': ['minute', '*Mixer*'],
+    
+    # =========================================================================
+    # SEPARATION ANALYSIS
+    # =========================================================================
+    'individual_drains': ['minute', '*_drain*', '*_liquid*'],
+    'dissolved_gas_concentration': ['minute', '*_dissolved*', '*KOD*', '*Mixer*'],
+    'dissolved_gas_efficiency': ['minute', '*_dissolved*', '*Mixer*'],
+    'crossover_impurities': ['minute', '*_o2_*', '*_h2_*', '*_impurity*', '*_outlet_*'],
+    'drain_line_properties': ['minute', '*Drain*', '*_outlet_temp*', '*_outlet_pressure*'],
+    'deoxo_profile': ['minute', '*Deoxo*'],
+    'drain_mixer_balance': ['minute', '*Drain_Mixer*', '*_mass_flow*'],
+    'drain_scheme': ['minute', '*Drain*', '*_mass_flow*'],
+    'process_scheme': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'drain_line_concentration': ['minute', '*Drain_Mixer*', '*_dissolved*'],
+    'recirculation_comparison': ['minute', '*recirc*', '*recirculation*'],
+    'entrained_liquid_flow': ['minute', '*_entrained*', '*_liquid*'],
+    
+    # =========================================================================
+    # STACKED PROPERTIES (Temperature/Pressure Profiles)
+    # =========================================================================
+    'h2_stacked_properties': ['minute', '*SOEC_H2_*_outlet_*', '*PEM_H2_*_outlet_*', 'SOEC_Cluster_*'],
+    'o2_stacked_properties': ['minute', '*O2_*_outlet_*'],
+    'process_train_profile': ['minute', '*_outlet_temp*', '*_outlet_pressure*', '*_outlet_mass_flow*'],
+    
+    # =========================================================================
+    # FLOW TRACKING
+    # =========================================================================
+    'water_vapor_tracking': ['minute', '*_h2o_*', '*_vapor*', '*_moisture*'],
+    'total_mass_flow': ['minute', '*_mass_flow*', '*_flow_kg*'],
+    
+    # =========================================================================
+    # STORAGE
+    # =========================================================================
+    'storage_levels': ['minute', 'tank_*', '*Tank*_level*', '*Tank*_pressure*'],
+    'compressor_power': ['minute', '*Compressor*_power*', 'compressor_power_kw'],
+    'storage_apc': ['minute', 'storage_soc', 'storage_zone', 'storage_action_factor', '*soc*', '*zone*'],
+    'storage_inventory': ['minute', '*inventory_kg*', '*Tank*'],
+    
+    # =========================================================================
+    # PLOTLY GRAPHS (use same patterns, exec will adapt to dict format)
+    # =========================================================================
+    'pem_h2_production_over_time': CORE_COLUMNS + ['H2_pem_kg'],
+    'soec_h2_production_over_time': CORE_COLUMNS + ['H2_soec_kg'],
+    'pem_cell_voltage_over_time': CORE_COLUMNS,
+    'pem_efficiency_over_time': CORE_COLUMNS,
+    'energy_price_over_time': CORE_COLUMNS,
+    'soec_active_modules_over_time': ['minute', 'soec_active_modules', 'soec_module_*'],
+}
+
+
+def get_columns_for_graph(graph_id: str) -> List[str]:
+    """
+    Get column requirements for a specific graph.
+    
+    Returns list of column names/patterns. Returns ['minute'] if graph not found
+    (allows graceful fallback with minimal data).
+    """
+    return COLUMN_REQUIREMENTS.get(graph_id, ['minute'])
 
 
 class GraphPriority(Enum):
@@ -27,7 +197,13 @@ class GraphLibrary(Enum):
 
 @dataclass
 class GraphMetadata:
-    """Metadata for a visualization graph."""
+    """
+    Metadata for a visualization graph.
+    
+    Attributes:
+        data_required: Column patterns needed. If ['history'] is passed,
+                       it will be auto-resolved using get_columns_for_graph().
+    """
     graph_id: str
     title: str
     description: str
@@ -42,6 +218,13 @@ class GraphMetadata:
     def __post_init__(self):
         if self.kwargs is None:
             self.kwargs = {}
+        
+        # Auto-resolve ['history'] placeholder to actual column requirements
+        if self.data_required == ['history']:
+            resolved = get_columns_for_graph(self.graph_id)
+            if resolved != ['minute']:  # Found in COLUMN_REQUIREMENTS
+                self.data_required = resolved
+            # else: keep ['history'] for legacy fallback (loads all columns)
 
 
 class GraphCatalog:
@@ -195,23 +378,30 @@ class GraphCatalog:
         }
     
     def _load_default_registry(self) -> None:
-        """Load default graph registry with placeholder functions."""
-        # Import placeholder functions (will be defined in plotly_graphs.py)
+        """
+        Load default graph registry.
+        
+        Matplotlib graphs use column patterns from COLUMN_REQUIREMENTS.
+        Plotly graphs are registered but DISABLED by default (require dict data format).
+        """
         from h2_plant.visualization import plotly_graphs as pg
         from h2_plant.visualization import static_graphs as sg
         
-        # --- PLOTLY GRAPHS ---
-        # Production & Performance
+        # =====================================================================
+        # PLOTLY GRAPHS (Disabled by default - require structured dict data)
+        # =====================================================================
+        # These will be enabled post-refactor when Plotly data adapter is ready.
+        
         self.register(GraphMetadata(
             graph_id='pem_h2_production_over_time',
             title='PEM H2 Production Rate',
             description='PEM hydrogen production rate (kg/h) over time',
             function=pg.plot_pem_production_timeline,
             library=GraphLibrary.PLOTLY,
-            data_required=['pem.h2_production_kg_h', 'timestamps'],
+            data_required=get_columns_for_graph('pem_h2_production_over_time'),
             priority=GraphPriority.CRITICAL,
             category='production',
-            enabled=True
+            enabled=False  # Plotly graphs disabled until data adapter ready
         ))
         
         self.register(GraphMetadata(
@@ -223,7 +413,7 @@ class GraphCatalog:
             data_required=['soec.h2_production_kg_h', 'timestamps'],
             priority=GraphPriority.CRITICAL,
             category='production',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         self.register(GraphMetadata(
@@ -235,7 +425,7 @@ class GraphCatalog:
             data_required=['pem.h2_production_kg_h', 'soec.h2_production_kg_h', 'timestamps'],
             priority=GraphPriority.CRITICAL,
             category='production',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         self.register(GraphMetadata(
@@ -247,7 +437,7 @@ class GraphCatalog:
             data_required=['pem.cumulative_h2_kg', 'soec.cumulative_h2_kg', 'timestamps'],
             priority=GraphPriority.HIGH,
             category='production',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # Voltage & Efficiency
@@ -260,7 +450,7 @@ class GraphCatalog:
             data_required=['pem.voltage', 'timestamps'],
             priority=GraphPriority.CRITICAL,
             category='performance',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         self.register(GraphMetadata(
@@ -272,7 +462,7 @@ class GraphCatalog:
             data_required=['pem.efficiency', 'timestamps'],
             priority=GraphPriority.HIGH,
             category='performance',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # Energy Economics
@@ -285,7 +475,7 @@ class GraphCatalog:
             data_required=['pricing.energy_price_eur_kwh', 'timestamps'],
             priority=GraphPriority.HIGH,
             category='economics',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         self.register(GraphMetadata(
@@ -297,7 +487,7 @@ class GraphCatalog:
             data_required=['coordinator.pem_setpoint_mw', 'coordinator.soec_setpoint_mw', 'coordinator.sell_power_mw', 'timestamps'],
             priority=GraphPriority.CRITICAL,
             category='economics',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         self.register(GraphMetadata(
@@ -309,7 +499,7 @@ class GraphCatalog:
             data_required=['pem.cumulative_energy_kwh', 'soec.cumulative_energy_kwh', 'compression.total_energy_kwh'],
             priority=GraphPriority.MEDIUM,
             category='economics',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # SOEC Operations
@@ -322,7 +512,7 @@ class GraphCatalog:
             data_required=['soec.active_modules', 'timestamps'],
             priority=GraphPriority.HIGH,
             category='soec_ops',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # Reliability & Stress Analysis
@@ -335,7 +525,7 @@ class GraphCatalog:
             data_required=['tanks.hp_pressures', 'timestamps'],
             priority=GraphPriority.CRITICAL,
             category='reliability',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         self.register(GraphMetadata(
             graph_id='ramp_rate_stress_distribution',
@@ -346,7 +536,7 @@ class GraphCatalog:
             data_required=['soec.ramp_rates'],
             priority=GraphPriority.HIGH,
             category='reliability',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # Grid & Renewables Integration
@@ -359,7 +549,7 @@ class GraphCatalog:
             data_required=['pricing.wind_coefficient', 'pem.power_mw', 'soec.power_mw'],
             priority=GraphPriority.HIGH,
             category='grid_integration',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         self.register(GraphMetadata(
             graph_id='grid_interaction_phase_portrait',
@@ -370,7 +560,7 @@ class GraphCatalog:
             data_required=['pricing.wind_coefficient', 'pricing.grid_exchange_mw'],
             priority=GraphPriority.HIGH,
             category='grid_integration',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # Economic Deep Dive
@@ -383,7 +573,7 @@ class GraphCatalog:
             data_required=['economics.lcoh_cumulative'], # Placeholder requirement
             priority=GraphPriority.CRITICAL,
             category='economics',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
         
         # Advanced Multi-Dimensional
@@ -396,7 +586,7 @@ class GraphCatalog:
             data_required=['pem.h2_production_kg_h', 'pem.power_mw', 'timestamps'],
             priority=GraphPriority.MEDIUM,
             category='advanced',
-            enabled=True
+            enabled=False  # Plotly disabled
         ))
 
         # Storage (Placeholder)

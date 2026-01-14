@@ -8,7 +8,7 @@ visualization:
     format: "png"
     
     dashboard:
-      enabled: true
+      enabled: false
       filename: "dashboard.html"
       title: "H2 Plant Simulation Dashboard"
   
@@ -19,7 +19,17 @@ visualization:
   
   # Skip the deprecated GRAPH_MAP loop in run_integrated_simulation.py
   # Set to true once you've verified all graphs work via orchestrated_graphs
-  skip_legacy_graphs: true
+  skip_legacy_graphs: false
+
+  # ========================================================================
+  # PLANT METADATA (Used for Graph Calculations)
+  # ========================================================================
+  plant_parameters:
+    soec_capacity_mw: 14.4  # 6 modules * 2.4 MW
+    pem_capacity_mw: 5.0    # 1 unit * 5.0 MW
+    storage_capacity_kg: 18360.0 # 30 tanks * 107.37m3 * 5.7kg/m3 (70bar)
+
+
 
   # ========================================================================
   # ORCHESTRATED GRAPH CONFIGURATION
@@ -92,6 +102,33 @@ visualization:
           components: ["PEM"]
           variable: "efficiency"
     
+    thermal_time_series:
+      enabled: true
+      plots:
+        - title: "SOEC Dry Cooler Performance"
+          components: 
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_O2_Drycooler_1"
+            - "SOEC_O2_Drycooler_2"
+            - "SOEC_O2_Drycooler_3"
+            - "SOEC_O2_Drycooler_4"
+          variable: "outlet_temperature"
+        - title: "PEM Dry Cooler Performance"
+          components: ["PEM_H2_DryCooler_1", "PEM_O2_DryCooler_1"]
+          variable: "outlet_temperature"
+        - title: "ATR Dry Cooler and Chiller Performance"
+          components: ["ATR_DryCooler", "ATR_Chiller_1"]
+          variable: "outlet_temperature"
+        - title: "Global Thermal Load Time Series"
+          components: ["H2_Production_Cooler", "LP_Intercooler_1", "HP_Intercooler_2", "HP_Intercooler_3", "HP_Intercooler_4"]
+          variable: "thermal_load"
+    
     performance_scatter:
       enabled: true
       plots:
@@ -160,6 +197,22 @@ visualization:
       plots:
         - title: "Cumulative RFNBO Production"
           components: []
+
+    # 4.1 IMPURITY TRACKING
+    # ----------------------------------------------------------------------
+    crossover_impurities:
+      enabled: true
+      plots:
+        - title: "O₂ Impurity in H2 Stream"
+          stream_type: "H2"
+          components:
+            - "SOEC_H2_KOD_1"
+            - "SOEC_H2_KOD_2"
+            - "SOEC_H2_Deoxo_1"
+            - "SOEC_H2_PSA_1"
+            - "PEM_H2_KOD_1"
+            - "PEM_H2_Deoxo_1"
+            - "PEM_H2_PSA_1"
 
     # 5. SOEC OPERATIONS
     # ----------------------------------------------------------------------
@@ -232,14 +285,46 @@ visualization:
     thermal_load_breakdown:
       enabled: true
       plots:
-        - title: "SOEC H2 Train Cooling Load"
-          components: ["SOEC_H2_Interchanger_1", "SOEC_H2_DryCooler_1", "SOEC_H2_Chiller_1", "SOEC_H2_Intercooler_1", "SOEC_H2_Intercooler_2", "SOEC_H2_Intercooler_3", "SOEC_H2_Intercooler_4", "SOEC_H2_Intercooler_5", "SOEC_H2_Intercooler_6", "SOEC_H2_Chiller_2", "SOEC_H2_ElectricBoiler_PSA"]
-        - title: "PEM H2 Train Cooling Load"
-          components: ["PEM_H2_DryCooler_1", "PEM_H2_Chiller_1", "PEM_H2_ElectricBoiler_1", "PEM_H2_Chiller_2", "PEM_H2_ElectricBoiler_2"]
-        - title: "SOEC O2 Train Cooling Load"
-          components: ["SOEC_O2_Interchanger_1", "SOEC_O2_Drycooler_1", "SOEC_O2_Drycooler_2", "SOEC_O2_Drycooler_3", "SOEC_O2_Drycooler_4"]
-        - title: "PEM O2 Train Cooling Load"
-          components: ["PEM_O2_Drycooler_1", "PEM_O2_Chiller_1", "PEM_O2_ElectricBoiler"]
+        - title: "SOEC Thermal Loads"
+          components: 
+            - "SOEC_H2_Interchanger_1"
+            - "SOEC_H2_DryCooler_1"
+            - "SOEC_H2_Chiller_1"
+            - "SOEC_H2_Chiller_2"
+            - "SOEC_O2_Drycooler_1"
+            - "SOEC_O2_Drycooler_2"
+            - "SOEC_O2_Drycooler_3"
+            - "SOEC_O2_Drycooler_4"
+            - "SOEC_H2_Intercooler_1"
+            - "SOEC_H2_Intercooler_2"
+            - "SOEC_H2_Intercooler_3"
+            - "SOEC_H2_Intercooler_4"
+            - "SOEC_H2_Intercooler_5"
+            - "SOEC_H2_Intercooler_6"
+            - "SOEC_H2_ElectricBoiler_PSA"
+          
+        - title: "PEM Thermal Loads"
+          components:
+            - "PEM_Electrolyzer" 
+            - "PEM_H2_DryCooler_1"
+            - "PEM_H2_Chiller_1"
+            - "PEM_H2_Chiller_2"
+            - "PEM_H2_ElectricBoiler_1"
+            - "PEM_H2_ElectricBoiler_2"
+            - "PEM_O2_Drycooler_1"
+            - "PEM_O2_Chiller_1"
+            - "PEM_O2_ElectricBoiler"
+
+        - title: "ATR Thermal Loads"
+          components:
+            - "ATR_Syngas_Cooler"
+            - "ATR_DryCooler"
+            - "ATR_Chiller_1"
+            - "Biogas_Intercooler_1"
+            - "Biogas_Intercooler_2"
+            - "ATR_H01_Boiler"
+            - "ATR_H02_Boiler"
+            - "ATR_H04_Boiler"
     
     water_removal_bar:
       enabled: true

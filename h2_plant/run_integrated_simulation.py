@@ -236,7 +236,7 @@ def run_with_dispatch_strategy(
                 logger.error(f"Streaming export failed: {e}. Falling back to standard write.")
         
         # Fallback / Standard Write
-        if not exported_via_stream:
+        if not exported_via_stream and history is not None:
             # Split history into 1D (scalar) and >1D (matrix)
             scalar_history = {}
             matrix_history = {}
@@ -311,499 +311,112 @@ def generate_graphs(
     output_dir: Path
 ) -> None:
     """
-    Generate graphs based on visualization_config.yaml settings.
+    Generate graphs using UnifiedGraphExecutor.
     
-    .. deprecated:: 2025-12
-        The legacy GRAPH_MAP loop in this function is deprecated.
-        Use `GraphOrchestrator` with `orchestrated_graphs` section in 
-        visualization_config.yaml instead. The GRAPH_MAP loop will be 
-        removed in a future version.
+    This function uses the new unified graph generation architecture that:
+    - Loads column requirements from GraphCatalog
+    - Applies memory-efficient column filtering
+    - Executes graphs in priority order with timeout protection
+    - Supports both Matplotlib (PNG) and Plotly (HTML) outputs
+    
+    The legacy GRAPH_MAP loop has been removed. All graphs are now registered
+    in `graph_catalog.py` and executed via `UnifiedGraphExecutor`.
+    
+    To revert to legacy behavior, set `visualization.use_legacy_generator: true`
+    in visualization_config.yaml.
     
     Args:
-        history: Simulation history dictionary.
-        scenarios_dir: Path to scenarios directory.
-        output_dir: Output directory for graphs.
+        history: Simulation history dictionary (column_name -> numpy array).
+        scenarios_dir: Path to scenarios directory containing YAML configs.
+        output_dir: Output directory for simulation results.
     """
     import yaml
-    import pandas as pd
-    import fnmatch
     import gc
     
-    # =========================================================================
-    # COLUMN PATTERNS REGISTRY FOR MEMORY OPTIMIZATION
-    # Maps graph categories to column patterns (exact matches or glob patterns)
-    # This prevents loading all 1000+ columns for each graph.
-    # =========================================================================
-    CORE_COLUMNS = [
-        'minute', 'P_offer', 'P_soec_actual', 'P_pem', 'P_sold', 
-        'spot_price', 'h2_kg', 'time', 'hour'
-    ]
-    
-    GRAPH_COLUMN_PATTERNS = {
-        # Core Dispatch
-        'dispatch_strategy_stacked': CORE_COLUMNS + ['P_bop_mw'],
-        'dispatch': CORE_COLUMNS + ['P_bop_mw'],
-        'arbitrage_scatter': CORE_COLUMNS,
-        'arbitrage': CORE_COLUMNS,
-        
-        # H2 Production
-        'total_h2_production_stacked': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
-        'h2_production': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
-        'cumulative_h2_production': CORE_COLUMNS + [
-            'H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg',
-            'h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg',
-            '*_PSA_*_outlet_mass_flow_kg_h'
-        ],
-        'cumulative_h2': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg'],
-        
-        # O2 Production
-        'oxygen_production_stacked': CORE_COLUMNS + ['O2_pem_kg', '*_O2_*'],
-        'oxygen_production': CORE_COLUMNS + ['O2_pem_kg'],
-        
-        # Water
-        'water_consumption_stacked': CORE_COLUMNS + ['steam_soec_kg', 'H2O_soec_out_kg', 'H2O_pem_kg'],
-        'water_consumption': CORE_COLUMNS + ['steam_soec_kg', 'H2O_soec_out_kg', 'H2O_pem_kg'],
-        
-        # Economics
-        'power_consumption_breakdown_pie': CORE_COLUMNS + ['compressor_power_kw', '*_cooling_load_kw'],
-        'energy_pie': CORE_COLUMNS + ['compressor_power_kw'],
-        'price_histogram': ['spot_price', 'minute'],
-        'dispatch_curve_scatter': CORE_COLUMNS,
-        'dispatch_curve': CORE_COLUMNS,
-        'efficiency_curve': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        'revenue_analysis': CORE_COLUMNS + ['cumulative_h2_kg'],
-        'temporal_averages': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        'cumulative_energy': CORE_COLUMNS,
-        
-        # RFNBO
-        'rfnbo_compliance_stacked': CORE_COLUMNS + ['h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'purchase_threshold_eur_mwh'],
-        'rfnbo_spot_analysis': CORE_COLUMNS + ['purchase_threshold_eur_mwh'],
-        'rfnbo_pie': ['h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'minute'],
-        'cumulative_rfnbo': CORE_COLUMNS + ['cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg'],
-        
-        # SOEC Modules
-        'soec_module_heatmap': ['minute', 'soec_module_*', 'P_soec_actual', 'soec_active_modules'],
-        'soec_module_power_stacked': ['minute', 'soec_module_*', 'P_soec_actual'],
-        'soec_module_wear_stats': ['minute', 'soec_module_*'],
-        'monthly_performance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        'monthly_efficiency': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        'monthly_capacity_factor': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        
-        # Thermal/Separation - use pattern matching
-        'water_removal_total': ['minute', '*_liquid_removed_kg*', '*_water_removed*'],
-        'drains_discarded': ['minute', '*_liquid_removed_kg*', '*_drain*'],
-        'chiller_cooling': ['minute', '*Chiller*', '*_cooling*', '*_duty*'],
-        'coalescer_separation': ['minute', '*Coalescer*'],
-        'kod_separation': ['minute', '*KOD*', '*_liquid_removed*'],
-        'dry_cooler_performance': ['minute', '*DryCooler*', '*Drycooler*', '*_cooling*'],
-        
-        # Energy/Schematic
-        'energy_flows': CORE_COLUMNS + ['compressor_power_kw', '*_power_kw'],
-        'q_breakdown': ['minute', '*_cooling*', '*_duty*', '*_heat*'],
-        'thermal_load_breakdown_time_series': ['minute', '*_cooling*', '*_duty*', '*Chiller*', '*Intercooler*'],
-        'plant_balance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        'mixer_comparison': ['minute', '*Mixer*'],
-        
-        # Separation Analysis (need component-specific columns)
-        'individual_drains': ['minute', '*_drain*', '*_liquid*'],
-        'dissolved_gas_concentration': ['minute', '*_dissolved*', '*KOD*', '*Mixer*'],
-        'dissolved_gas_efficiency': ['minute', '*_dissolved*', '*Mixer*'],
-        'crossover_impurities': ['minute', '*_o2_*', '*_h2_*', '*_impurity*', '*_outlet_*'],
-        'drain_line_properties': ['minute', '*Drain*', '*_outlet_temp*', '*_outlet_pressure*'],
-        'deoxo_profile': ['minute', '*Deoxo*'],
-        'drain_mixer_balance': ['minute', '*Drain_Mixer*', '*_mass_flow*'],
-        'drain_scheme': ['minute', '*Drain*', '*_mass_flow*'],
-        'energy_flow': CORE_COLUMNS + ['*_power_kw', 'compressor_power_kw'],
-        'process_scheme': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
-        'drain_line_concentration': ['minute', '*Drain_Mixer*', '*_dissolved*'],
-        'recirculation_comparison': ['minute', '*recirc*', '*recirculation*'],
-        'entrained_liquid_flow': ['minute', '*_entrained*', '*_liquid*'],
-        
-        # Stacked Properties (temperature, pressure profiles)
-        'h2_stacked_properties': ['minute', '*SOEC_H2_*_outlet_*', '*PEM_H2_*_outlet_*', 'SOEC_Cluster_*'],
-        'o2_stacked_properties': ['minute', '*O2_*_outlet_*'],
-        
-        # Flow tracking
-        'water_vapor_tracking': ['minute', '*_h2o_*', '*_vapor*', '*_moisture*'],
-        'total_mass_flow': ['minute', '*_mass_flow*', '*_flow_kg*'],
-        
-        # Storage
-        'storage_levels': ['minute', 'tank_*', '*Tank*_level*', '*Tank*_pressure*'],
-        'compressor_power': ['minute', '*Compressor*_power*', 'compressor_power_kw'],
-        
-        # Effective PPA (new)
-        'effective_ppa': CORE_COLUMNS + ['ppa_price_effective_eur_mwh'],
-        
-        # Water Tank Inventory (new)
-        'water_tank_inventory': ['minute', '*UltraPure_Tank*', '*mass_kg*', '*control_zone*'],
-    }
-    
-    def filter_columns_for_graph(all_columns: list, graph_name: str) -> list:
-        """
-        Filter column list to only those needed for a specific graph.
-        Uses exact matches and glob patterns from GRAPH_COLUMN_PATTERNS.
-        
-        Args:
-            all_columns: List of all available column names
-            graph_name: Name of the graph being generated
-            
-        Returns:
-            Filtered list of columns to load (always includes 'minute')
-        """
-        patterns = GRAPH_COLUMN_PATTERNS.get(graph_name)
-        if patterns is None:
-            # Unknown graph - return core columns + any obvious matches
-            return [c for c in all_columns if any(
-                p in c for p in ['minute', 'P_', 'H2_', 'spot', 'cumulative']
-            )][:100]  # Cap at 100 columns for safety
-        
-        matched = set()
-        for pattern in patterns:
-            if '*' in pattern:
-                # Glob pattern
-                matched.update(fnmatch.filter(all_columns, pattern))
-            else:
-                # Exact match
-                if pattern in all_columns:
-                    matched.add(pattern)
-        
-        # Always include minute if available
-        if 'minute' in all_columns:
-            matched.add('minute')
-            
-        return list(matched)
-    
-    # Import graph creation functions
-    try:
-        from h2_plant.visualization.static_graphs import (
-            # Core dispatch/economics graphs
-            create_dispatch_figure,
-            create_arbitrage_figure,
-            create_h2_production_figure,
-            create_oxygen_figure,
-            create_water_figure,
-            create_energy_pie_figure,
-            create_histogram_figure,
-            create_dispatch_curve_figure,
-            create_cumulative_h2_figure,
-            create_cumulative_energy_figure,
-            create_efficiency_curve_figure,
-            create_revenue_analysis_figure,
-            create_temporal_averages_figure,
-            create_water_removal_total_figure,
-            # Thermal & Separation graphs
-            create_drains_discarded_figure,
-            create_chiller_cooling_figure,
-            create_coalescer_separation_figure,
-            create_kod_separation_figure,
-            create_dry_cooler_figure,
-            # Energy & Analysis graphs
-            create_energy_flows_figure,
-            create_plant_balance_schematic,
-            create_mixer_comparison_figure,
-            create_individual_drains_figure,
-            create_dissolved_gas_figure,
-            create_crossover_impurities_figure,
-            create_thermal_load_breakdown_figure,
-            # Profile & Flow tracking graphs
-            create_water_vapor_tracking_figure,
-            create_total_mass_flow_figure,
-            create_monthly_performance_figure,
-            create_monthly_efficiency_figure,
-            create_monthly_capacity_factor_figure,
-            create_soec_module_heatmap_figure,
-            create_soec_module_power_stacked_figure,
-            create_soec_module_wear_figure,
-            create_q_breakdown_figure,
-            create_drain_line_properties_figure,
-            create_deoxo_profile_figure,
-            create_drain_mixer_figure,
-            create_drain_scheme_schematic,
-            create_energy_flow_figure,
-            create_process_scheme_schematic,
-            create_drain_concentration_figure,
-            create_recirculation_comparison_figure,
-            create_entrained_liquid_figure,
-            create_h2_stacked_properties,
-            create_o2_stacked_properties,
-            # RFNBO Compliance graphs
-            create_rfnbo_compliance_stacked_figure,
-            create_rfnbo_spot_analysis_figure,
-            create_rfnbo_pie_figure,
-            create_cumulative_rfnbo_figure,
-        )
-        GRAPHS_AVAILABLE = True
-    except ImportError as e:
-        logger.warning(f"Graph functions not available: {e}")
-        GRAPHS_AVAILABLE = False
-        return
+    logger.info("### Starting Graph Generation ###")
     
     # Load visualization config
     viz_config_path = Path(scenarios_dir) / "visualization_config.yaml"
-    if not viz_config_path.exists():
-        logger.info("No visualization_config.yaml found, skipping graph generation")
-        return
+    if viz_config_path.exists():
+        with open(viz_config_path, 'r') as f:
+            viz_config = yaml.safe_load(f) or {}
+    else:
+        logger.warning(f"visualization_config.yaml not found at {viz_config_path}")
+        viz_config = {}
     
-    with open(viz_config_path, 'r') as f:
-        viz_config = yaml.safe_load(f)
-    
-    enabled_graphs = viz_config.get('visualization', {}).get('graphs', {})
-    export_config = viz_config.get('visualization', {}).get('export', {})
-    
-    if not export_config.get('enabled', True):
-        logger.info("Graph export disabled in visualization_config.yaml")
-        return
+    # Check for legacy fallback flag
+    if viz_config.get('visualization', {}).get('use_legacy_generator', False):
+        logger.warning("Legacy generator requested but has been removed. Using UnifiedGraphExecutor.")
     
     # Create graphs directory
     graphs_dir = output_dir / "graphs"
     graphs_dir.mkdir(parents=True, exist_ok=True)
     
     # =========================================================================
-    # MEMORY-OPTIMIZED LOADING STRATEGY
-    # Instead of loading all 1000+ columns at once (~4GB for year-long sims),
-    # we store the raw history and create filtered DataFrames per-graph.
+    # UNIFIED GRAPH EXECUTION
     # =========================================================================
-    
-    # Filter 1D history for DataFrame (exclude matrices)
-    scalar_history = {k: v for k, v in history.items() if not (isinstance(v, np.ndarray) and v.ndim > 1)}
-    all_columns = list(scalar_history.keys())
-    
-    logger.info(f"Graph data: {len(all_columns)} columns, {len(scalar_history.get('minute', []))} rows")
-    
-    # Normalize column names to match what graph functions expect
-    # The dispatch history uses names like 'H2_soec_kg', 'spot_price', 'P_soec_actual'
-    # but graph functions expect 'H2_soec', 'Spot', 'P_soec'
-    COLUMN_ALIASES = {
-        'H2_soec_kg': 'H2_soec',
-        'H2_pem_kg': 'H2_pem',
-        'spot_price': 'Spot',
-        'P_soec_actual': 'P_soec',
-        'steam_soec_kg': 'Steam_soec',
-        'H2O_soec_out_kg': 'H2O_soec',
-        'H2O_pem_kg': 'H2O_pem',
-        'O2_pem_kg': 'O2_pem',
-        'cumulative_h2_kg': 'Cumulative_H2',
-        'pem_V_cell': 'PEM_V_cell',
-        'tank_level_kg': 'Tank_Level',
-        'tank_pressure_bar': 'Tank_Pressure',
-        'compressor_power_kw': 'Compressor_Power',
-    }
-    
-    def create_filtered_df(graph_name: str) -> pd.DataFrame:
-        """Create a memory-efficient DataFrame with only columns needed for graph."""
-        needed_cols = filter_columns_for_graph(all_columns, graph_name)
-        
-        # Build minimal dict with only needed columns
-        filtered_data = {}
-        for col in needed_cols:
-            if col in scalar_history:
-                filtered_data[col] = scalar_history[col]
-        
-        df = pd.DataFrame(filtered_data)
-        
-        # Apply aliases
-        for old_name, new_name in COLUMN_ALIASES.items():
-            if old_name in df.columns and new_name not in df.columns:
-                df[new_name] = df[old_name]
-        
-        # Add time/hour if minute exists
-        if 'minute' in df.columns and 'time' not in df.columns:
-            df['time'] = df['minute'] / 60.0
-            df['hour'] = df['time']
-        
-        return df
-    
-    # Create a "full" DataFrame only for orchestrated graphs that need all data
-    # For legacy graphs, we'll create per-graph filtered DataFrames
-    _full_df_cache = None
-    
-    def get_full_df() -> pd.DataFrame:
-        """Lazy-load full DataFrame (for orchestrator compatibility)."""
-        nonlocal _full_df_cache
-        if _full_df_cache is None:
-            logger.info("Loading full DataFrame for orchestrator...")
-            _full_df_cache = pd.DataFrame(scalar_history)
-            for old_name, new_name in COLUMN_ALIASES.items():
-                if old_name in _full_df_cache.columns and new_name not in _full_df_cache.columns:
-                    _full_df_cache[new_name] = _full_df_cache[old_name]
-            if 'minute' in _full_df_cache.columns and 'time' not in _full_df_cache.columns:
-                _full_df_cache['time'] = _full_df_cache['minute'] / 60.0
-                _full_df_cache['hour'] = _full_df_cache['time']
-        return _full_df_cache
-    
-    # =========================================================================
-    # DEPRECATED: GRAPH_MAP
-    # This legacy mapping is deprecated. Use GraphOrchestrator with 
-    # visualization_config.yaml 'orchestrated_graphs' section instead.
-    # Will be removed in future version.
-    # =========================================================================
-    GRAPH_MAP = {
-        # Core dispatch/economics (primary names)
-        'dispatch_strategy_stacked': create_dispatch_figure,
-        'arbitrage_scatter': create_arbitrage_figure,
-        'total_h2_production_stacked': create_h2_production_figure,
-        'oxygen_production_stacked': create_oxygen_figure,
-        'water_consumption_stacked': create_water_figure,
-        'power_consumption_breakdown_pie': create_energy_pie_figure,
-        'price_histogram': create_histogram_figure,
-        'dispatch_curve_scatter': create_dispatch_curve_figure,
-        'cumulative_h2_production': create_cumulative_h2_figure,
-        'cumulative_energy': create_cumulative_energy_figure,
-        'efficiency_curve': create_efficiency_curve_figure,
-        'revenue_analysis': create_revenue_analysis_figure,
-        'temporal_averages': create_temporal_averages_figure,
-        'monthly_performance': create_monthly_performance_figure,
-        'monthly_efficiency': create_monthly_efficiency_figure,
-        'monthly_capacity_factor': create_monthly_capacity_factor_figure,
-        'soec_module_heatmap': create_soec_module_heatmap_figure,
-        'soec_module_power_stacked': create_soec_module_power_stacked_figure,
-        'soec_module_wear_stats': create_soec_module_wear_figure,
-        
-        # Thermal & Separation graphs
-        'water_removal_total': create_water_removal_total_figure,
-        'drains_discarded': create_drains_discarded_figure,
-        'chiller_cooling': create_chiller_cooling_figure,
-        'coalescer_separation': create_coalescer_separation_figure,
-        'kod_separation': create_kod_separation_figure,
-        'dry_cooler_performance': create_dry_cooler_figure,
-        
-        # Energy & Thermal Analysis
-        'energy_flows': create_energy_flows_figure,
-        'q_breakdown': create_q_breakdown_figure,
-        'thermal_load_breakdown_time_series': create_thermal_load_breakdown_figure, # Rename old one to clearer name
-        'plant_balance': create_plant_balance_schematic,
-        'mixer_comparison': create_mixer_comparison_figure,
-        'individual_drains': create_individual_drains_figure,
-        'dissolved_gas_concentration': create_dissolved_gas_figure,
-        'dissolved_gas_efficiency': create_drain_concentration_figure,
-        'crossover_impurities': create_crossover_impurities_figure,
-        'drain_line_properties': create_drain_line_properties_figure,
-        'deoxo_profile': create_deoxo_profile_figure,
-        'drain_mixer_balance': create_drain_mixer_figure,
-        'drain_scheme': create_drain_scheme_schematic,
-        'energy_flow': create_energy_flow_figure,
-        'process_scheme': create_process_scheme_schematic,
-        'drain_line_concentration': create_drain_concentration_figure,
-        'recirculation_comparison': create_recirculation_comparison_figure,
-        'entrained_liquid_flow': create_entrained_liquid_figure,
-        'h2_stacked_properties': create_h2_stacked_properties,
-        'o2_stacked_properties': create_o2_stacked_properties,
-        
-        # Flow tracking
-        'water_vapor_tracking': create_water_vapor_tracking_figure,
-        'total_mass_flow': create_total_mass_flow_figure,
-        
-        # RFNBO Compliance (Economic Spot Dispatch)
-        'rfnbo_compliance_stacked': create_rfnbo_compliance_stacked_figure,
-        'rfnbo_spot_analysis': create_rfnbo_spot_analysis_figure,
-        'rfnbo_pie': create_rfnbo_pie_figure,
-        'cumulative_rfnbo': create_cumulative_rfnbo_figure,
-        
-        # Legacy aliases (disabled by default in config, kept for backward compat)
-        'dispatch': create_dispatch_figure,
-        'arbitrage': create_arbitrage_figure,
-        'h2_production': create_h2_production_figure,
-        'oxygen_production': create_oxygen_figure,
-        'water_consumption': create_water_figure,
-        'energy_pie': create_energy_pie_figure,
-        'dispatch_curve': create_dispatch_curve_figure,
-        'cumulative_h2': create_cumulative_h2_figure,
-    }
-    
-    generated_count = 0
-    
-    # Access global metadata extracted during simulation
-    global _component_metadata
-    metadata = _component_metadata
-    
-    # =========================================================================
-    # LEGACY GRAPH_MAP LOOP (DEPRECATED)
-    # Skip if 'skip_legacy_graphs' is set in config (default: False)
-    # This loop will be removed in a future version.
-    # =========================================================================
-    skip_legacy = viz_config.get('visualization', {}).get('skip_legacy_graphs', False)
-    
-    if skip_legacy:
-        logger.info("Skipping legacy GRAPH_MAP loop (skip_legacy_graphs=true)")
-    else:
-        for graph_name, is_enabled in enabled_graphs.items():
-            if not is_enabled:
-                continue
-            
-            create_func = GRAPH_MAP.get(graph_name)
-            if create_func is None:
-                continue  # Graph type not implemented in basic set
-            
-            try:
-                # Create memory-efficient filtered DataFrame for this graph
-                df = create_filtered_df(graph_name)
-                logger.debug(f"Graph '{graph_name}': using {len(df.columns)} columns")
-                
-                # Pass metadata to crossover_impurities graph for grouping/sorting
-                if graph_name == 'crossover_impurities':
-                    fig = create_func(df, metadata=metadata)
-                else:
-                    fig = create_func(df)
-                if fig is not None:
-                    # Save as PNG
-                    output_path = graphs_dir / f"{graph_name}.png"
-                    fig.savefig(output_path, dpi=100, bbox_inches='tight')
-                    logger.info(f"Generated: {output_path.name}")
-                    generated_count += 1
-                    
-                    # Close figure to free memory
-                    import matplotlib.pyplot as plt
-                    plt.close(fig)
-                
-                # Free memory after each graph
-                del df
-                gc.collect()
-                
-            except Exception as e:
-                logger.warning(f"Failed to generate {graph_name}: {e}")
-    
-    print(f"\n### Legacy Graphs Generated: {generated_count} files saved to {graphs_dir}")
-    
-    # ========================================================================
-    # ORCHESTRATED GRAPHS (New Architecture)
-    # Uses full DataFrame - lazy-loaded only if orchestrated graphs are enabled
-    # ========================================================================
     try:
-        from h2_plant.visualization.graph_orchestrator import GraphOrchestrator
+        from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY
+        from h2_plant.visualization.unified_executor import UnifiedGraphExecutor
         
-        orchestrator = GraphOrchestrator(graphs_dir)
-        full_df = get_full_df()  # Lazy-load full DataFrame
-        orchestrated_count = orchestrator.generate_all(full_df, viz_config)
+        # Initialize executor with catalog
+        executor = UnifiedGraphExecutor(GRAPH_REGISTRY, graphs_dir)
         
-        if orchestrated_count > 0:
-            print(f"### Orchestrated Graphs Generated: {orchestrated_count} files")
+        # Configure enabled graphs from YAML
+        executor.configure_from_yaml(viz_config)
         
-        # Clean up full DataFrame
-        del full_df
+        # If no explicit config, enable all Matplotlib graphs (default behavior)
+        if not viz_config.get('visualization', {}).get('categories') and \
+           not viz_config.get('visualization', {}).get('graphs'):
+            # No explicit config - use defaults (all Matplotlib graphs enabled)
+            logger.info("No explicit graph config, using catalog defaults")
+        
+        # Load optimized DataFrame with only required columns
+        df = executor.load_data(history=history)
+        logger.info(f"Loaded DataFrame: {df.shape[0]} rows x {df.shape[1]} columns")
+        
+        # Execute all enabled graphs with timeout protection
+        timeout = viz_config.get('visualization', {}).get('timeout_seconds', 60)
+        results = executor.execute(df, timeout_seconds=timeout)
+        
+        # Log results
+        success_count = sum(1 for r in results.values() if r.status == 'success')
+        total_count = len(results)
+        logger.info(f"### Graphs Generated: {success_count}/{total_count} ###")
+        
+        # Log any failures
+        for graph_id, result in results.items():
+            if result.status == 'failed':
+                logger.warning(f"  Failed: {graph_id} - {result.error}")
+            elif result.status == 'timeout':
+                logger.warning(f"  Timeout: {graph_id} - exceeded {timeout}s")
+        
+        # Cleanup
+        del df
         gc.collect()
+        
     except ImportError as e:
-        logger.debug(f"Graph orchestrator not available: {e}")
+        logger.error(f"UnifiedGraphExecutor not available: {e}")
+        logger.error("Graph generation skipped. Install missing dependencies or check imports.")
     except Exception as e:
-        logger.warning(f"Orchestrated graph generation failed: {e}")
+        logger.error(f"Graph generation failed: {e}", exc_info=True)
     
-    # ========================================================================
-    # DAILY H2 PRODUCTION AVERAGE GRAPH
-    # ========================================================================
+    # =========================================================================
+    # DAILY H2 PRODUCTION GRAPH (Special case - uses CSV input)
+    # =========================================================================
     try:
         daily_config = viz_config.get('visualization', {}).get('orchestrated_graphs', {}).get('daily_h2_production_average', {})
         if daily_config.get('enabled', False):
             from scripts.plot_daily_h2_production import generate_daily_h2_production_graph
             csv_path = output_dir / "simulation_history.csv"
-            output_path = graphs_dir / "daily_h2_production.png"
+            daily_output = graphs_dir / "daily_h2_production.png"
             if csv_path.exists():
-                generate_daily_h2_production_graph(str(csv_path), str(output_path))
+                generate_daily_h2_production_graph(str(csv_path), str(daily_output))
                 logger.info("Generated: daily_h2_production.png")
     except ImportError as e:
         logger.debug(f"Daily H2 production graph not available: {e}")
     except Exception as e:
         logger.warning(f"Daily H2 production graph failed: {e}")
-
-
 def main():
     """
     CLI entry point for integrated dispatch simulation.

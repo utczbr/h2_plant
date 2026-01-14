@@ -325,12 +325,12 @@ class Chiller(Component):
                 self.logger.debug(f"Chiller {self.component_id}: Inlet enthalpy below target. No cooling needed.")
             else:
                 Q_dot_W = mass_flow_kg_s * (h_in - h_target)
-
+                
         except Exception as e:
             # Fallback to Cp-based calculation
             self.logger.debug(f"Enthalpy calc failed, using fallback: {e}")
             Q_dot_W = self._calculate_cooling_fallback()
-
+            
         # Apply capacity limit
         max_Q_W = self.cooling_capacity_kw * 1000.0 * self.efficiency
         final_temp_k = self.target_temp_k
@@ -379,6 +379,7 @@ class Chiller(Component):
             final_temp_k = self.inlet_stream.temperature_k - delta_T_real
 
         cooling_load_kw = Q_dot_W / 1000.0
+        self.cooling_load_kw = cooling_load_kw # Update instance state with sensible load
 
         # Dynamic COP based on cooling water temperature (from CoolingManager)
         # Physics: Carnot Efficiency degradation as condenser temp rises
@@ -393,12 +394,15 @@ class Chiller(Component):
 
         # COP-based electrical consumption
         if self.cop > 0:
-            batch_electrical_kw = abs(cooling_load_kw) / self.cop
+            batch_electrical_kw = abs(self.cooling_load_kw) / self.cop
         else:
             batch_electrical_kw = 0.0
         
+        self.electrical_power_kw = batch_electrical_kw
+        
         # Heat rejected to cooling water
-        batch_heat_rejected_kw = abs(cooling_load_kw) + batch_electrical_kw
+        batch_heat_rejected_kw = abs(self.cooling_load_kw) + batch_electrical_kw
+        self.heat_rejected_kw = batch_heat_rejected_kw
 
         # Create outlet stream with flash condensation
         # Flash calculation: determine how much water condenses at outlet T/P
@@ -471,41 +475,46 @@ class Chiller(Component):
                 # We DO NOT remove mass from the stream, just change phase
                 m_total_out = self.inlet_stream.mass_flow_kg_h
                 
-                if m_total_out > 0:
+                # New Total Mass must include extra liquid for conservation
+                m_total_new = m_total_out + m_H2O_liq_extra_in
+                
+                if m_total_new > 0:
                     # Recalculate mass fractions
                     m_H2O_vapor_out = m_H2O_vapor_in - m_condensed_kg_h
                     
-                    # Total liquid out = Newly Condensed + Inlet Liquid
+                    # Total liquid out = Newly Condensed + Inlet Liquid (comp + extra)
                     m_H2O_liq_total_out = m_condensed_kg_h + m_H2O_liq_in
                     
                     # Vapor phase water
-                    outlet_comp['H2O'] = m_H2O_vapor_out / m_total_out
+                    outlet_comp['H2O'] = m_H2O_vapor_out / m_total_new
                     
                     # Liquid phase water (passed to next component)
-                    outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_out
+                    outlet_comp['H2O_liq'] = m_H2O_liq_total_out / m_total_new
                     
-                    # Other species (mass conserved, just fraction changes if total mass changed, 
-                    # but here total mass is constant so fractions are effectively constant relative to total)
-                    # Only H2O splits into H2O + H2O_liq
+                    # Other species: Calculate physical mass, then new fraction
                     for species in inlet_comp:
                         if species not in ('H2O', 'H2O_liq'):
-                            outlet_comp[species] = inlet_comp[species]
+                            m_species = inlet_comp[species] * m_total_out
+                            outlet_comp[species] = m_species / m_total_new
 
         # Track condensation for state reporting (only new condensation counts for latent heat)
         self.water_condensed_kg_h = m_condensed_kg_h
         
-        # Outlet mass flow is SAME as inlet (water is carried over)
-        outlet_mass_flow = self.inlet_stream.mass_flow_kg_h
+        # Determine final mass flow (fallback if loop above didn't run or m_total_new=0)
+        # If m_total_new was calculated in the if block, use it.
+        # But wait, m_total_new depends on m_extra which is always calc'd.
+        # We need to make sureoutlet_mass_flow is correct in all paths.
+        outlet_mass_flow = self.inlet_stream.mass_flow_kg_h + (
+            self.inlet_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0 
+            if hasattr(self.inlet_stream, 'extra') and self.inlet_stream.extra else 0.0
+        )
         
-        # Total liquid for 'extra' (consistency)
-        # Re-calculate total liquid in case we skipped the condensation block (e.g. no condensation)
-        x_liq_final = outlet_comp.get('H2O_liq', 0.0)
-        m_liq_final_kg_h = x_liq_final * outlet_mass_flow
-        
-        # If block skipped (no new condensation), we still need to preserve inlet liquid!
+        # Handle fallback for H2O_liq if not set (no condensation path?)
+        # Logic matches DryCooler structure
         if 'H2O_liq' not in outlet_comp and 'H2O_liq' in inlet_comp:
-             outlet_comp['H2O_liq'] = inlet_comp['H2O_liq']
-             m_liq_final_kg_h = inlet_comp['H2O_liq'] * outlet_mass_flow
+             # Just dilute existing liquid
+             m_liq = inlet_comp['H2O_liq'] * outlet_mass_flow # Approx
+             outlet_comp['H2O_liq'] = m_liq / outlet_mass_flow
 
         self.outlet_stream = Stream(
             mass_flow_kg_h=outlet_mass_flow,
@@ -517,22 +526,42 @@ class Chiller(Component):
             # Setting both would cause double-counting in get_total_mole_frac.
         )
 
-        # Calculate Latent Heat from condensation
-        # h_vap for water approx 2260 kJ/kg, or 2440 at 25C. 
-        # Precise way: h_gas - h_liq at T_outlet, but 2450 kJ/kg is good standard est.
-        # Q_latent (kW) = m_condensed (kg/s) * h_vap (kJ/kg)
-        h_vap_kj_kg = 2450.0 
-        self.latent_heat_kw = (self.water_condensed_kg_h / 3600.0) * h_vap_kj_kg
+        # Calculate Latent Heat from condensation Rigorously
+        # Uses final_temp_k as the saturation temperature
+        try:
+            # Enthalpy of Saturated Vapor (Q=1)
+            h_vap_sat = CoolPropLUT.PropsSI('H', 'T', final_temp_k, 'Q', 1.0, 'Water')
+            # Enthalpy of Saturated Liquid (Q=0)
+            h_liq_sat = CoolPropLUT.PropsSI('H', 'T', final_temp_k, 'Q', 0.0, 'Water')
+            
+            if h_vap_sat == 0.0 or h_liq_sat == 0.0:
+                 delta_h_vap = 2450.0 * 1000.0 # Fallback
+            else:
+                 delta_h_vap = h_vap_sat - h_liq_sat
+        except Exception:
+             delta_h_vap = 2450.0 * 1000.0
+             
+        self.latent_heat_kw = (self.water_condensed_kg_h / 3600.0) * (delta_h_vap / 1000.0)
         
-        # Sensible is remainder (Total - Latent)
-        # Note: cooling_load_kw is negative or positive? In this class:
-        # Q_dot < 0 implies cooling?
-        # step() says: Q_dot_W = mass * (h_in - h_target). If cooling, h_in > h_target -> Q > 0.
-        # But later: cooling_load_kw = Q_dot_W / 1000.0
-        # So positive means heat removed.
-        self.sensible_heat_kw = max(0.0, self.cooling_load_kw - self.latent_heat_kw)
+        # FIX: The Q_dot_W calculated initially was based on Gas-Phase Enthalpy difference 
+        # (Sensible Heat only) because target_stream assumed vapor composition.
+        # We must ADD the Latent Heat to get the Total Cooling Load.
+        self.sensible_heat_kw = self.cooling_load_kw  # Store initial sensible calc
+        self.cooling_load_kw += self.latent_heat_kw   # Update Total Load
+        
+        # Re-calculate Electrical Power based on CORRECTED Total Load
+        if self.cop > 0:
+            batch_electrical_kw = abs(self.cooling_load_kw) / self.cop
+        else:
+            batch_electrical_kw = 0.0
+        
+        self.electrical_power_kw = batch_electrical_kw
+        
+        # Re-calculate Heat Rejected
+        batch_heat_rejected_kw = abs(self.cooling_load_kw) + batch_electrical_kw
+        self.heat_rejected_kw = batch_heat_rejected_kw
 
-        self.timestep_cooling_load_kw += cooling_load_kw
+        self.timestep_cooling_load_kw += self.cooling_load_kw
         self.timestep_heat_rejected_kw += batch_heat_rejected_kw
         self.timestep_electrical_power_kw += batch_electrical_kw
 

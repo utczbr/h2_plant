@@ -63,12 +63,15 @@ class PlantGraphBuilder:
         self.components[ComponentID.LUT_MANAGER.value] = lut_manager
         logger.info(f"Registered LUTManager for component optimization")
         
-        # Create and register CoolingManager for centralized cooling utilities
-        from h2_plant.core.cooling_manager import CoolingManager
-        cooling_manager = CoolingManager()
-        cooling_manager.set_component_id("cooling_manager")
-        self.components["cooling_manager"] = cooling_manager
-        logger.info("Registered CoolingManager for centralized cooling utilities")
+        # CoolingManager will be registered ONLY if not explicitly defined in topology
+        # Check if topology has an explicit CoolingManager definition
+        cm_in_topology = any(node.type == 'CoolingManager' for node in self.context.topology.nodes)
+        if not cm_in_topology:
+            from h2_plant.core.cooling_manager import CoolingManager
+            cooling_manager = CoolingManager()
+            cooling_manager.set_component_id("cooling_manager")
+            self.components["cooling_manager"] = cooling_manager
+            logger.info("Registered default CoolingManager for centralized cooling utilities")
         
         for node in self.context.topology.nodes:
             component = self._create_component(node)
@@ -285,6 +288,10 @@ class PlantGraphBuilder:
             max_flow = float(node.params.get('max_flow_kg_h', 1000.0))
             return ATRReactor(node.id, max_flow_kg_h=max_flow)
 
+        elif node.type == "ElectricBoiler":
+            from h2_plant.components.thermal.electric_boiler import ElectricBoiler
+            return ElectricBoiler(config=node.params, component_id=node.id)
+
         elif node.type == "ATR_Boiler":
             params = node.params or {}
             lookup_id = params.get('lookup_id', params.get('component_id', None))
@@ -346,11 +353,23 @@ class PlantGraphBuilder:
             
         elif node.type == "DryCooler":
             from h2_plant.components.cooling.dry_cooler import DryCooler
-            comp_id = node.params.get('component_id', node.id)
-            target_temp_c = node.params.get('target_outlet_temp_c', node.params.get('target_temp_c', None))
+            # Create copy of params to avoid modifying node.params
+            params = node.params.copy()
+            # Explicitly pop component_id to avoid duplication with kwarg
+            comp_id = params.pop('component_id', node.id)
+            use_central = params.pop('use_central_utility', True)
+            
+            target_temp_c = params.pop('target_outlet_temp_c', params.pop('target_temp_c', None))
             if target_temp_c is not None:
                 target_temp_c = float(target_temp_c)
-            return DryCooler(component_id=comp_id, target_outlet_temp_c=target_temp_c)
+            
+            # Pass remaining params as kwargs
+            return DryCooler(
+                component_id=comp_id, 
+                target_outlet_temp_c=target_temp_c,
+                use_central_utility=use_central,
+                **params
+            )
 
         elif node.type == "DryCoolerSimplified":
             from h2_plant.components.cooling.dry_cooler_simplified import DryCoolerSimplified
@@ -359,6 +378,19 @@ class PlantGraphBuilder:
                 target_temp_k=float(node.params.get('target_temp_k', 313.15)),
                 pressure_drop_bar=float(node.params.get('pressure_drop_bar', 0.05)),
                 fan_specific_power_kw_per_mw=float(node.params.get('fan_specific_power_kw_per_mw', 15.0))
+            )
+        
+        elif node.type == "CoolingManager":
+            from h2_plant.core.cooling_manager import CoolingManager
+            params = node.params.copy() if node.params else {}
+            comp_id = params.pop('component_id', node.id)
+            return CoolingManager(component_id=comp_id, **params)
+        elif node.type == "SeparationTank":
+            from h2_plant.components.separation.separation_tank import SeparationTank
+            return SeparationTank(
+                component_id=node.id,
+                volume_m3=float(node.params.get('volume_m3', 5.0)),
+                efficiency=float(node.params.get('efficiency', 0.99))
             )
             
         elif node.type == "Chiller":

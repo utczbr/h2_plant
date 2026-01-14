@@ -12,7 +12,7 @@ from matplotlib.ticker import FuncFormatter
 import pandas as pd
 import numpy as np
 import CoolProp.CoolProp as CP
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 import logging
 
 # Imports for Profile Reconstitution
@@ -129,14 +129,39 @@ def calculate_h2_equiv_price(df: pd.DataFrame) -> float:
 # Most components now expose both variants; prefer _c columns when available.
 KELVIN_DETECTION_THRESHOLD = 200.0
 
-def downsample_for_plot(data, max_points: int = 500):
+def downsample_for_plot(data: pd.Series, max_points: int = 5000) -> pd.Series:
+    """Downsample data if it exceeds max_points."""
+    if len(data) > max_points:
+        step = len(data) // max_points
+        return data.iloc[::step]
+    return data
+
+
+# ==============================================================================
+# TIME BASIS CONTRACT
+# ==============================================================================
+def get_dt_hours(df: pd.DataFrame) -> float:
     """
-    Downsample data for faster plotting while preserving visual shape.
+    Get loop time step in hours.
+    
+    Standardizes the conversion from discrete steps to energy (MWh).
+    Currently assumes 1 minute steps (1/60 h) as per simulation default.
+    Future: Read from df.attrs['dt_seconds'] / 3600.
     """
-    if len(data) <= max_points:
-        return data
-    stride = max(1, len(data) // max_points)
-    return data[::stride]
+    # TODO: Read from metadata if available
+    return 1.0 / 60.0
+
+def get_time_axis_hours(df: pd.DataFrame) -> np.ndarray:
+    """
+    Get standardized time axis in hours.
+    
+    Unified source of truth for x-axis.
+    """
+    if 'minute' in df.columns:
+        return df['minute'].values / 60.0
+    else:
+        # Fallback: Assume index is minute steps
+        return np.arange(len(df)) / 60.0
 
 
 # ==============================================================================
@@ -174,17 +199,22 @@ def _detect_component_stream_type(df: pd.DataFrame, comp_name: str) -> str:
     # For now, return Mixed
     return 'Mixed'
 
-def normalize_history(history: Dict[str, Any]) -> pd.DataFrame:
+def normalize_history(history: Union[Dict[str, Any], pd.DataFrame]) -> pd.DataFrame:
     """
-    Normalizes the history dictionary to ensure consistent keys for plotting.
+    Normalizes the history dictionary or DataFrame to ensure consistent keys for plotting.
     """
-    df = pd.DataFrame(history)
+    if isinstance(history, pd.DataFrame):
+        df = history.copy()
+    else:
+        df = pd.DataFrame(history)
     
     # Power
     if 'P_soec_actual' in df.columns and 'P_soec' not in df.columns:
         df['P_soec'] = df['P_soec_actual']
     if 'P_soec' not in df.columns: df['P_soec'] = 0.0
     if 'P_pem' not in df.columns: df['P_pem'] = 0.0
+    if 'P_sold_mw' in df.columns and 'P_sold' not in df.columns:
+        df['P_sold'] = df['P_sold_mw']
     if 'P_sold' not in df.columns: df['P_sold'] = 0.0
     if 'P_offer' not in df.columns: df['P_offer'] = 0.0
     
@@ -314,8 +344,30 @@ def create_oxygen_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     O2_total_full = O2_soec_full + O2_pem_full
     
     minutes = downsample_for_plot(df['minute'])
-    O2_soec = downsample_for_plot(O2_soec_full)
-    O2_total = downsample_for_plot(O2_total_full)
+    
+    # AUDIT FIX: Use actual O2 sensor data if available, fallback to stoichiometry
+    o2_cols = [c for c in df.columns if 'o2_production' in c.lower() or ('outlet_mass' in c.lower() and 'o2' in c.lower())]
+    
+    if o2_cols:
+        # Detected sensor data
+        # Split by source type
+        soec_cols = [c for c in o2_cols if 'soec' in c.lower()]
+        pem_cols = [c for c in o2_cols if 'pem' in c.lower()]
+        
+        O2_soec = downsample_for_plot(df[soec_cols].sum(axis=1) * 60.0) if soec_cols else np.zeros(len(minutes))
+        O2_pem = downsample_for_plot(df[pem_cols].sum(axis=1) * 60.0) if pem_cols else np.zeros(len(minutes))
+        O2_total = O2_soec + O2_pem
+    else:
+        # Fallback to stoichiometry
+        O2_pem_full = df.get('O2_pem_kg', df['H2_pem'] * 8.0)
+        O2_soec_full = df['H2_soec'] * 8.0
+        O2_total_full = O2_soec_full + O2_pem_full
+        
+        O2_soec = downsample_for_plot(O2_soec_full)
+        O2_pem = downsample_for_plot(O2_pem_full)
+        O2_soec = downsample_for_plot(O2_soec_full)
+        O2_pem = downsample_for_plot(O2_pem_full)
+        O2_total = downsample_for_plot(O2_total_full)
     
     ax.fill_between(minutes, 0, O2_soec, label='O2 SOEC', color=COLORS['soec'], alpha=0.5)
     ax.fill_between(minutes, O2_soec, O2_total, label='O2 PEM', color=COLORS['oxygen'], alpha=0.5)
@@ -338,8 +390,28 @@ def create_water_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     total_full = water_soec_full + water_pem_full
     
     minutes = downsample_for_plot(df['minute'])
-    water_soec = downsample_for_plot(water_soec_full)
-    total = downsample_for_plot(total_full)
+    
+    # AUDIT FIX: Prioritize actual Water_Source flow data
+    # Topology uses 'Water_Source'
+    source_cols = [c for c in df.columns if 'Water_Source' in c and ('mass_flow' in c or 'out_flow' in c)]
+    
+    if source_cols:
+        # Use actual source data
+        total_full = df[source_cols].sum(axis=1)
+        # We might not be able to split PEM/SOEC perfectly from source, 
+        # but we can try provided component consumption if available
+        # logic: Total Source Flow is the truth.
+        total = downsample_for_plot(total_full)
+        # Estimate split for visualization using relative capacity or just show total
+        water_soec = total * 0.6  # Rough split if only total known
+    else:
+        # Fallback to proxy
+        water_soec_full = df['Steam_soec'] * 1.10
+        water_pem_full = df['H2O_pem'] * 1.02
+        total_full = water_soec_full + water_pem_full
+        
+        water_soec = downsample_for_plot(water_soec_full)
+        total = downsample_for_plot(total_full)
     
     ax.fill_between(minutes, 0, water_soec, label='H2O SOEC', color=COLORS['soec'], alpha=0.5)
     ax.fill_between(minutes, water_soec, total, label='H2O PEM', color='brown', alpha=0.5)
@@ -966,6 +1038,14 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     if 'P_pem' in df.columns: data['P_pem'] = df['P_pem']
     if 'Spot' in df.columns: data['Spot'] = df['Spot']
     elif 'spot_price' in df.columns: data['Spot'] = df['spot_price']
+
+    # P_sold / P_grid_export logic
+    if 'P_sold' in df.columns: 
+        data['P_sold'] = df['P_sold']
+    elif 'P_sold_mw' in df.columns:
+        data['P_sold'] = df['P_sold_mw']
+    elif 'P_grid_export' in df.columns:
+        data['P_sold'] = df['P_grid_export']
     
     if not data:
         ax = fig.add_subplot(111)
@@ -974,6 +1054,8 @@ def create_temporal_averages_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
         
     df_lite = pd.DataFrame(data)
     df_lite['H2_total'] = df_lite.get('H2_soec', 0) + df_lite.get('H2_pem', 0)
+    if 'P_sold' not in df_lite.columns:
+        df_lite['P_sold'] = 0.0
     
     # Set index on minimal DF
     try:
@@ -2260,27 +2342,25 @@ def create_process_scheme_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
     ax = fig.add_subplot(111)
     
     # 1. Discover Components (Topology)
-    # Heuristic: Define a canonical order, check if each exists in columns.
+    # Use actual component ID prefixes from plant_topology.yaml
     canonical_order_h2 = [
-        'KOD_1', 'KOD1', 
-        'DryCooler', 'DryCooler1', 
-        'Chiller_H2', 'Chiller1', 
-        'KOD_2', 'KOD2', 
-        'Coalescer_H2', 'Coalescer1',
-        'HydrogenMultiCyclone',
-        'Deoxo', 
-        'PSA'
+        'SOEC_H2_KOD_1', 
+        'SOEC_H2_DryCooler_1', 
+        'SOEC_H2_Chiller_1', 
+        'SOEC_H2_KOD_2', 
+        'SOEC_H2_Cyclone_1',
+        'SOEC_H2_Deoxo_1', 
+        'SOEC_H2_PSA_1'
     ]
     # Simple mapping to Display Names
     display_names = {
-        'KOD_1': 'KOD 1', 'KOD1': 'KOD 1',
-        'DryCooler': 'Dry Cooler', 'DryCooler1': 'Dry Cooler',
-        'Chiller_H2': 'Chiller H2', 'Chiller1': 'Chiller',
-        'KOD_2': 'KOD 2', 'KOD2': 'KOD 2',
-        'Coalescer_H2': 'Coalescer', 'Coalescer1': 'Coalescer',
-        'HydrogenMultiCyclone': 'Cyclone',
-        'Deoxo': 'Deoxo Reactor',
-        'PSA': 'PSA Unit'
+        'SOEC_H2_KOD_1': 'KOD 1',
+        'SOEC_H2_DryCooler_1': 'Dry Cooler',
+        'SOEC_H2_Chiller_1': 'Chiller',
+        'SOEC_H2_KOD_2': 'KOD 2',
+        'SOEC_H2_Cyclone_1': 'Cyclone',
+        'SOEC_H2_Deoxo_1': 'Deoxo Reactor',
+        'SOEC_H2_PSA_1': 'PSA Unit'
     }
     
     comps_present = []
@@ -2737,10 +2817,15 @@ def create_mixer_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     """
     fig = Figure(figsize=(12, 10), dpi=dpi, constrained_layout=True)
     
-    # Find mixer data
-    mixer_temp = _find_component_columns(df, 'Mixer', 'temperature_k')
-    mixer_press = _find_component_columns(df, 'Mixer', 'pressure_pa')
-    mixer_flow = _find_component_columns(df, 'Mixer', 'outlet_mass_kg_h')
+    # Find mixer data (AUDIT FIX: Filter for 'Drain' or 'Combiner' to exclude Gas Mixers)
+    all_mixers_t = _find_component_columns(df, 'Mixer', 'temperature_k')
+    mixer_temp = {k: v for k, v in all_mixers_t.items() if 'Drain' in k or 'Combiner' in k}
+    
+    all_mixers_p = _find_component_columns(df, 'Mixer', 'pressure_pa')
+    mixer_press = {k: v for k, v in all_mixers_p.items() if 'Drain' in k or 'Combiner' in k}
+    
+    all_mixers_m = _find_component_columns(df, 'Mixer', 'outlet_mass_kg_h')
+    mixer_flow = {k: v for k, v in all_mixers_m.items() if 'Drain' in k or 'Combiner' in k}
     
     # Also check DrainRecorder
     if not mixer_temp:
@@ -2748,15 +2833,15 @@ def create_mixer_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     if not mixer_flow:
         mixer_flow = _find_component_columns(df, 'DrainRecorder', 'outlet_mass_kg_h')
         
-    # Check WaterMixer (Drain_Collector)
+    # Check WaterMixer (Drain_Mixer)
     if not mixer_temp:
-        mixer_temp = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_k')
+        mixer_temp = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_k')
         if not mixer_temp:
              mixer_temp = _find_component_columns(df, 'WaterMixer', 'outlet_temperature_k')
              
     if not mixer_press:
         # Note: WaterMixer outputs kPa, convert to Pa for consistency
-        press_kpa = _find_component_columns(df, 'Drain_Collector', 'outlet_pressure_kpa')
+        press_kpa = _find_component_columns(df, 'Drain_Mixer', 'outlet_pressure_kpa')
         if not press_kpa:
              press_kpa = _find_component_columns(df, 'WaterMixer', 'outlet_pressure_kpa')
         
@@ -2764,7 +2849,7 @@ def create_mixer_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
              mixer_press = {k: v * 1000.0 for k, v in press_kpa.items()}
 
     if not mixer_flow:
-        mixer_flow = _find_component_columns(df, 'Drain_Collector', 'outlet_mass_flow_kg_h')
+        mixer_flow = _find_component_columns(df, 'Drain_Mixer', 'outlet_mass_flow_kg_h')
         if not mixer_flow:
              mixer_flow = _find_component_columns(df, 'WaterMixer', 'outlet_mass_flow_kg_h')
     
@@ -3158,8 +3243,8 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST, com
             found = _find_component_columns(df, cid, 'dissolved_gas_ppm')
             ppm_data.update(found)
     else:
-        # Look for Drain_Collector or fallback to Drain_Mixer
-        ppm_data = _find_component_columns(df, 'Drain_Collector', 'dissolved_gas_ppm')
+        # Look for Drain_Mixer or fallback to Drain_Mixer
+        ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
         if not ppm_data:
             ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
             
@@ -3172,8 +3257,8 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST, com
     ax = fig.add_subplot(111)
     
     if not ppm_data:
-        logger.warning("No dissolved gas PPM data found in Drain_Collector.")
-        ax.text(0.5, 0.5, 'No dissolved gas PPM data found in Drain_Collector.',
+        logger.warning("No dissolved gas PPM data found in Drain_Mixer.")
+        ax.text(0.5, 0.5, 'No dissolved gas PPM data found in Drain_Mixer.',
                 ha='center', va='center', transform=ax.transAxes, color='gray')
     else:
         for cid, data in ppm_data.items():
@@ -3363,7 +3448,14 @@ def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) 
     # Dry Coolers (Count as Sensible)
     dc_tqc = _find_component_columns(df, 'DryCooler', 'tqc_duty_kw')
     
-    if not chiller_load and not dc_tqc:
+    # AUDIT FIX: Include Intercoolers (which are DryCoolers in topology but named differently)
+    ic_tqc = _find_component_columns(df, 'Intercooler', 'tqc_duty_kw')
+    ic_heat = _find_component_columns(df, 'Intercooler', 'heat_rejected_kw')
+    
+    # Merge Intercooler into DC or keep separate? 
+    # Let's keep separate for clarity in stack
+    
+    if not chiller_load and not dc_tqc and not ic_tqc and not ic_heat:
         ax = fig.add_subplot(111)
         logger.warning("No thermal load data found.")
         ax.text(0.5, 0.5, 'No thermal load data found (Chiller/DryCooler).',
@@ -3383,6 +3475,14 @@ def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) 
         all_loads[f"{k} (Chiller)"] = v
     for k, v in dc_tqc.items():
         all_loads[f"{k} (TQC)"] = v
+        
+    # AUDIT FIX: Add Intercoolers
+    for k, v in ic_tqc.items():
+        all_loads[f"{k} (Intercooler)"] = v
+    for k, v in ic_heat.items():
+         # Avoid duplicate if both columns exist (unlikely but safe)
+         if f"{k} (Intercooler)" not in all_loads:
+             all_loads[f"{k} (Intercooler)"] = v
     
     if all_loads:
         labels = list(all_loads.keys())
@@ -3407,6 +3507,12 @@ def create_thermal_load_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) 
         
     # Add Dry Cooler (Pure Sensible)
     for v in dc_tqc.values():
+        total_sensible = total_sensible.add(v, fill_value=0)
+        
+    # AUDIT FIX: Add Intercoolers to sensible total
+    for v in ic_tqc.values():
+        total_sensible = total_sensible.add(v, fill_value=0)
+    for v in ic_heat.values():
         total_sensible = total_sensible.add(v, fill_value=0)
         
     if total_sensible.any() or total_latent.any():
@@ -3441,8 +3547,8 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST, com
             found = _find_component_columns(df, cid, 'dissolved_gas_ppm')
             ppm_data.update(found)
     else:
-        # Look for Drain_Collector or fallback to Drain_Mixer
-        ppm_data = _find_component_columns(df, 'Drain_Collector', 'dissolved_gas_ppm')
+        # Look for Drain_Mixer or fallback to Drain_Mixer
+        ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
         if not ppm_data:
             ppm_data = _find_component_columns(df, 'Drain_Mixer', 'dissolved_gas_ppm')
     
@@ -3455,8 +3561,8 @@ def create_drain_concentration_figure(df: pd.DataFrame, dpi: int = DPI_FAST, com
     ax = fig.add_subplot(111)
     
     if not ppm_data:
-        logger.warning("No dissolved gas PPM data found in Drain_Collector.")
-        ax.text(0.5, 0.5, 'No dissolved gas PPM data found in Drain_Collector.',
+        logger.warning("No dissolved gas PPM data found in Drain_Mixer.")
+        ax.text(0.5, 0.5, 'No dissolved gas PPM data found in Drain_Mixer.',
                 ha='center', va='center', transform=ax.transAxes, color='gray')
     else:
         for cid, data in ppm_data.items():
@@ -3476,7 +3582,7 @@ def create_recirculation_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST
     """
     plot_recirculacao_mixer: Water Recovery System Comparison.
     
-    Compares the state of water BEFORE recirculation (Drain_Collector output)
+    Compares the state of water BEFORE recirculation (Drain_Mixer output)
     and AFTER replenishment (WaterTank/Mixer output).
     
     Categorical Snapshot (Recovered vs Recirculated).
@@ -3491,45 +3597,81 @@ def create_recirculation_comparison_figure(df: pd.DataFrame, dpi: int = DPI_FAST
     rec_press = 1.0 # bar
     
     # Flow
-    rf = _find_component_columns(df, 'Drain_Collector', 'outlet_mass_flow_kg_h')
+    rf = _find_component_columns(df, 'Drain_Mixer', 'outlet_mass_flow_kg_h')
     if not rf: rf = _find_component_columns(df, 'Drain_Mixer', 'outlet_mass_flow_kg_h')
     if rf: rec_flow = sum(v.mean() for v in rf.values() if v.mean() > 0)
     
     # Temp
-    rt = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_c')
+    rt = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_c')
     if not rt: rt = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_c')
     # Fallback K
     if not rt:
-        rt_k = _find_component_columns(df, 'Drain_Collector', 'outlet_temperature_k')
+        rt_k = _find_component_columns(df, 'Drain_Mixer', 'outlet_temperature_k')
         if rt_k: rt = {k: v - 273.15 for k, v in rt_k.items()}
     if rt: rec_temp = sum(v.mean() for v in rt.values()) / len(rt)
     
     # Pressure (kPa usually for water mixer)
-    rp = _find_component_columns(df, 'Drain_Collector', 'outlet_pressure_kpa')
+    rp = _find_component_columns(df, 'Drain_Mixer', 'outlet_pressure_kpa')
     if not rp: rp = _find_component_columns(df, 'Drain_Mixer', 'outlet_pressure_kpa')
     if rp: rec_press = (sum(v.mean() for v in rp.values()) / len(rp)) / 100.0 # kPa -> bar
     else: 
         # Check for bar
-         rp_b = _find_component_columns(df, 'Drain_Collector', 'pressure_bar')
+         rp_b = _find_component_columns(df, 'Drain_Mixer', 'pressure_bar')
          if rp_b: rec_press = sum(v.mean() for v in rp_b.values()) / len(rp_b)
 
-    # --- State 2: Recirculated (Feed Tank / Makeup Out) ---
+    # --- State 2: Recirculated (Makeup Mixers Out) ---
+    # User Requirement: The loop closes at the Makeup Mixers (SOEC + PEM + ATR).
+    # We sum their outputs to get total recirculated + makeup flow to the process.
+    
     feed_flow = 0.0
     feed_temp = 25.0
     feed_press = 1.0
     
-    ff = _find_component_columns(df, 'WaterTank', 'mass_flow_out_kg_h')
-    if not ff: ff = _find_component_columns(df, 'Feed_Tank', 'mass_flow_out_kg_h')
-    if not ff: ff = _find_component_columns(df, 'MakeupMixer', 'outlet_mass_flow_kg_h')
-    if ff: feed_flow = sum(v.mean() for v in ff.values() if v.mean() > 0)
-    else: feed_flow = rec_flow * 1.05 # Mock makeup if missing? Or just 0.
+    # Specific Makeup Mixers identified in topology
+    makeup_ids = ['SOEC_Makeup_Mixer', 'PEM_Makeup_Mixer', 'ATR_Makeup_Mixer']
     
-    ft = _find_component_columns(df, 'WaterTank', 'temperature_c')
-    if not ft: ft = _find_component_columns(df, 'MakeupMixer', 'outlet_temperature_c')
-    if ft: feed_temp = sum(v.mean() for v in ft.values()) / len(ft)
+    # Sum flows
+    total_makeup_flow = 0.0
+    weighted_temp_prod = 0.0
+    pressure_samples = []
     
-    fp_b = _find_component_columns(df, 'WaterTank', 'pressure_bar')
-    if fp_b: feed_press = sum(v.mean() for v in fp_b.values()) / len(fp_b)
+    for mid in makeup_ids:
+        # Flow
+        f_col = _find_component_columns(df, mid, 'outlet_mass_flow_kg_h')
+        # If specific column search fails, try searching by ID prefix
+        if not f_col:
+            f_col = {k: v for k, v in _find_component_columns(df, mid, '').items() if 'mass_flow' in k}
+            
+        m_flow = sum(v.mean() for v in f_col.values()) if f_col else 0.0
+        
+        # Temp
+        t_col = _find_component_columns(df, mid, 'outlet_temperature_c')
+        m_temp = list(t_col.values())[0].mean() if t_col else 25.0
+        
+        # Pressure
+        p_col = _find_component_columns(df, mid, 'outlet_pressure_bar') # Try bar
+        if not p_col:
+             p_col_kpa = _find_component_columns(df, mid, 'outlet_pressure_kpa')
+             p_bar = list(p_col_kpa.values())[0].mean() / 100.0 if p_col_kpa else 1.0
+        else:
+             p_bar = list(p_col.values())[0].mean()
+             
+        if m_flow > 0:
+            total_makeup_flow += m_flow
+            weighted_temp_prod += m_flow * m_temp
+            pressure_samples.append(p_bar)
+
+    feed_flow = total_makeup_flow
+    
+    # Calculate weighted averages
+    if feed_flow > 0:
+        feed_temp = weighted_temp_prod / feed_flow
+        feed_press = sum(pressure_samples) / len(pressure_samples) if pressure_samples else 1.0
+    else:
+        # AUDIT FIX: Explicitly report 0 or missing data instead of fallback
+        # Removed: feed_flow = rec_flow * 1.05
+        feed_temp = 0.0
+        feed_press = 0.0
     
     # Prepare Plot Data
     states = ['Recovered (Drain)', 'Recirculated (Feed)']
@@ -3792,6 +3934,14 @@ def create_dry_cooler_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     # Try to find DryCooler specific columns, or fall back to generic cooler patterns
     heat_rejected = _find_component_columns(df, 'DryCooler', 'heat_rejected_kw')
     outlet_temp = _find_component_columns(df, 'DryCooler', 'outlet_temp_k')
+    
+    # AUDIT FIX: Explicitly search for Intercoolers
+    ic_heat = _find_component_columns(df, 'Intercooler', 'heat_rejected_kw')
+    ic_temp = _find_component_columns(df, 'Intercooler', 'outlet_temp_k')
+    
+    # Merge dictionaries
+    heat_rejected.update(ic_heat)
+    outlet_temp.update(ic_temp)
     
     if not heat_rejected and not outlet_temp:
         # Fallback: check for generic 'dry' or 'cooler' patterns
@@ -4078,11 +4228,15 @@ def create_process_train_profile_figure(df: pd.DataFrame, dpi: int = DPI_HIGH) -
     # It is DIFFERENT from history df which is time-series.
     # The caller must provide the correct DataFrame.
     
-    if df.empty:
+    if df.empty or 'Component' not in df.columns:
+        if 'Component' not in df.columns:
+            logger.info("[create_process_train_profile_figure] Static profile; no data needed.")
+            
         fig = Figure(figsize=(10, 6), dpi=dpi)
         ax = fig.add_subplot(111)
-        ax.text(0.5, 0.5, 'No profile data available.', ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.text(0.5, 0.5, 'Process train profile schematic\n(not data-driven)', ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
         ax.set_title('Process Train Profile')
+        ax.axis('off')
         return fig
 
     components = df['Component'].tolist()

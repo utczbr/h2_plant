@@ -137,14 +137,16 @@ The following functions exist in [static_graphs.py](file:///home/stuart/Document
 | coordinator | soec_setpoint_mw | ✅ |
 | coordinator | sell_power_mw | ✅ |
 
-### 2.2 Graphs with Missing Data Dependencies
+### 2.2 Graphs with Missing Data Dependencies (Partially Resolved in Phase 7)
+*Phase 7 Remediation: Updated static_graphs.py to prioritize sensor data over proxies for O2 and Water.*
 
-| Graph ID | Required Data | MetricsCollector Status | Actual Data Source |
-|----------|---------------|------------------------|-------------------|
-| [lcoh_waterfall_breakdown](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/plotly_graphs.py#609-641) | `economics.lcoh_cumulative` | ❌ NOT COLLECTED | Placeholder only |
-| [storage_fatigue_cycling_3d](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/plotly_graphs.py#467-505) | `tanks.hp_pressures` | ⚠️ 2D Array | Needs flattening logic |
-| [soec_heatmap](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/static_graphs.py#740-768) | `soec.module_states` | ❌ NOT COLLECTED | Uses `soec_module_powers_*` columns from history |
-| [tank_storage_timeline](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/plotly_graphs.py#446-465) | `tanks.total_stored` | ✅ Collected | Disabled by default |
+| Graph ID | Required Data | MetricsCollector Status | Actual Data Source | Status |
+|----------|---------------|------------------------|--------------------|--------|
+| [lcoh_waterfall_breakdown](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/plotly_graphs.py#609-641) | `economics.lcoh_cumulative` | ❌ NOT COLLECTED | Placeholder only | Open |
+| [storage_fatigue_cycling_3d](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/plotly_graphs.py#467-505) | `tanks.hp_pressures` | ⚠️ 2D Array | Needs flattening logic | Open |
+| [soec_heatmap](file:///home/stuart/Documentos/Planta%20Hidrogenio/h2_plant/visualization/static_graphs.py#740-768) | `soec.module_states` | ❌ NOT COLLECTED | Uses `soec_module_powers_*` columns from history | Open |
+| `oxygen_production` (Legacy) | `soec.o2_production`, `pem.o2_production` | ✅ | `o2_production` or `o2_out` columns (if available) | **Resolved** |
+| `water_consumption` (Legacy) | `Water_Source.mass_flow` | ✅ | `Water_Source` columns (if available) | **Resolved** |
 
 ### 2.3 Data Source Mismatch
 

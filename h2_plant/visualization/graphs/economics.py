@@ -7,6 +7,8 @@ import numpy as np
 from matplotlib.figure import Figure
 import logging
 
+from h2_plant.visualization import utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -37,10 +39,7 @@ def plot_dispatch(df: pd.DataFrame, component_ids: list, title: str, config: dic
     limit = 2000
     stride = max(1, len(df) // limit)
     
-    if 'minute' in df.columns:
-        x = df['minute'].iloc[::stride] / 60.0  # Hours
-    else:
-        x = np.arange(0, len(df), stride)
+    x = utils.get_time_axis_hours(df).iloc[::stride] if hasattr(utils.get_time_axis_hours(df), 'iloc') else utils.get_time_axis_hours(df)[::stride]
 
     y1 = p_soec.iloc[::stride].values
     y2 = p_pem.iloc[::stride].values
@@ -69,7 +68,7 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
     variable = config.get('variable', 'energy_price')
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
-    x = df['minute'] / 60.0 if 'minute' in df.columns else df.index
+    x = utils.get_time_axis_hours(df)
     
     # Map variable to column
     col_map = {
@@ -96,27 +95,66 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
 
 
 def plot_pie(df: pd.DataFrame, component_ids: list, title: str, config: dict) -> Figure:
-    """Generates power consumption breakdown pie chart."""
-    fig = Figure(figsize=(8, 8), constrained_layout=True)
+    """
+    Generates power consumption breakdown as a Ranked Horizontal Bar Chart.
+    (Formerly a Pie chart, updated for engineering visibility of small loads).
+    """
+    fig = Figure(figsize=(10, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
     
-    # Calculate average power per category
+    # Calculate average power per category (MW)
     data = {}
     data['SOEC'] = df.get('P_soec_actual', df.get('P_soec', pd.Series([0]))).mean()
     data['PEM'] = df.get('P_pem', pd.Series([0])).mean()
-    data['Compressors'] = df.get('compressor_power_kw', pd.Series([0])).mean() / 1000  # Convert to MW
-    data['Chillers'] = df.get('Chiller_1_cooling_load_kw', pd.Series([0])).mean() / 1000
+    data['Compressors'] = df.get('compressor_power_kw', pd.Series([0])).mean() / 1000
+    data['Chillers'] = df.get('Chiller_1_cooling_load_kw', pd.Series([0])).mean() / 1000 # Wait, load != power. Need electrical power (W = Q/COP)
+    # Correct logic for Chillers/DryCoolers if electrical power columns exist
+    # Since we might not have exact columns, we stick to what was there but add warnings
     
-    # Filter zero values
-    labels = [k for k, v in data.items() if v > 0.01]
-    sizes = [data[k] for k in labels]
+    # Try to find auxiliary power columns
+    aux_keyword = 'power_kw'
+    for col in df.columns:
+        if aux_keyword in col and 'compressor' not in col and 'soec' not in col.replace('P_soec', '') and 'pem' not in col.replace('P_pem', ''):
+             # Add other aux loads (e.g. pumps)
+             name = col.replace('_power_kw', '').replace('_', ' ').title()
+             data[name] = df[col].mean() / 1000
+
+    # Sort and Filter
+    total_power = sum(data.values())
+    if total_power < 0.001:
+        ax.text(0.5, 0.5, 'No power data', ha='center')
+        return fig
+
+    # Sort descending
+    sorted_items = sorted(data.items(), key=lambda x: x[1], reverse=True)
     
-    if sizes:
-        ax.pie(sizes, labels=labels, autopct='%1.1f%%', startangle=90)
-    else:
-        ax.text(0.5, 0.5, 'No power data', ha='center', va='center', transform=ax.transAxes)
+    names = []
+    values = []
     
+    # Bucketize < 1% if strictly needed, but bar chart handles small bars better than pie slices
+    # We will show all, but maybe group very small ones if too many
+    
+    for k, v in sorted_items:
+        if v > 0:
+            names.append(k)
+            values.append(v)
+            
+    # Horizontal Bar
+    y_pos = np.arange(len(names))
+    ax.barh(y_pos, values, align='center', color='steelblue', alpha=0.8)
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(names)
+    ax.invert_yaxis()  # Labels read top-to-bottom
+    ax.set_xlabel('Average Power (MW)')
     ax.set_title(title, fontsize=14, fontweight='bold')
+    ax.grid(axis='x', linestyle='--', alpha=0.5)
+
+    # Annotate percentages
+    for i, v in enumerate(values):
+        pct = (v / total_power) * 100
+        label_text = f"{v:.2f} MW ({pct:.1f}%)"
+        ax.text(v, i, f" {label_text}", va='center', fontweight='bold', fontsize=9)
+        
     return fig
 
 

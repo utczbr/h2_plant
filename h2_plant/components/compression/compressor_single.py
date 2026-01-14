@@ -922,7 +922,7 @@ class CompressorSingle(Component):
                      # Stream guarantees strict canonical order matching the LUT stacks
                      weights, mole_fracs, M_mix, sum_ylny = self.inlet_stream.get_composition_arrays()
                      
-                     _, T_out_k, _ = calculate_mixture_compression_jit(
+                     w_act, T_out_k, _ = calculate_mixture_compression_jit(
                         p_in_pa,
                         p_out_pa,
                         self.inlet_temperature_k,
@@ -937,6 +937,12 @@ class CompressorSingle(Component):
                         M_mix,
                         sum_ylny
                      )
+
+
+                     if w_act < 0.0:
+                         w_act = 0.0
+                         T_out_k = self.inlet_temperature_k
+                     
                      return T_out_k
                 
                 # Fallback to Python implementation (slower)
@@ -949,6 +955,8 @@ class CompressorSingle(Component):
                      self.isentropic_efficiency, 
                      self._lut_manager
                 )
+
+                if w_act < 0.0: w_act = 0.0
                 return T_out_k
             except Exception as e:
                 logger.debug(f"Mix LUT temp calc failed: {e}")
@@ -965,6 +973,8 @@ class CompressorSingle(Component):
                     w_actual = (h2s - h1) / self.isentropic_efficiency
                     h2_actual = h1 + w_actual
                     T_out_k = CP.PropsSI('T', 'H', h2_actual, 'P', p_out_pa, backend_str)
+
+                    if w_actual < 0: return self.inlet_temperature_k # Clamp negative work
                     return T_out_k
                 elif strategy == FluidStrategy.COOLPROP:
                     # Pure fluid via CoolProp
@@ -975,6 +985,8 @@ class CompressorSingle(Component):
                     w_actual = (h2s - h1) / self.isentropic_efficiency
                     h2_actual = h1 + w_actual
                     T_out_k = CP.PropsSI('T', 'H', h2_actual, 'P', p_out_pa, coolprop_name)
+
+                    if w_actual < 0: return self.inlet_temperature_k # Clamp negative work
                     return T_out_k
             except Exception as e:
                 logger.debug(f"CoolProp compression failed: {e}. Using ideal gas.")
@@ -985,7 +997,7 @@ class CompressorSingle(Component):
         exponent = (gamma - 1.0) / gamma
         T_isen_k = self.inlet_temperature_k * (pressure_ratio ** exponent)
         delta_t_actual = (T_isen_k - self.inlet_temperature_k) / self.isentropic_efficiency
-        return self.inlet_temperature_k + delta_t_actual
+        return self.inlet_temperature_k + max(0.0, delta_t_actual)
 
     def _solve_pressure_for_temp_limit(self) -> float:
         """
@@ -1177,6 +1189,16 @@ class CompressorSingle(Component):
                 lut_data['H_from_PS']
             )
             
+            # Sanity check for negative work (thermodynamically impossible for P_out > P_in)
+            if w_specific < 0.0:
+                logger.warning(
+                    f"Compressor {self.component_id}: Negative work calculated ({w_specific:.2f} J/kg). "
+                    f"Inputs: P_in={p_in_pa/1e5:.2f}, P_out={p_out_pa/1e5:.2f}, T_in={self.inlet_temperature_k:.2f}. "
+                    f"Clamping to 0.0."
+                )
+                w_specific = 0.0
+                T_out_k = self.inlet_temperature_k
+            
             # Check for LUT clamping at upper bound (1200 K)
             if T_out_k >= 1199.0:
                 logger.warning(
@@ -1236,20 +1258,26 @@ class CompressorSingle(Component):
                  weights, mole_fracs, M_mix, sum_ylny = self._inlet_stream.get_composition_arrays()
                  
                  w_actual, T_out_actual, T_out_isen = calculate_mixture_compression_jit(
-                    p_in_pa,
-                    p_out_pa,
-                    self.inlet_temperature_k,
-                    self.isentropic_efficiency,
-                    self._P_grid,
-                    self._T_grid,
-                    self._H_luts_stacked,
-                    self._S_luts_stacked,
-                    self._C_luts_stacked,
-                    weights,     # Mass fractions
-                    mole_fracs,  # Mole fractions
-                    M_mix,       # Molar mass
-                    sum_ylny     # Entropy mixing term
-                )
+                     p_in_pa,
+                     p_out_pa,
+                     self.inlet_temperature_k,
+                     self.isentropic_efficiency,
+                     self._P_grid,
+                     self._T_grid,
+                     self._H_luts_stacked,
+                     self._S_luts_stacked,
+                     self._C_luts_stacked,
+                     weights,     # Mass fractions
+                     mole_fracs,  # Mole fractions
+                     M_mix,       # Molar mass
+                     sum_ylny     # Entropy mixing term
+                 )
+                 
+                 # Sanity check for negative work
+                 if w_actual < 0.0: 
+                     logger.warning(f"Compressor {self.component_id}: JIT Mixture work < 0 ({w_actual:.2f}). Clamping.")
+                     w_actual = 0.0
+                     T_out_actual = self.inlet_temperature_k
             else:
                 # Fallback purely if JIT specific setup failed (should not happen if initialized)
                 logger.warning("JIT mixture solver unavailable, using Python fallback.")
@@ -1264,6 +1292,11 @@ class CompressorSingle(Component):
                     self.isentropic_efficiency,
                     self._lut_manager
                 )
+                
+                if w_actual < 0.0:
+                    logger.warning(f"Compressor {self.component_id}: Python Mixture work < 0 ({w_actual:.2f}). Clamping.")
+                    w_actual = 0.0
+                    T_out_actual = self.inlet_temperature_k
             
             # Update state
             self.outlet_temperature_k = T_out_actual
@@ -1586,7 +1619,12 @@ class CompressorSingle(Component):
             },
             'inlet': {
                 'type': 'input',
-                'resource_type': 'hydrogen',
+                'resource_type': 'stream',
+                'units': 'kg/h'
+            },
+            'gas_in': {
+                'type': 'input',
+                'resource_type': 'stream',
                 'units': 'kg/h'
             },
             'electricity_in': {
@@ -1601,7 +1639,7 @@ class CompressorSingle(Component):
             },
             'outlet': {
                 'type': 'output',
-                'resource_type': 'hydrogen',
+                'resource_type': 'stream',
                 'units': 'kg/h'
             }
         }

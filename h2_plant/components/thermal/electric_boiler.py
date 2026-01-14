@@ -246,30 +246,45 @@ class ElectricBoiler(Component):
                 if self.lut:
                     try:
                         # 1. Look up target enthalpy at (P, T_target)
-                        # Note: If T_target is exactly saturation, CoolProp might return liquid or vapor.
-                        # For a boiler, we usually want Vapor if T >= Tsat.
-                        # However, LUT lookup('H', P, T) returns stable phase.
+                        # ... (existing code, ensure indentation matches)
                         
                         # Use target pressure (current operating pressure)
                         P_op = inflow.pressure_pa
                         
-                        # Check Saturation first to determine desired phase if close to Tsat
-                        sat_props = self.lut.get_saturation_properties(P_op)
-                        T_sat = sat_props['T_sat_K']
-                        
-                        if self.target_temp_k > T_sat - 0.1:
-                             # Target is Steam (or Superheated)
-                             # If T_target ~= T_sat, we aim for Saturated Vapor enthalpy to ensure boiling
-                             if abs(self.target_temp_k - T_sat) < 1.0:
-                                 h_target = sat_props['h_g_Jkg']
-                             else:
-                                 # Superheated
+                        # Determine fluid type for LUT
+                        if inflow.composition.get('H2', 0) > 0.5:
+                            fluid_type = 'H2'
+                        elif inflow.composition.get('O2', 0) > 0.5:
+                            fluid_type = 'O2'
+                        else:
+                            fluid_type = 'H2O'
+
+                        if fluid_type == 'H2O':
+                            # Check Saturation first to determine desired phase if close to Tsat
+                            sat_props = self.lut.get_saturation_properties(P_op)
+                            T_sat = sat_props['T_sat_K']
+                            
+                            if self.target_temp_k > T_sat - 0.1:
+                                 # Target is Steam (or Superheated)
+                                 # If T_target ~= T_sat, we aim for Saturated Vapor enthalpy to ensure boiling
+                                 if abs(self.target_temp_k - T_sat) < 1.0:
+                                     h_target = sat_props['h_g_Jkg']
+                                 else:
+                                     # Superheated
+                                     h_target = self.lut.lookup('H2O', 'H', P_op, self.target_temp_k)
+                            else:
+                                 # Subcooled liquid
                                  h_target = self.lut.lookup('H2O', 'H', P_op, self.target_temp_k)
                         else:
-                             # Assume subcooled liquid if no LUT? No, just lookup
-                             h_target = self.lut.lookup('H2O', 'H', P_op, self.target_temp_k)
+                            # Simple gas heating (H2/O2) - No phase change logic needed usually
+                            h_target = self.lut.lookup(fluid_type, 'H', P_op, self.target_temp_k)
                         
-                        h_in = inflow.specific_enthalpy_j_kg
+                        # CRITICAL: Use LUT for h_in too, to ensure same reference state
+                        if fluid_type == 'H2O':
+                            h_in = self.lut.lookup('H2O', 'H', P_op, T_in)
+                        else:
+                            h_in = self.lut.lookup(fluid_type, 'H', P_op, T_in)
+                        
                         Q_needed_w = m_dot_kg_s * (h_target - h_in)
                         
                         # Handle case where Q < 0 (cooling needed?) - Boiler only heats
@@ -301,7 +316,7 @@ class ElectricBoiler(Component):
                          power_demand_w = Q_needed_w / self.efficiency
             else:
                  power_demand_w = 0.0
-
+ 
         # 2. Apply Power Limits
         applied_power_w = min(power_demand_w, self.max_power_w)
         
@@ -319,7 +334,19 @@ class ElectricBoiler(Component):
             self.current_power_w = 0.0
             self.vapor_fraction = 0.0
         else:
-            h_in = inflow.specific_enthalpy_j_kg
+            # Determine if this is a water system for LUT usage
+            is_water_system = (inflow.composition.get('H2O', 0) > 0.5 or 
+                               inflow.composition.get('H2O_liq', 0) > 0.5 or
+                               inflow.composition.get('Water', 0) > 0.5)
+            
+            # Use LUT-based h_in for water systems to ensure consistent reference state
+            if is_water_system and self.lut:
+                try:
+                    h_in = self.lut.lookup('H2O', 'H', inflow.pressure_pa, inflow.temperature_k)
+                except Exception:
+                    h_in = inflow.specific_enthalpy_j_kg
+            else:
+                h_in = inflow.specific_enthalpy_j_kg
             
             # Pressure Drop Model (optional)
             # ΔP = k_friction * ṁ² (simplified Darcy-Weisbach)
@@ -340,8 +367,6 @@ class ElectricBoiler(Component):
 
 
             # --- DUAL MODE PHYSICS LOGIC ---
-            is_water_system = (inflow.composition.get('H2O', 0) > 0.5 or 
-                               inflow.composition.get('Water', 0) > 0.5)
 
             if is_water_system:
                 # === MODE A: WATER/STEAM FLASH ===

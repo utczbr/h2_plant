@@ -164,6 +164,7 @@ class OxygenMakeupNode(Component):
             'makeup_flow_kg_h': self.makeup_flow_kg_h,
             'vented_flow_kg_h': self.vented_flow_kg_h,
             'output_flow_kg_h': self._last_output_flow_kg_h,
+            'mass_flow_kg_h': self._last_output_flow_kg_h,
             'arriving_flow_kg_h': self.outlet_stream.mass_flow_kg_h - self.makeup_flow_kg_h if self.outlet_stream else 0.0
         }
 
