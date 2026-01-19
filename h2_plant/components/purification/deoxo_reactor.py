@@ -120,6 +120,11 @@ class DeoxoReactor(Component):
         self._jit_k0_zones: Optional[np.ndarray] = None
         self._jit_U_a_zones: Optional[np.ndarray] = None
 
+    @property
+    def volume_m3(self) -> float:
+        """Reactor internal volume in m³ for CAPEX sizing."""
+        return DeoxoConstants.L_REACTOR_M * DeoxoConstants.AREA_REACTOR_M2
+
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the component for simulation execution.

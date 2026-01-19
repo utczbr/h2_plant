@@ -139,6 +139,26 @@ class FlowNetwork:
                     f"{conn.source_name}_{conn.source_index}->{conn.target_name}_{conn.target_index}: {e}"
                 )
 
+    def execute_signals(self, t: float) -> None:
+        """
+        Execute ONLY signal connections (pre-physics pass).
+
+        This method propagates control/demand signals between components
+        BEFORE the physics step, ensuring that downstream components
+        have current demand information for their step() calculation.
+        
+        Called from SimulationEngine BEFORE component.step() loop.
+
+        Args:
+            t (float): Current simulation time in hours.
+        """
+        for conn in self._connections:
+            if conn.resource_type == 'signal':
+                try:
+                    self._execute_single_flow(conn, t)
+                except Exception as e:
+                    logger.error(f"Signal execution failed for {conn.source_id}->{conn.target_id}: {e}")
+
     def _execute_single_flow(self, conn: ConnectionConfig, t: float) -> None:
         """
         Execute a single legacy connection flow.

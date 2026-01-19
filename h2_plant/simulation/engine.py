@@ -84,7 +84,8 @@ class SimulationEngine:
         output_dir: Optional[Path] = None,
         topology: List[ConnectionConfig] = None,
         indexed_topology: List[IndexedConnectionConfig] = None,
-        dispatch_strategy: Optional['EngineDispatchStrategy'] = None
+        dispatch_strategy: Optional['EngineDispatchStrategy'] = None,
+        lightweight_monitoring: bool = None
     ):
         """
         Initialize the simulation engine.
@@ -99,16 +100,26 @@ class SimulationEngine:
                 Indexed connections for array components.
             dispatch_strategy (EngineDispatchStrategy, optional): Power
                 dispatch strategy for allocation decisions.
+            lightweight_monitoring (bool, optional): Enable lightweight monitoring 
+                mode to save memory. Default: auto-detect based on simulation length.
         """
         self.registry = registry
         self.config = config
         self.output_dir = output_dir or Path("simulation_output")
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Auto-detect lightweight mode if not specified
+        # Enable for simulations > 7 days (10080 minutes)
+        #if lightweight_monitoring is None:
+        #    duration_hours = getattr(config, 'duration_hours', 0)
+        #    lightweight_monitoring = duration_hours > 168  # 7 days
+        #    if lightweight_monitoring:
+        #        logger.info("Long simulation detected: enabling lightweight monitoring mode")
 
         # Subsystems
         self.state_manager = StateManager(output_dir=self.output_dir)
         self.event_scheduler = EventScheduler()
-        self.monitoring = MonitoringSystem(output_dir=self.output_dir)
+        self.monitoring = MonitoringSystem(output_dir=self.output_dir, lightweight_mode=lightweight_monitoring)
 
         self.flow_network = FlowNetwork(
             registry=self.registry,
@@ -240,6 +251,7 @@ class SimulationEngine:
         dispatch_record = self._dispatch_record_method
         execution_list = self._execution_list
         flow_execute = self.flow_network.execute_flows
+        signal_execute = self.flow_network.execute_signals  # Pre-physics signal pass
         event_process = self.event_scheduler.process_events
         dispatch_prices = self._dispatch_prices
         dispatch_wind = self._dispatch_wind
@@ -263,13 +275,17 @@ class SimulationEngine:
                 if dispatch_decide and dispatch_prices is not None:
                     dispatch_decide(hour, dispatch_prices, dispatch_wind)
 
+                # Signal Pre-Pass: Propagate demand/control signals BEFORE physics step
+                # This ensures downstream components have current demand information
+                signal_execute(hour)
+
                 # Physics Step (Iterate pre-resolved list)
                 # Removed try/except block in inner loop for speed (Python exception handling is slow)
                 # We trust components are stable after initialization.
                 for component in execution_list:
                     component.step(hour)
 
-                # Flow Propagation
+                # Flow Propagation (physical mass/energy streams)
                 flow_execute(hour)
 
                 # Dispatch Recording

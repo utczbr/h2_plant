@@ -602,6 +602,18 @@ class GraphCatalog:
             enabled=False
         ))
 
+        self.register(GraphMetadata(
+            graph_id='arbitrage_opportunity_interactive',
+            title='Arbitrage Opportunity (Interactive)',
+            description='Interactive dual-axis chart of H2 production vs Prices',
+            function=pg.plot_arbitrage_opportunity,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*Spot*', '*price*', 'H2_soec*', 'H2_pem*'],
+            priority=GraphPriority.HIGH,
+            category='economics',
+            enabled=True
+        ))
+
         # --- MATPLOTLIB GRAPHS (Merged from plotter.py) ---
         self.register(GraphMetadata(
             graph_id='dispatch',
@@ -775,12 +787,24 @@ class GraphCatalog:
         
         # Thermal & Separation (Static)
         self.register(GraphMetadata(
-            graph_id='chiller_cooling',
+            graph_id='legacy_chiller',
             title='Chiller Cooling Load',
-            description='Cooling load and electrical consumption',
-            function=sg.create_chiller_cooling_figure,
+            description='Chiller cooling load over time (kW)',
+            function=sg.create_chiller_cooling_load_figure,
             library=GraphLibrary.MATPLOTLIB,
-            data_required=['history'],
+            data_required=['*Chiller*', '*cooling_load*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        
+        self.register(GraphMetadata(
+            graph_id='legacy_chiller_power',
+            title='Chiller Electrical Power',
+            description='Chiller electrical power consumption over time (kW)',
+            function=sg.create_chiller_power_figure,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['*Chiller*', '*electrical_power*'],
             priority=GraphPriority.MEDIUM,
             category='thermal',
             enabled=True

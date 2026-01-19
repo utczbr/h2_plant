@@ -1532,8 +1532,9 @@ class CompressorSingle(Component):
             # Propagate inlet composition (compression doesn't change composition)
             if self._inlet_stream and self._inlet_stream.composition:
                 out_comp = self._inlet_stream.composition.copy()
-                # Use inlet stream mass flow for output (compressor preserves mass)
-                out_mass_flow = self._inlet_stream.mass_flow_kg_h
+                # Use actual transferred mass for output (compressor preserves mass but limits flow)
+                out_mass_flow = (self.actual_mass_transferred_kg / self.dt 
+                               if self.dt > 0 else 0.0)
                 # Propagate extra dict (contains entrained liquid info for mass balance)
                 out_extra = self._inlet_stream.extra.copy() if self._inlet_stream.extra else {}
             else:

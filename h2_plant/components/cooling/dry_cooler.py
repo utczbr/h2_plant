@@ -123,7 +123,8 @@ class DryCooler(Component):
         self.target_outlet_temp_c = kwargs.get('target_outlet_temp_c', kwargs.get('target_temp_c', None))
         
         # Scaling factor based on design capacity (Baseline = 100 kW)
-        self.design_capacity_kw = kwargs.get('design_capacity_kw', 100.0)
+        # Support both naming conventions from topology
+        self.design_capacity_kw = kwargs.get('design_capacity_kw', kwargs.get('cooling_capacity_kw', 100.0))
         self.scaling_factor = self.design_capacity_kw / 100.0
 
         # TQC heat exchanger parameters

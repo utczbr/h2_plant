@@ -117,6 +117,11 @@ class WaterPurifier(Component):
         # LUT Manager
         self.lut = None
 
+    @property
+    def max_flow_kg_h(self) -> float:
+        """Rated capacity for CAPEX sizing."""
+        return self.max_flow_kg_h_rated
+
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the component for simulation execution.

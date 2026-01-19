@@ -288,6 +288,11 @@ class DetailedPEMElectrolyzer(Component):
             max_cooling_kw=100.0      # Active cooling capacity
         )
 
+    @property
+    def max_power_kw(self) -> float:
+        """Stack design capacity in kW."""
+        return self.max_power_mw * 1000.0
+
     def _load_polynomials(self) -> None:
         """
         Load pre-computed polynomial j(P) models from disk.

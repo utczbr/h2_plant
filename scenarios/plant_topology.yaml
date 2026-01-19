@@ -104,6 +104,35 @@ nodes:
         resource_type: "stream"
 
   # =================================================================================
+  # POWER TRANSFORMERS (Efficiency Loss Modeling)
+  # Models combined transformer + rectifier losses for major loads
+  # =================================================================================
+
+  - id: "SOEC_Transformer"
+    type: "PowerTransformer"
+    params:
+      efficiency: 0.95    # 5% combined trafo+rectifier losses
+      rated_power_mw: 16.0  # 14.4 MW stack + headroom
+      system_group: "SOEC"
+      process_step: 8
+
+  - id: "PEM_Transformer"
+    type: "PowerTransformer"
+    params:
+      efficiency: 0.95
+      rated_power_mw: 6.0   # 5 MW stack + headroom
+      system_group: "PEM"
+      process_step: 9
+
+  - id: "BOP_Transformer"
+    type: "PowerTransformer"
+    params:
+      efficiency: 0.95
+      rated_power_mw: 5.0
+      system_group: "BOP"
+      process_step: 7
+
+  # =================================================================================
   # MAIN GAS TRAIN: SOEC -> SEPARATION -> COMPRESSION -> PURIFICATION
   # =================================================================================
 
@@ -1766,7 +1795,7 @@ nodes:
       volume_per_tank_m3: 107.37 # From HP spec, assumed consistent
       max_pressure_bar: 70.0
       initial_pressure_bar: 1.0
-      min_discharge_pressure_bar: 30.0
+      min_discharge_pressure_bar: 40.0
       ambient_temp_k: 298.15
     connections:
       - source_port: "h2_out"
@@ -1785,7 +1814,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 30.0
-      outlet_pressure_bar: 500.0 # Balanced Stage 1/4
+      outlet_pressure_bar: 70.0 # Balanced Stage 1/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_2"
@@ -1810,7 +1839,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 60.0 
-      outlet_pressure_bar: 500.0 # Balanced Stage 2/4
+      outlet_pressure_bar: 140.0 # Balanced Stage 2/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_3"
@@ -1835,7 +1864,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 125.0 
-      outlet_pressure_bar: 500.0 # Balanced Stage 3/4
+      outlet_pressure_bar: 250.0 # Balanced Stage 3/4
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_4"

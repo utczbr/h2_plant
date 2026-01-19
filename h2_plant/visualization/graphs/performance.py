@@ -17,18 +17,20 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
     variable = config.get('variable', 'voltage')
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
-    x = utils.get_time_axis_hours(df)
+    
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    x = utils.get_time_axis_hours(df_ds)
     has_data = False
 
     for comp_id in component_ids:
         col = None
         if variable == 'voltage':
-            if "PEM" in comp_id and 'pem_V_cell' in df.columns:
-                col = df['pem_V_cell']
+            if "PEM" in comp_id and 'pem_V_cell' in df_ds.columns:
+                col = df_ds['pem_V_cell']
         elif variable == 'efficiency':
-            if "PEM" in comp_id and 'pem_V_cell' in df.columns:
+            if "PEM" in comp_id and 'pem_V_cell' in df_ds.columns:
                 # Efficiency ~ 1.23 / V_cell (HHV basis approximation)
-                col = 1.23 / df['pem_V_cell'].replace(0, np.nan)
+                col = 1.23 / df_ds['pem_V_cell'].replace(0, np.nan)
         
         if col is not None and len(col) > 0:
             ax.plot(x, col, label=comp_id, linewidth=1.5)

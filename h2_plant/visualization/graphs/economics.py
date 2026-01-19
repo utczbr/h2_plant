@@ -68,7 +68,9 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
     variable = config.get('variable', 'energy_price')
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
-    x = utils.get_time_axis_hours(df)
+    
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    x = utils.get_time_axis_hours(df_ds)
     
     # Map variable to column
     col_map = {
@@ -83,8 +85,13 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
             break
     
     if col_name:
-        ax.plot(x, df[col_name], color='tab:green', linewidth=1.5)
-        ax.set_ylabel("Price (€/MWh)")
+        # Re-fetch column from downsampled dataframe by name
+        if col_name in df_ds.columns:
+            ax.plot(x, df_ds[col_name], color='tab:green', linewidth=1.5)
+            ax.set_ylabel("Price (€/MWh)")
+        else:
+            ax.text(0.5, 0.5, f'Error loading downsampled data for {variable}', ha='center', va='center', transform=ax.transAxes)
+
     else:
         ax.text(0.5, 0.5, f'No data for {variable}', ha='center', va='center', transform=ax.transAxes)
     
@@ -102,7 +109,7 @@ def plot_pie(df: pd.DataFrame, component_ids: list, title: str, config: dict) ->
     fig = Figure(figsize=(10, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
     
-    # Calculate average power per category (MW)
+    # Calculate average power per category (MW) - Averages don't need downsampling, efficient on full data
     data = {}
     data['SOEC'] = df.get('P_soec_actual', df.get('P_soec', pd.Series([0]))).mean()
     data['PEM'] = df.get('P_pem', pd.Series([0])).mean()
@@ -163,17 +170,26 @@ def plot_arbitrage(df: pd.DataFrame, component_ids: list, title: str, config: di
     fig = Figure(figsize=(8, 8), constrained_layout=True)
     ax = fig.add_subplot(111)
     
-    price = df.get('spot_price', df.get('Spot'))
-    h2 = df.get('H2_soec_kg', df.get('H2_pem_kg', pd.Series([0])))
+    # Already implemented simple striding inside the function, let's keep it or standardize
+    # Existing striding: stride = max(1, len(price) // 2000)
+    # Let's standardize to use utils.downsample_dataframe
     
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    
+    price = df_ds.get('spot_price', df_ds.get('Spot'))
+    h2 = df_ds.get('H2_soec_kg', df_ds.get('H2_pem_kg', pd.Series(np.zeros(len(df_ds)), index=df_ds.index)))
+    
+    # Fix: Ensure h2 matches length of df_ds if fallback was used
+    if len(h2) != len(df_ds): 
+         h2 = pd.Series(np.zeros(len(df_ds)), index=df_ds.index)
+
     if price is not None and len(price) > 0:
-        stride = max(1, len(price) // 2000)
-        scatter = ax.scatter(price.iloc[::stride], h2.iloc[::stride], 
-                             c=df['minute'].iloc[::stride] if 'minute' in df.columns else None,
+        scatter = ax.scatter(price, h2, 
+                             c=df_ds['minute'] if 'minute' in df_ds.columns else None,
                              alpha=0.5, s=10, cmap='viridis')
         ax.set_xlabel("Spot Price (€/MWh)")
         ax.set_ylabel("H2 Production (kg/step)")
-        if 'minute' in df.columns:
+        if 'minute' in df_ds.columns:
             fig.colorbar(scatter, ax=ax, label='Time (min)')
     else:
         ax.text(0.5, 0.5, 'No price data', ha='center', va='center', transform=ax.transAxes)
@@ -211,32 +227,27 @@ def plot_effective_ppa(df: pd.DataFrame, component_ids: list, title: str, config
         ax.set_title(title, fontsize=14, fontweight='bold')
         return fig
     
-    # Time axis
-    if 'minute' in df.columns:
-        x = df['minute'] / 60.0  # Hours
-        x_label = 'Time (hours)'
-    else:
-        x = df.index
-        x_label = 'Timestep'
-    
     # Downsample for performance
-    limit = 2000
-    stride = max(1, len(df) // limit)
-    x_ds = x.iloc[::stride]
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    
+    # Time axis
+    x_ds = utils.get_time_axis_hours(df_ds)
+    x_label = 'Time (hours)'
     
     # Effective PPA
-    ppa_eff = df['ppa_price_effective_eur_mwh'].iloc[::stride]
+    ppa_eff = df_ds['ppa_price_effective_eur_mwh']
     ax.plot(x_ds, ppa_eff, color='#1976D2', linewidth=2, label='Effective PPA')
     ax.fill_between(x_ds, 0, ppa_eff, color='#1976D2', alpha=0.2)
     
     # Spot price overlay
     spot_col = None
     for col in ['Spot', 'spot_price']:
-        if col in df.columns:
+        if col in df.columns:  # Check original df for name
             spot_col = col
             break
-    if spot_col:
-        spot_ds = df[spot_col].iloc[::stride]
+            
+    if spot_col and spot_col in df_ds.columns:
+        spot_ds = df_ds[spot_col]
         ax.plot(x_ds, spot_ds, color='#FF5722', linewidth=1.5, linestyle='--', 
                 label='Spot Price', alpha=0.8)
     
@@ -249,7 +260,7 @@ def plot_effective_ppa(df: pd.DataFrame, component_ids: list, title: str, config
     ax.axhline(y=ppa_variable, color='#388E3C', linestyle=':', linewidth=1.5, 
                label=f'Variable ({ppa_variable:.0f} €/MWh)')
     
-    # Statistics annotation
+    # Statistics annotation (Use full dataset for accurate stats)
     avg_ppa = df['ppa_price_effective_eur_mwh'].mean()
     min_ppa = df['ppa_price_effective_eur_mwh'].min()
     max_ppa = df['ppa_price_effective_eur_mwh'].max()

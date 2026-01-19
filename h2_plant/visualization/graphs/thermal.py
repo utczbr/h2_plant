@@ -35,7 +35,7 @@ def plot_load_breakdown(df: pd.DataFrame, component_ids: list, title: str, confi
         latent_load = 0.0
         
         # 1. Determine Total Load (as before)
-        for suffix in ['cooling_load_kw', 'heat_rejected_kw', 'heat_removed_kw', 'tqc_duty_kw', 'dc_duty_kw']:
+        for suffix in ['cooling_load_kw', 'heat_rejected_kw', 'heat_removed_kw', 'tqc_duty_kw', 'dc_duty_kw', 'q_transferred_kw']:
             col = f"{comp_id}_{suffix}"
             if col in df.columns:
                 val = df[col].mean()
@@ -104,17 +104,15 @@ def plot_central_cooling_performance(df: pd.DataFrame, component_ids: list, titl
     ax1, ax2 = fig.subplots(2, 1, sharex=True)
     
     # Extract data
-    ax1, ax2 = fig.subplots(2, 1, sharex=True)
-    
-    # Extract data
-    hours_axis = utils.get_time_axis_hours(df)
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    hours_axis = utils.get_time_axis_hours(df_ds)
     x_label = "Simulation Time [Hours]"
     
     # Cooling Manager Data
-    glycol_temp = df.get('cooling_manager_glycol_supply_temp_c', np.zeros_like(hours_axis))
-    glycol_duty = df.get('cooling_manager_glycol_duty_kw', np.zeros_like(hours_axis))
-    cw_temp = df.get('cooling_manager_cw_supply_temp_c', np.zeros_like(hours_axis))
-    cw_duty = df.get('cooling_manager_cw_duty_kw', np.zeros_like(hours_axis))
+    glycol_temp = df_ds.get('cooling_manager_glycol_supply_temp_c', np.zeros_like(hours_axis))
+    glycol_duty = df_ds.get('cooling_manager_glycol_duty_kw', np.zeros_like(hours_axis))
+    cw_temp = df_ds.get('cooling_manager_cw_supply_temp_c', np.zeros_like(hours_axis))
+    cw_duty = df_ds.get('cooling_manager_cw_duty_kw', np.zeros_like(hours_axis))
     
     # --- Plot 1: Glycol Loop (Dry Cooler Bank) ---
     ax1.set_title(f"{title} - System 1: Central Glycol Loop (Dry Cooler Bank)", fontsize=12)
@@ -171,7 +169,8 @@ def plot_thermal_time_series(df: pd.DataFrame, component_ids: list, title: str, 
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
     
-    x = utils.get_time_axis_hours(df)
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    x = utils.get_time_axis_hours(df_ds)
     has_data = False
     
     # Define suffixes based on variable
@@ -192,8 +191,10 @@ def plot_thermal_time_series(df: pd.DataFrame, component_ids: list, title: str, 
                 break
         
         if col_name:
-            ax.plot(x, df[col_name], label=comp_id, linewidth=1.5)
-            has_data = True
+            # Re-fetch column from downsampled dataframe by name
+            if col_name in df_ds.columns:
+                ax.plot(x, df_ds[col_name], label=comp_id, linewidth=1.5)
+                has_data = True
             
     if not has_data:
         ax.text(0.5, 0.5, f'No {variable} data found for specified components', 

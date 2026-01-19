@@ -100,7 +100,8 @@ class HydrogenMultiCyclone(Component):
         element_diameter_mm: float = 50.0,
         vane_angle_deg: float = 45.0,
         target_velocity_ms: float = 20.0,
-        gas_species: str = 'H2'
+        gas_species: str = 'H2',
+        volume_m3: float = 0.015  # Default vessel volume for CAPEX sizing
     ) -> None:
         """
         Configuration Phase.
@@ -136,6 +137,7 @@ class HydrogenMultiCyclone(Component):
         self.vane_angle_rad = np.radians(vane_angle_deg)
         self.target_velocity = target_velocity_ms
         self.gas_species = gas_species
+        self._volume_m3 = volume_m3  # Stored for CAPEX sizing
         
         # Geometry Cache (calculated once)
         self.D_hub = 0.3 * self.D_element_m  # 30% hub ratio
@@ -166,6 +168,25 @@ class HydrogenMultiCyclone(Component):
         self._D_luts_stacked: Optional[np.ndarray] = None
         self._P_grid: Optional[np.ndarray] = None
         self._T_grid: Optional[np.ndarray] = None
+
+    @property
+    def volume_m3(self) -> float:
+        """Vessel internal volume for CAPEX sizing (m³)."""
+        return self._volume_m3
+
+    @property
+    def cross_sectional_area_m2(self) -> float:
+        """
+        Vessel cross-sectional area for CAPEX sizing of internals (m²).
+        Derived from volume assuming L/D = 5 cylinder.
+        """
+        # V = (pi/4)*D^2*L, L=5D => V = 5*(pi/4)*D^3
+        # D = (4V / 5pi)^(1/3)
+        vol = self._volume_m3
+        if vol <= 0:
+            return 0.0
+        D_vessel = (4.0 * vol / (5.0 * np.pi)) ** (1/3)
+        return (np.pi / 4.0) * (D_vessel ** 2)
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """

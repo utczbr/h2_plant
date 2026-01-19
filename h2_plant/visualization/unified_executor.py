@@ -177,6 +177,76 @@ class UnifiedGraphExecutor:
         enabled = self.catalog.list_enabled()
         logger.info(f"Configured {len(enabled)} enabled graphs from YAML")
 
+    def _infer_columns_for_graph_type(self, graph_type: str, components: List[str]) -> List[str]:
+        """
+        Infer required columns from graph type and component names.
+        
+        This avoids the ['history'] wildcard fallback that would load ALL columns.
+        Instead, we derive specific patterns based on what the graph type needs.
+        
+        Args:
+            graph_type: Type of graph (e.g., 'temperature_profile', 'thermal_load_breakdown')
+            components: List of component names from YAML config
+            
+        Returns:
+            List of column patterns to load
+        """
+        # Base patterns by graph type
+        base_patterns: Dict[str, List[str]] = {
+            # Profile graphs
+            'temperature_profile': ['minute', '*_outlet_temp*'],
+            'pressure_profile': ['minute', '*_outlet_pressure*'],
+            'flow_profile': ['minute', '*_outlet_mass_flow*', '*_h2_*', '*_h2o_*'],
+            'process_train_profile': ['minute', '*_outlet_temp*', '*_outlet_pressure*', '*_outlet_mass_flow*'],
+            
+            # Thermal graphs
+            'thermal_load_breakdown': ['minute', '*_cooling*', '*_duty*', '*_thermal*', '*_q_transferred*'],
+            'thermal_time_series': ['minute', '*_outlet_temp*', '*_cooling*', '*_duty*', '*_q_transferred*'],
+            'central_cooling_performance': ['minute', '*cooling*', '*temperature*', '*duty*'],
+            
+            # Separation graphs
+            'water_removal_bar': ['minute', '*_liquid_removed*', '*_water_removed*'],
+            'crossover_impurities': ['minute', '*_o2_*', '*_h2_*', '*_impurity*'],
+            
+            # Economics graphs
+            'dispatch_stack': ['minute', 'P_offer', 'P_soec*', 'P_pem', 'spot_price', 'P_sold'],
+            'economics_time_series': ['minute', 'spot_price', 'ppa_*', 'P_*'],
+            'economics_pie': ['minute', 'P_*', '*_power*'],
+            'economics_scatter': ['minute', 'spot_price', 'P_offer', 'h2_kg'],
+            'effective_ppa': ['minute', 'ppa_*', 'spot_price'],
+            
+            # Production graphs
+            'production_time_series': ['minute', 'H2_*_kg', 'h2_*'],
+            'production_stacked': ['minute', 'H2_*_kg', 'O2_*_kg', '*_h2o_*'],
+            'production_cumulative': ['minute', 'H2_*_kg', 'cumulative_*'],
+            
+            # Performance graphs
+            'performance_time_series': ['minute', '*_voltage*', '*_efficiency*', '*_power*'],
+            'performance_scatter': ['minute', 'spot_price', 'P_*', '*_power*'],
+            
+            # SOEC graphs
+            'soec_modules_time_series': ['minute', 'soec_*', 'P_soec*'],
+            'soec_heatmap': ['minute', 'soec_module_*', 'soec_active*'],
+            'soec_stats': ['minute', 'soec_module_*'],
+            
+            # Storage graphs
+            'storage_levels': ['minute', '*Tank*', '*_level*', '*_pressure*', '*inventory*'],
+            'compressor_power': ['minute', '*Compressor*_power*', 'compressor_*'],
+            'storage_apc': ['minute', 'storage_*', '*_soc*', '*_zone*'],
+            'storage_inventory': ['minute', '*inventory*', '*Tank*', '*_kg*'],
+            'storage_pressure_heatmap': ['minute', '*Tank*pressure*', '*_bar'],
+            'water_tank_inventory': ['minute', '*UltraPure*', '*mass_kg*', '*control_zone*'],
+        }
+        
+        patterns = base_patterns.get(graph_type, ['minute']).copy()
+        
+        # Add component-specific patterns
+        for comp in components:
+            if comp:  # Skip empty strings
+                patterns.append(f'*{comp}*')
+        
+        return patterns
+    
     def _register_orchestrated_graphs(self, orchestrated_config: Dict[str, Any]) -> None:
         """
         Dynamically register orchestrated graphs from YAML config.
@@ -219,19 +289,18 @@ class UnifiedGraphExecutor:
                 # Create wrapper function
                 wrapper = create_modular_wrapper(handler, components, title, plot_config)
                 
-                # Create metadata
-                # Note: 'data_required' should ideally be derived from components,
-                # but for now we rely on the auto-resolution or pass ['history'] 
-                # to ensure all data is loaded if we can't be specific.
-                # Modular graphs usually need a wide range of columns.
+                # Infer required columns from graph type and components
+                # This avoids the ['history'] wildcard that loads ALL columns
+                inferred_columns = self._infer_columns_for_graph_type(graph_type, components)
+                
                 meta = GraphMetadata(
                     graph_id=instance_id,
                     title=title,
                     description=f"Orchestrated {graph_type}: {title}",
                     function=wrapper,
                     library=GraphLibrary.MATPLOTLIB,
-                    data_required=['history'],  # Fallback to full load for safety
-                    priority=GraphPriority.HIGH, # Default for these custom plots
+                    data_required=inferred_columns,
+                    priority=GraphPriority.HIGH,
                     category='orchestrated',
                     enabled=True
                 )
@@ -255,16 +324,28 @@ class UnifiedGraphExecutor:
             Set of unique column names/patterns needed for all enabled graphs.
             Always includes 'minute' as the base time column.
         """
+        from h2_plant.visualization.graph_catalog import CORE_COLUMNS
+        
         required: Set[str] = {'minute'}  # Always required
+        history_fallback_graphs = []
         
         for meta in self.catalog.get_enabled():
             if meta.data_required:
-                # If any graph needs full history (placeholder), verify all columns are loaded
+                # Handle ['history'] fallback gracefully - use CORE_COLUMNS instead of wildcard
                 if 'history' in meta.data_required:
-                    return {'*'}
+                    history_fallback_graphs.append(meta.graph_id)
+                    # Add core columns as fallback instead of returning {'*'}
+                    required.update(CORE_COLUMNS)
+                    continue
                     
                 for col in meta.data_required:
                     required.add(col)
+        
+        if history_fallback_graphs:
+            logger.warning(
+                f"{len(history_fallback_graphs)} graphs use ['history'] fallback. "
+                f"Consider declaring specific columns. Graphs: {history_fallback_graphs[:5]}..."
+            )
         
         return required
     
@@ -297,7 +378,8 @@ class UnifiedGraphExecutor:
         self,
         history: Optional[Dict[str, np.ndarray]] = None,
         chunks_dir: Optional[Path] = None,
-        csv_path: Optional[Path] = None
+        csv_path: Optional[Path] = None,
+        downsample_factor: int = 60
     ) -> pd.DataFrame:
         """
         Load DataFrame with only required columns.
@@ -311,11 +393,18 @@ class UnifiedGraphExecutor:
             history: In-memory history dict from simulation
             chunks_dir: Path to history_chunks/ directory with Parquet files
             csv_path: Path to simulation_history.csv
+            downsample_factor: Take every Nth row to reduce memory usage.
+                Default: 60 (converts 1-minute data to hourly).
+                Set to 1 for full resolution.
             
         Returns:
             pd.DataFrame with required columns for enabled graphs
         """
         required_patterns = self.get_required_columns()
+        
+        # Log downsampling info
+        if downsample_factor > 1:
+            logger.info(f"Downsampling enabled: taking every {downsample_factor}th row (e.g., 1-min → hourly)")
         
         # Try in-memory history first
         if history is not None:
@@ -335,13 +424,21 @@ class UnifiedGraphExecutor:
                     
                     # Store multi-dimensional data in matrix_attrs for heatmaps
                     if hasattr(val, 'ndim') and val.ndim > 1:
-                        matrix_attrs[col] = val
+                        # Downsample matrix data along first axis
+                        if downsample_factor > 1:
+                            matrix_attrs[col] = val[::downsample_factor]
+                        else:
+                            matrix_attrs[col] = val
                         continue
                     if isinstance(val, list) and len(val) > 0 and isinstance(val[0], (list, tuple)):
                         matrix_attrs[col] = val
                         continue
-                        
-                    data[col] = val
+                    
+                    # Downsample 1D arrays
+                    if downsample_factor > 1 and hasattr(val, '__getitem__'):
+                        data[col] = val[::downsample_factor]
+                    else:
+                        data[col] = val
             
             # Use normalize_history to generate aliases (P_soec from P_soec_actual etc)
             # This is critical for legacy graphs that expect specific normalized names
@@ -350,29 +447,85 @@ class UnifiedGraphExecutor:
             # Re-attach matrix data to dataframe attributes
             for k, v in matrix_attrs.items():
                 df.attrs[k] = v
-                
+            
+            logger.info(f"Loaded in-memory history: {len(df)} rows (downsampled by {downsample_factor}x)")
             return df
         
         # Try chunked Parquet files
         if chunks_dir is not None:
             chunks_path = Path(chunks_dir)
-            if chunks_path.exists() and list(chunks_path.glob('*.parquet')):
-                logger.info(f"Loading from chunked Parquet files in {chunks_path}")
+            chunk_files = sorted(chunks_path.glob('chunk_*.parquet')) if chunks_path.exists() else []
+            if chunk_files:
+                logger.info(f"Loading from {len(chunk_files)} chunked Parquet files in {chunks_path}")
                 try:
-                    from h2_plant.storage.history_manager import ChunkedHistoryManager
+                    import gc
                     
-                    # Use lazy-loading with column filtering
-                    manager = ChunkedHistoryManager.from_chunks(chunks_path)
-                    all_columns = manager.get_columns()
-                    columns_to_load = list(self._expand_patterns(required_patterns, all_columns))
+                    # Read schema from first chunk to get available columns
+                    try:
+                        import pyarrow.parquet as pq
+                        schema = pq.read_schema(chunk_files[0])
+                        all_columns = schema.names
+                    except ImportError:
+                        # Fallback: read first row to get columns (slower but works)
+                        logger.warning("pyarrow not available for schema inspection, using fallback")
+                        sample_df = pd.read_parquet(chunk_files[0], nrows=1)
+                        all_columns = list(sample_df.columns)
+                        del sample_df
                     
-                    df_chunked = manager.get_dataframe(columns=columns_to_load)
+                    # Expand patterns against actual columns
+                    if '*' in required_patterns:
+                        # Wildcard fallback - load all columns (but log warning)
+                        logger.warning("Loading ALL columns due to '*' in required_patterns - consider declaring specific columns")
+                        columns_to_load = None
+                    else:
+                        columns_to_load = list(self._expand_patterns(required_patterns, all_columns))
+                        if not columns_to_load:
+                            logger.warning("No columns matched patterns, falling back to all columns")
+                            columns_to_load = None
+                        else:
+                            logger.info(f"Column filtering: loading {len(columns_to_load)}/{len(all_columns)} columns")
                     
-                    # Normalize loaded data (create aliases like P_soec)
-                    from h2_plant.visualization.static_graphs import normalize_history
-                    return normalize_history(df_chunked)
-                except ImportError:
-                    logger.warning("ChunkedHistoryManager not available, falling back to CSV")
+                    # Stream chunks with column filtering, DOWNSAMPLING, and periodic GC
+                    dfs = []
+                    total_rows_original = 0
+                    total_rows_downsampled = 0
+                    
+                    for i, chunk_file in enumerate(chunk_files):
+                        df_chunk = pd.read_parquet(chunk_file, columns=columns_to_load)
+                        total_rows_original += len(df_chunk)
+                        
+                        # Apply downsampling to each chunk
+                        if downsample_factor > 1:
+                            df_chunk = df_chunk.iloc[::downsample_factor]
+                        
+                        total_rows_downsampled += len(df_chunk)
+                        dfs.append(df_chunk)
+                        
+                        # Periodic garbage collection to keep memory bounded
+                        if (i + 1) % 4 == 0:
+                            gc.collect()
+                            logger.debug(f"Loaded {i + 1}/{len(chunk_files)} chunks, GC triggered")
+                    
+                    if dfs:
+                        combined_df = pd.concat(dfs, ignore_index=True)
+                        del dfs
+                        gc.collect()
+                        
+                        # Normalize loaded data (create aliases like P_soec)
+                        from h2_plant.visualization.static_graphs import normalize_history
+                        
+                        if downsample_factor > 1:
+                            logger.info(
+                                f"Loaded DataFrame: {total_rows_downsampled} rows "
+                                f"(downsampled from {total_rows_original}, {downsample_factor}x reduction) "
+                                f"x {len(combined_df.columns)} columns"
+                            )
+                        else:
+                            logger.info(f"Loaded DataFrame: {len(combined_df)} rows x {len(combined_df.columns)} columns")
+                        
+                        return normalize_history(combined_df)
+                except Exception as e:
+                    logger.warning(f"Failed to load from chunks: {e}. Falling back to CSV.")
         
         # Try CSV file
         if csv_path is not None and csv_path.exists():
@@ -384,7 +537,18 @@ class UnifiedGraphExecutor:
             
             columns_to_load = list(self._expand_patterns(required_patterns, header))
             
-            df_csv = pd.read_csv(csv_path, usecols=columns_to_load)
+            # Load CSV with optional downsampling via skiprows
+            if downsample_factor > 1:
+                # skiprows with lambda: skip rows where (row_num - 1) % factor != 0
+                # Row 0 is header, so we keep it. Then keep row 1, skip 2-60, keep 61, etc.
+                df_csv = pd.read_csv(
+                    csv_path, 
+                    usecols=columns_to_load,
+                    skiprows=lambda x: x > 0 and (x - 1) % downsample_factor != 0
+                )
+                logger.info(f"Loaded CSV with {downsample_factor}x downsampling: {len(df_csv)} rows")
+            else:
+                df_csv = pd.read_csv(csv_path, usecols=columns_to_load)
             
             # Normalize loaded data (create aliases like P_soec)
             from h2_plant.visualization.static_graphs import normalize_history
@@ -419,7 +583,7 @@ class UnifiedGraphExecutor:
     
         return True
     
-    def _add_metadata_stamp(self, fig, df: pd.DataFrame, meta_info: str = ""):
+    def _add_metadata_stamp(self, fig, df: pd.DataFrame, sim_name: str = "Unknown Simulation", meta_info: str = ""):
         """
         Add standard metadata footer to the figure.
         """
@@ -433,9 +597,6 @@ class UnifiedGraphExecutor:
 
         dt_h = utils.get_dt_hours(df)
         dt_str = f"dt={dt_h*60:.1f}min"
-        
-        # Try to get simulation name
-        sim_name = df.attrs.get('config', {}).get('simulation_name', 'Unknown Simulation')
         
         # Stamp text
         stamp = f"{sim_name} | {dt_str} | Generated by H2Plant OS"
@@ -468,6 +629,15 @@ class UnifiedGraphExecutor:
         matplotlib.use('Agg')  # Non-interactive backend
         import matplotlib.pyplot as plt
         
+        # PERFORMANCE FIX: Strip heavy attributes (large matrices) from DataFrame
+        # to prevent expensive deepcopies during column access in graph functions.
+        # We preserve the simulation name for stamping.
+        sim_name = df.attrs.get('config', {}).get('simulation_name', 'Unknown Simulation')
+        
+        # Create lightweight shallow copy for graph functions
+        df_light = df.copy(deep=False)
+        df_light.attrs = {}
+        
         results: Dict[str, GraphResult] = {}
         enabled_graphs = self.catalog.get_enabled()  # Already sorted by priority
         
@@ -482,8 +652,8 @@ class UnifiedGraphExecutor:
             
             try:
                 with time_limit(timeout_seconds, graph_id):
-                    # Call the graph function
-                    fig = meta.function(df, dpi=dpi)
+                    # Call the graph function with lightweight DataFrame
+                    fig = meta.function(df_light, dpi=dpi)
                     
                     if fig is None:
                         results[graph_id] = GraphResult(
@@ -505,8 +675,8 @@ class UnifiedGraphExecutor:
                         plt.close(fig)
                         continue
                         
-                    # Add Metadata Stamp
-                    self._add_metadata_stamp(fig, df)
+                    # Add Metadata Stamp (pass sim_name explicitly)
+                    self._add_metadata_stamp(fig, df_light, sim_name=sim_name)
 
                     # Determine output path and format based on library
                     if meta.library.value == 'matplotlib':

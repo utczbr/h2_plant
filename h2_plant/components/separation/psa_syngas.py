@@ -108,6 +108,19 @@ class SyngasPSA(Component):
         self.power_consumption_kw: float = 0.0
         self._last_h2_in_kg_h: float = 0.0
 
+    @property
+    def volume_m3(self) -> float:
+        """
+        Total internal volume of all adsorbent beds (m³) for CAPEX sizing.
+        
+        V = N_beds * (pi * (D/2)^2 * L)
+        """
+        import math
+        radius = self.bed_diameter_m / 2.0
+        area = math.pi * (radius ** 2)
+        vol_per_bed = area * self.bed_length_m
+        return vol_per_bed * self.num_beds
+
     def initialize(self, dt: float, registry: Any) -> None:
         """Lifecycle Phase 1: Initialize."""
         super().initialize(dt, registry)

@@ -37,7 +37,8 @@ def run_with_dispatch_strategy(
     scenarios_dir: str,
     hours: Optional[int] = None,
     output_dir: Optional[Path] = None,
-    strategy: Optional[str] = None
+    strategy: Optional[str] = None,
+    resume_from_hour: Optional[int] = None
 ) -> Dict[str, np.ndarray]:
     """
     Run simulation using SimulationEngine with integrated DispatchStrategy.
@@ -68,6 +69,8 @@ def run_with_dispatch_strategy(
         strategy (str, optional): Dispatch strategy override.
             Options: SOEC_ONLY, REFERENCE_HYBRID, ECONOMIC_SPOT.
             Default: from simulation_config.yaml (REFERENCE_HYBRID).
+        resume_from_hour (int, optional): Hour to resume simulation from.
+            If specified, the simulation will start from this hour.
 
     Returns:
         Dict[str, np.ndarray]: Dictionary of NumPy arrays containing
@@ -166,8 +169,12 @@ def run_with_dispatch_strategy(
     engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history)
 
     # Run simulation
-    logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
-    results = engine.run(end_hour=hours)
+    start_hour = resume_from_hour if resume_from_hour else 0
+    if resume_from_hour:
+        logger.info(f"Resuming simulation from hour {resume_from_hour}, running to hour {hours}")
+    else:
+        logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
+    results = engine.run(start_hour=start_hour, end_hour=hours)
 
     # Get history from dispatch strategy (MOVED to later to allow for streaming export)
     # history = engine.get_dispatch_history() 
@@ -215,7 +222,111 @@ def run_with_dispatch_strategy(
     # )
     # logger.info(f"Markdown report saved to: {report_path}")
 
-    # Export history to CSV and NPZ
+    # Generate CAPEX Report
+    # =========================================================================
+    try:
+        from h2_plant.economics import CapexGenerator
+        
+        capex_config_path = Path(scenarios_dir) / "Economics" / "equipment_mappings.yaml"
+        
+        if capex_config_path.exists():
+            logger.info("Generating CAPEX report...")
+            capex_generator = CapexGenerator.from_yaml(capex_config_path)
+            
+            capex_report = capex_generator.generate(
+                registry=registry,
+                monitoring=engine.monitoring if hasattr(engine, 'monitoring') else None,
+                output_dir=output_dir,
+                simulation_name=getattr(context, 'simulation_name', 'H2 Plant Simulation'),
+                simulation_hours=hours
+            )
+            
+            logger.info(f"CAPEX Report Generated:")
+            logger.info(f"  Total C_BM: ${capex_report.total_C_BM:,.0f}")
+            logger.info(f"  Range (±{capex_report.overall_cost_class.value}): "
+                       f"${capex_report.total_C_BM_low:,.0f} - ${capex_report.total_C_BM_high:,.0f}")
+            logger.info(f"  Valid entries: {capex_report.entries_with_cost}/{len(capex_report.entries)}")
+        else:
+            logger.debug(f"CAPEX config not found at {capex_config_path}, skipping CAPEX generation")
+    except ImportError as e:
+        logger.warning(f"CAPEX generator not available: {e}")
+    except Exception as e:
+        logger.error(f"CAPEX generation failed: {e}", exc_info=True)
+        capex_report = None
+
+    # Generate OPEX Report
+    # =========================================================================
+    try:
+        from h2_plant.economics.opex_generator import OpexGenerator
+        
+        opex_config_path = Path(scenarios_dir) / "Economics" / "opex_config.yaml"
+        
+        if opex_config_path.exists():
+            logger.info("Generating OPEX report...")
+            
+            csv_path = output_dir / "simulation_history.csv"
+            opex_generator = OpexGenerator()
+            
+            # Use streaming for large files to avoid memory issues
+            if csv_path.exists():
+                file_size_mb = csv_path.stat().st_size / (1024 * 1024)
+                
+                if file_size_mb > 500:  # Use streaming for files > 500 MB
+                    logger.info(f"Using streaming OPEX (file: {file_size_mb:.0f} MB)")
+                    opex_report = opex_generator.generate_streaming(
+                        config_path=str(opex_config_path),
+                        csv_path=csv_path,
+                        capex_report=capex_report,
+                        output_dir=str(output_dir),
+                        simulation_hours=hours
+                    )
+                else:
+                    # Small file - use full load
+                    import pandas as pd
+                    history_df = pd.read_csv(csv_path)
+                    opex_report = opex_generator.generate(
+                        config_path=str(opex_config_path),
+                        capex_report=capex_report,
+                        history_df=history_df,
+                        output_dir=str(output_dir),
+                        simulation_hours=hours
+                    )
+            elif history is not None:
+                import pandas as pd
+                scalar_data = {k: v for k, v in history.items() if isinstance(v, (list, tuple)) and len(v) > 0}
+                if scalar_data:
+                    history_df = pd.DataFrame(scalar_data)
+                else:
+                    history_df = None
+                opex_report = opex_generator.generate(
+                    config_path=str(opex_config_path),
+                    capex_report=capex_report,
+                    history_df=history_df,
+                    output_dir=str(output_dir),
+                    simulation_hours=hours
+                )
+            else:
+                # No data available - generate without simulation data
+                opex_report = opex_generator.generate(
+                    config_path=str(opex_config_path),
+                    capex_report=capex_report,
+                    history_df=None,
+                    output_dir=str(output_dir),
+                    simulation_hours=hours
+                )
+            
+            logger.info(f"OPEX Report Generated:")
+            logger.info(f"  Total OPEX: ${opex_report.total_opex:,.0f}/year")
+            logger.info(f"  Variable: ${opex_report.total_variable_cost:,.0f}")
+            logger.info(f"  Fixed: ${opex_report.total_fixed_cost:,.0f}")
+            logger.info(f"  Maintenance: ${opex_report.total_maintenance_cost:,.0f}")
+        else:
+            logger.debug(f"OPEX config not found at {opex_config_path}, skipping OPEX generation")
+    except ImportError as e:
+        logger.warning(f"OPEX generator not available: {e}")
+    except Exception as e:
+        logger.error(f"OPEX generation failed: {e}", exc_info=True)
+
     # COMMENT: This section handles the generation of the history CSV file, as requested by the user.
     try:
         import pandas as pd
@@ -468,6 +579,17 @@ def main():
         action="store_true",
         help="Enable cProfile benchmarking"
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume simulation from checkpoint file (e.g., checkpoints/checkpoint_hour_5280.json)"
+    )
+    parser.add_argument(
+        "--memory-profile",
+        action="store_true",
+        help="Enable memory profiling with tracemalloc (reports peak usage)"
+    )
 
     args = parser.parse_args()
 
@@ -481,6 +603,39 @@ def main():
     # Run simulation
     output_dir = Path(args.output_dir) if args.output_dir else Path(args.scenarios_dir) / "simulation_output"
     output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Memory profiling setup
+    if args.memory_profile:
+        import tracemalloc
+        tracemalloc.start()
+        logger.info("Memory profiling enabled with tracemalloc")
+
+    # Resume from checkpoint if specified
+    resume_hour = None
+    if args.resume_from:
+        import json
+        checkpoint_path = Path(args.resume_from)
+        if not checkpoint_path.is_absolute():
+            checkpoint_path = output_dir / args.resume_from
+        
+        if not checkpoint_path.exists():
+            logger.error(f"Checkpoint file not found: {checkpoint_path}")
+            print(f"ERROR: Checkpoint file not found: {checkpoint_path}")
+            return
+        
+        # Load checkpoint to get resume hour
+        with open(checkpoint_path, 'r') as f:
+            checkpoint_data = json.load(f)
+        
+        # Handle both engine checkpoint and ChunkedHistoryManager checkpoint formats
+        if 'hour' in checkpoint_data:
+            resume_hour = checkpoint_data['hour']
+        elif 'total_steps_completed' in checkpoint_data:
+            # ChunkedHistoryManager format: steps are 1-minute intervals
+            resume_hour = checkpoint_data['total_steps_completed'] // 60
+        
+        logger.info(f"Will resume from checkpoint at hour {resume_hour}")
+        print(f"Resuming from checkpoint: {checkpoint_path} (hour {resume_hour})")
 
     if args.profile:
         import cProfile
@@ -495,7 +650,8 @@ def main():
                 scenarios_dir=args.scenarios_dir,
                 hours=args.hours,
                 output_dir=output_dir,
-                strategy=args.strategy
+                strategy=args.strategy,
+                resume_from_hour=resume_hour
             )
         finally:
             profiler.disable()
@@ -516,8 +672,23 @@ def main():
             scenarios_dir=args.scenarios_dir,
             hours=args.hours,
             output_dir=output_dir,
-            strategy=args.strategy
+            strategy=args.strategy,
+            resume_from_hour=resume_hour
         )
+    
+    # Memory profiling report
+    if args.memory_profile:
+        import tracemalloc
+        current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        
+        print("\n" + "="*80)
+        print("MEMORY PROFILING SUMMARY")
+        print("="*80)
+        print(f"Peak memory usage: {peak / 1024 / 1024:.1f} MB")
+        print(f"Final memory usage: {current / 1024 / 1024:.1f} MB")
+        print("="*80)
+        logger.info(f"Peak memory: {peak / 1024 / 1024:.1f} MB, Final: {current / 1024 / 1024:.1f} MB")
 
     # Summary stats
     if history:

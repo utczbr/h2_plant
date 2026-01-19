@@ -144,6 +144,32 @@ class DetailedTankArray(Component):
         self.total_filled_kg: float = 0.0
         self.total_discharged_kg: float = 0.0
         
+    def get_ports(self) -> Dict[str, Dict[str, Any]]:
+        """Return port definitions."""
+        return {
+            'h2_in': {
+                'type': 'input',
+                'resource_type': 'gas',
+                'description': 'Incoming hydrogen from production'
+            },
+            'demand_signal': {
+                'type': 'input',
+                'resource_type': 'signal',
+                'description': 'Requested discharge rate (kg/h)'
+            },
+            'h2_out': {
+                'type': 'output',
+                'resource_type': 'gas',
+                'description': 'Physical discharge to station'
+            },
+            'inventory': {
+                'type': 'output',
+                'resource_type': 'gas',
+                'description': 'Total inventory reporting'
+            }
+        }
+
+        
     @property
     def total_mass_kg(self) -> float:
         """Total hydrogen mass in all tanks."""
@@ -183,13 +209,7 @@ class DetailedTankArray(Component):
     def receive_input(self, port_name: str, value: Any, **kwargs) -> float:
         """
         Receive input streams on designated ports.
-        
-        Ports:
-            h2_in: Physical hydrogen inflow from production
-            demand_signal: Requested discharge rate (kg/h encoded as mass_flow)
-            
-        Returns:
-            float: Amount accepted (kg/h or similar units matching input)
+        ...
         """
         if isinstance(value, Stream):
              stream = value
@@ -201,12 +221,8 @@ class DetailedTankArray(Component):
             val = stream.mass_flow_kg_h if stream else 0.0
             if val is not None:
                 self._h2_in_rate = float(val)
-                # DEBUG: Trace inflow (commented after verification)
-                # if port_name == 'h2_in':
-                #     logger.info(f"DetailedTankArray({self.component_id}) RECEIVE h2_in: flow={self._h2_in_rate:.2f} kg/h")
                 return self._h2_in_rate
             else:
-                logger.warning(f"DetailedTankArray: Stream on port '{port_name}' has None mass_flow_kg_h. Defaulting to 0.0.")
                 self._h2_in_rate = 0.0
                 return 0.0
                 
@@ -215,23 +231,21 @@ class DetailedTankArray(Component):
             val = stream.mass_flow_kg_h if stream else 0.0
             if val is not None:
                 self._demand_signal_rate = float(val)
+                # DEBUG: Trace signal reception
+                # logger.info(f"DetailedTankArray({self.component_id}) RECEIVED demand_signal: {self._demand_signal_rate:.2f} kg/h")
             else:
-                logger.debug(f"DetailedTankArray: Signal on port '{port_name}' has None mass_flow_kg_h. Defaulting to 0.0.")
                 self._demand_signal_rate = 0.0
             return 0.0 # Signals are not "consumed" resources
         else:
-            logger.warning(f"DetailedTankArray: Unknown input port '{port_name}'")
+            logger.debug(f"DetailedTankArray: Unknown input port '{port_name}'")
             return 0.0
+            
+    # ... extract_output remains same ...
     
     def step(self, t: float) -> None:
         """
         Execute one simulation timestep.
-        
-        Order of operations:
-        1. Update all tank physics (pressure from mass)
-        2. Process incoming hydrogen (filling)
-        3. Process demand signal (emptying)
-        4. Buffer output stream
+        ...
         """
         super().step(t)
         
@@ -243,28 +257,22 @@ class DetailedTankArray(Component):
                 tank.temperature_k
             )
         
-        # 2. Distribute Incoming Hydrogen
-        if self._h2_in_rate > 0:
-            step_mass = self._h2_in_rate * self.dt
-            # logger.info(f"DetailedTankArray STEP: h2_in={self._h2_in_rate}, dt={self.dt}, adding {step_mass:.4f} kg")
-            overflow = self._distribute_filling(step_mass)
-            if overflow > 0:
-                logger.warning(f"DetailedTankArray: {overflow:.2f} kg overflow (all tanks full)")
-        
-        # 3. Fulfill Demand Signal
+        # 2. Fulfill Demand Signal (Emptying First)
         discharge_mass = 0.0
         avg_pressure = 101325.0
         
         if self._demand_signal_rate > 0:
             requested_mass = self._demand_signal_rate * self.dt
-            # logger.info(f"DetailedTankArray STEP: demand={self._demand_signal_rate}, discharging {requested_mass:.4f} kg")
-            discharge_mass, avg_pressure = self._distribute_emptying(requested_mass)
+            # Apply discharge immediately when demand signal is received
+            discharge_mass, avg_pressure = self._distribute_emptying(requested_mass, apply=True)
             self._last_discharge_pressure_pa = avg_pressure
-
-        # Log total mass at end of step (commented after verification)
-        # total_mass = sum(t.mass_kg for t in self.tanks)
-        # if self._h2_in_rate > 0 or self._demand_signal_rate > 0:
-        #      logger.info(f"DetailedTankArray STEP END: Mass={total_mass:.2f} kg, P_avg={self.avg_pressure_bar:.1f} bar")
+            
+        # 3. Distribute Incoming Hydrogen (Filling Second)
+        if self._h2_in_rate > 0:
+            step_mass = self._h2_in_rate * self.dt
+            overflow = self._distribute_filling(step_mass)
+            if overflow > 0:
+                logger.warning(f"DetailedTankArray: {overflow:.2f} kg overflow (all tanks full)")
         
         # 4. Buffer Output Stream
         self._h2_out_stream = Stream(
@@ -480,7 +488,7 @@ class DetailedTankArray(Component):
 
         return remaining  # Overflow
     
-    def _distribute_emptying(self, demand_kg: float) -> Tuple[float, float]:
+    def _distribute_emptying(self, demand_kg: float, apply: bool = True) -> Tuple[float, float]:
         """
         Distribute discharge demand across tanks.
         
@@ -489,6 +497,7 @@ class DetailedTankArray(Component):
         
         Args:
             demand_kg: Total mass requested [kg]
+            apply: If True, actually deduct mass and update state. If False, just simulate.
             
         Returns:
             Tuple of (mass_supplied, weighted_average_pressure)
@@ -506,15 +515,21 @@ class DetailedTankArray(Component):
         # Get candidates: currently EMPTYING
         candidates = [t for t in self.tanks if t.state == TankState.EMPTYING]
         
-        # If none emptying, activate IDLE tanks (prioritize fullest for best pressure)
+        # If none emptying, activate tanks that have usable mass > heel
+        # IMPORTANT: Consider BOTH IDLE and FILLING tanks that exceed threshold
+        # This allows concurrent fill/discharge when tank pressure > min_discharge
         if not candidates:
-            # Only consider IDLE tanks that have usable mass > heel
-            idle_tanks = [t for t in self.tanks if t.state == TankState.IDLE and t.mass_kg > (heel_mass + 0.1)]
-            idle_tanks.sort(key=lambda x: x.mass_kg, reverse=True)  # Fullest first
+            # Check IDLE tanks first (fullest first for best pressure)
+            usable_tanks = [
+                t for t in self.tanks 
+                if t.state in (TankState.IDLE, TankState.FILLING) and t.mass_kg > (heel_mass + 0.1)
+            ]
+            usable_tanks.sort(key=lambda x: x.mass_kg, reverse=True)  # Fullest first
             
-            if idle_tanks:
-                idle_tanks[0].state = TankState.EMPTYING
-                candidates = [idle_tanks[0]]
+            if usable_tanks:
+                if apply:
+                    usable_tanks[0].state = TankState.EMPTYING
+                candidates = [usable_tanks[0]]
             else:
                 return 0.0, 101325.0  # No mass available
         
@@ -537,13 +552,15 @@ class DetailedTankArray(Component):
                 # Record pressure BEFORE withdrawal
                 weighted_pressure_sum += tank.pressure_pa * pull
                 
-                tank.mass_kg -= pull
+                if apply:
+                    tank.mass_kg -= pull
+                    self.total_discharged_kg += pull
+                
                 remaining -= pull
                 supplied += pull
-                self.total_discharged_kg += pull
             
             # Check if tank reached min pressure (effectively empty for discharge)
-            if tank.mass_kg <= heel_mass + 0.01:
+            if apply and tank.mass_kg <= heel_mass + 0.01:
                 # Don't zero out mass - keep the cushion gas
                 tank.state = TankState.IDLE
                 logger.debug(f"Tank {tank.id} reached min pressure ({self.min_discharge_pressure_pa/1e5:.1f} bar), transitioning to IDLE")

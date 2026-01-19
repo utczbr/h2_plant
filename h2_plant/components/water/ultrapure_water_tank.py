@@ -156,6 +156,11 @@ class UltraPureWaterTank(Component):
         self.total_allocated_kg_h = 0.0
         self.rationing_factor = 1.0
 
+    @property
+    def volume_m3(self) -> float:
+        """Tank volume in m³ for CAPEX sizing. Assumes water density 1000 kg/m³."""
+        return self.capacity_kg / 1000.0
+
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the component for simulation execution.

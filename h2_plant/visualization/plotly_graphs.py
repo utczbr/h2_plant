@@ -4,6 +4,7 @@ Plotly graph implementations for H2 Plant visualization.
 
 from typing import Dict, Any, List, Optional
 import logging
+import pandas as pd
 
 try:
     import plotly.graph_objects as go
@@ -22,6 +23,9 @@ try:
     NUMPY_AVAILABLE = True
 except ImportError:
     NUMPY_AVAILABLE = False
+
+
+from h2_plant.visualization import utils
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +81,8 @@ def plot_pem_production_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    production = data['pem'].get('h2_production_kg_h', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    production = utils.downsample_list(data['pem'].get('h2_production_kg_h', []))
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -107,8 +111,8 @@ def plot_soec_production_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot SOEC H2 production rate over time."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    production = data['soec'].get('h2_production_kg_h', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    production = utils.downsample_list(data['soec'].get('h2_production_kg_h', []))
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -137,9 +141,9 @@ def plot_total_production_stacked(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot stacked area chart showing PEM + SOEC contributions."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    pem_production = data['pem'].get('h2_production_kg_h', [])
-    soec_production = data['soec'].get('h2_production_kg_h', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    pem_production = utils.downsample_list(data['pem'].get('h2_production_kg_h', []))
+    soec_production = utils.downsample_list(data['soec'].get('h2_production_kg_h', []))
     
     fig = go.Figure()
     
@@ -180,9 +184,9 @@ def plot_cumulative_production(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot cumulative H2 production from both systems."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    pem_cumulative = data['pem'].get('cumulative_h2_kg', [])
-    soec_cumulative = data['soec'].get('cumulative_h2_kg', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    pem_cumulative = utils.downsample_list(data['pem'].get('cumulative_h2_kg', []))
+    soec_cumulative = utils.downsample_list(data['soec'].get('cumulative_h2_kg', []))
     
     # Calculate total
     total_cumulative = [p + s for p, s in zip(pem_cumulative, soec_cumulative)]
@@ -229,8 +233,8 @@ def plot_pem_voltage_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot PEM cell voltage over time."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    voltage = data['pem'].get('voltage', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    voltage = utils.downsample_list(data['pem'].get('voltage', []))
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -264,8 +268,8 @@ def plot_pem_efficiency_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot PEM system efficiency over time."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    efficiency = data['pem'].get('efficiency', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    efficiency = utils.downsample_list(data['pem'].get('efficiency', []))
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -293,8 +297,8 @@ def plot_energy_price_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot energy price over time."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    price = data['pricing'].get('energy_price_eur_kwh', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    price = utils.downsample_list(data['pricing'].get('energy_price_eur_kwh', []))
     
     # Convert to €/MWh for better readability
     price_mwh = [p * 1000 for p in price]
@@ -326,13 +330,13 @@ def plot_dispatch_strategy(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot dispatch strategy as stacked area chart."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    pem_power = data['coordinator'].get('pem_setpoint_mw', [])
-    soec_power = data['coordinator'].get('soec_setpoint_mw', [])
-    sell_power = data['coordinator'].get('sell_power_mw', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    pem_power = utils.downsample_list(data['coordinator'].get('pem_setpoint_mw', []))
+    soec_power = utils.downsample_list(data['coordinator'].get('soec_setpoint_mw', []))
+    sell_power = utils.downsample_list(data['coordinator'].get('sell_power_mw', []))
     
     # Get auxiliary power (convert kW to MW for consistency)
-    aux_power_kw = data.get('auxiliary_power_kw', [])
+    aux_power_kw = utils.downsample_list(data.get('auxiliary_power_kw', []))
     aux_power_mw = [p / 1000.0 for p in aux_power_kw] if aux_power_kw else [0] * len(timestamps)
     
     fig = go.Figure()
@@ -435,8 +439,8 @@ def plot_soec_modules_timeline(data: Dict[str, Any], **kwargs) -> go.Figure:
     """Plot number of active SOEC modules over time."""
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    active_modules = data['soec'].get('active_modules', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    active_modules = utils.downsample_list(data['soec'].get('active_modules', []))
     
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -489,8 +493,8 @@ def plot_storage_fatigue_cycling_3d(data: Dict[str, Any], **kwargs) -> go.Figure
     """
     _check_dependencies()
     
-    timestamps = data.get('timestamps', [])
-    pressures = data['tanks'].get('hp_pressures', []) # 2D array [timestep][tank_id]
+    timestamps = utils.downsample_list(data.get('timestamps', []))
+    pressures = utils.downsample_list(data['tanks'].get('hp_pressures', [])) # 2D array [timestep][tank_id]
     
     if not pressures or not timestamps:
         return go.Figure()
@@ -530,7 +534,7 @@ def plot_ramp_rate_stress_distribution(data: Dict[str, Any], **kwargs) -> go.Fig
     """
     _check_dependencies()
     
-    soec_ramps = data['soec'].get('ramp_rates', [])
+    soec_ramps = utils.downsample_list(data['soec'].get('ramp_rates', []))
     
     fig = go.Figure()
     
@@ -564,12 +568,12 @@ def plot_wind_utilization_duration_curve(data: Dict[str, Any], **kwargs) -> go.F
     # Let's assume 20MW wind farm for this scale.
     WIND_CAPACITY_MW = 20.0 
     
-    wind_coeffs = np.array(data['pricing'].get('wind_coefficient', []))
+    wind_coeffs = np.array(utils.downsample_list(data['pricing'].get('wind_coefficient', [])))
     wind_available = wind_coeffs * WIND_CAPACITY_MW
     
     # Calculate used power (PEM + SOEC)
-    pem_power = np.array(data['pem'].get('power_mw', []))
-    soec_power = np.array(data['soec'].get('power_mw', []))
+    pem_power = np.array(utils.downsample_list(data['pem'].get('power_mw', [])))
+    soec_power = np.array(utils.downsample_list(data['soec'].get('power_mw', [])))
     total_used = pem_power + soec_power
     
     # Sort descending
@@ -600,10 +604,10 @@ def plot_grid_interaction_phase_portrait(data: Dict[str, Any], **kwargs) -> go.F
     _check_dependencies()
     
     WIND_CAPACITY_MW = 20.0
-    wind_coeffs = np.array(data['pricing'].get('wind_coefficient', []))
+    wind_coeffs = np.array(utils.downsample_list(data['pricing'].get('wind_coefficient', [])))
     wind_power = wind_coeffs * WIND_CAPACITY_MW
     
-    grid_exchange = np.array(data['pricing'].get('grid_exchange_mw', []))
+    grid_exchange = np.array(utils.downsample_list(data['pricing'].get('grid_exchange_mw', [])))
     
     # Use Density Heatmap to show operational regimes
     fig = go.Figure(go.Histogram2d(
@@ -668,10 +672,10 @@ def plot_pem_performance_surface(data: Dict[str, Any], **kwargs) -> go.Figure:
     # This requires reconstructing the surface from scattered points
     # For simplicity, we'll use a 3D Scatter plot which is easier with unstructured data
     
-    timestamps = data.get('timestamps', [])
+    timestamps = utils.downsample_list(data.get('timestamps', []))
     # voltage = data['pem'].get('voltage', []) # Old Z axis
-    power = data['pem'].get('power_mw', [])    # New Y axis
-    production = data['pem'].get('h2_production_kg_h', []) # New Z axis
+    power = utils.downsample_list(data['pem'].get('power_mw', []))    # New Y axis
+    production = utils.downsample_list(data['pem'].get('h2_production_kg_h', [])) # New Z axis
     
     use_webgl = kwargs.get('use_webgl', False)
     
@@ -698,4 +702,111 @@ def plot_pem_performance_surface(data: Dict[str, Any], **kwargs) -> go.Figure:
         ),
         template='plotly_white'
     )
+    return fig
+
+
+@log_graph_errors
+def plot_arbitrage_opportunity(df: pd.DataFrame, dpi: int = 100) -> go.Figure:
+    """
+    Plot Arbitrage Opportunity (Interactive).
+    
+    Visualizes the decision-making process for hydrogen production:
+    - Left Axis (Bar): Total H2 Production (kg/step)
+    - Right Axis (Line): Spot Price (€/MWh) vs PPA Price & Threshold
+    
+    This helps the user see WHY production stopped (was Spot > Threshold?)
+    """
+    _check_dependencies()
+    
+    # Downsample for performance if needed, but Plotly handles reasonable sizes well.
+    # We use the utility if available, or just take the DF if it's already manageable.
+    # The Executor passes a lightweight DF.
+    
+    # Extract Data
+    minutes = df['minute']
+    hours = minutes / 60.0
+    
+    spot_price = df.get('Spot', df.get('spot_price'))
+    
+    # H2 Production
+    h2_soec = df.get('H2_soec', df.get('H2_soec_kg', pd.Series(0, index=df.index)))
+    h2_pem = df.get('H2_pem', df.get('H2_pem_kg', pd.Series(0, index=df.index)))
+    h2_total = h2_soec + h2_pem
+    
+    # Reference metrics
+    ppa_price = df.attrs.get('config', {}).get('ppa_price_eur_mwh', None)
+    if ppa_price is None:
+        # Try to find it in columns if constant? Or defaults
+        ppa_price = 50.0 # Default fallback/reference
+        
+    threshold = df.get('spot_threshold_eur_mwh', pd.Series(np.nan, index=df.index))
+    
+    # Create Dual-Axis Figure
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    
+    # Trace 1: H2 Production (Left Axis, Area/Bar)
+    # Using simple line with fill for performance equivalent to "Area"
+    fig.add_trace(
+        go.Scatter(
+            x=hours, 
+            y=h2_total, 
+            name="Total H2 Production (kg)",
+            fill='tozeroy',
+            line=dict(color='rgba(46, 204, 113, 0.6)', width=1), # Green
+            hovertemplate="Time: %{x:.1f}h<br>H2: %{y:.2f} kg<extra></extra>"
+        ),
+        secondary_y=False
+    )
+    
+    # Trace 2: Spot Price (Right Axis, Line)
+    fig.add_trace(
+        go.Scatter(
+            x=hours, 
+            y=spot_price, 
+            name="Spot Price (€/MWh)",
+            line=dict(color='#3498DB', width=2), # Blue
+            hovertemplate="Price: %{y:.2f} €/MWh<extra></extra>"
+        ),
+        secondary_y=True
+    )
+    
+    # Trace 3: Threshold (Right Axis, Dashed Line)
+    # If threshold is constant or series
+    if isinstance(threshold, pd.Series) and threshold.mean() > 0:
+        fig.add_trace(
+            go.Scatter(
+                x=hours,
+                y=threshold,
+                name="Purchase Threshold",
+                line=dict(color='#E74C3C', width=2, dash='dash'), # Red Dashed
+                hovertemplate="Threshold: %{y:.2f} €/MWh<extra></extra>"
+            ),
+            secondary_y=True
+        )
+        
+    # Trace 4: PPA Price (Right Axis, Dotted Line)
+    # Plot as a horizontal line across the whole range
+    if ppa_price is not None:
+        fig.add_hline(
+            y=ppa_price, 
+            line_dash="dot", 
+            line_color="purple", 
+            annotation_text=f"PPA: {ppa_price} €",
+            annotation_position="bottom right",
+            secondary_y=True
+        )
+
+    # Layout
+    fig.update_layout(
+        title="Arbitrage Opportunity: H2 Production vs Market Price",
+        template="plotly_white",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    # Axis Labels
+    fig.update_yaxes(title_text="H2 Production (kg/step)", secondary_y=False)
+    fig.update_yaxes(title_text="Price (€/MWh)", secondary_y=True)
+    fig.update_xaxes(title_text="Simulation Time (Hours)")
+    
     return fig

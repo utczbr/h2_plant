@@ -181,6 +181,11 @@ class SOECOperator(Component):
         self._input_water_buffer_kg_h: List[float] = []
         self._last_step_time: float = 0.0
 
+    @property
+    def max_power_kw(self) -> float:
+        """Total system design capacity in kW."""
+        return self.num_modules * self.max_nominal_power * 1000.0
+
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the operator for simulation execution.

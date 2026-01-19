@@ -1,221 +1,167 @@
 """
-Rectifier/Transformer Component.
+Power Transformer / Rectifier Component.
 
-This module implements an AC/DC power conversion unit for electrolyzer systems.
-The rectifier transforms grid AC power to the regulated DC voltage required by
-electrolyzer stacks, accounting for conversion efficiency and power factor.
+This module implements a generic efficiency-based power conversion unit.
+It abstracts AC/DC conversion physics into a throughput-efficiency model
+suitable for techno-economic analysis and thermal load tracking.
 
-Power Electronics Model:
-    - **Efficiency Loss**: P_DC = P_AC × η, where η typically ranges 0.96-0.98
-      for modern thyristor or IGBT-based rectifiers.
-    - **Power Factor**: Represents the phase displacement between voltage and
-      current on the AC side. Values below 1.0 indicate reactive power draw.
-    - **Heat Generation**: Dissipated power (P_loss = P_AC - P_DC) manifests
-      as waste heat requiring cooling.
+Functionality:
+    - Scales input power by efficiency factor (P_out = P_in * eta).
+    - Calculates thermal losses for cooling system sizing (Q = P_in - P_out).
+    - Caps throughput at rated capacity.
 
-Architecture:
-    Implements the Component Lifecycle Contract (Layer 1):
-    - `initialize()`: Prepares component for simulation.
-    - `step()`: Applies efficiency to convert AC input to DC output.
-    - `get_state()`: Returns power flows, losses, and load factor.
-
-Process Flow Integration:
-    - RT-1: PEM electrolyzer rectifier
-    - RT-2: SOEC electrolyzer rectifier
+Process Integration:
+    - Upstream: Grid connection or Power Distribution Unit (PDU).
+    - Downstream: Electrolyzer stacks (SOEC/PEM), Compressors, or BOP.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from h2_plant.core.component import Component
 
 
-class Rectifier(Component):
+class PowerTransformer(Component):
     """
-    AC/DC rectifier for electrolyzer power conditioning.
+    Efficiency-based power transformer/rectifier.
 
-    Converts AC grid power to DC at controlled voltage for electrolyzer
-    stacks. Models efficiency losses and tracks load factor for operational
-    optimization.
-
-    This component fulfills the Component Lifecycle Contract (Layer 1):
-        - `initialize()`: Standard initialization, marks component ready.
-        - `step()`: Applies conversion efficiency, calculates DC output.
-        - `get_state()`: Returns AC input, DC output, losses, and load factor.
+    Represents the power conditioning stage (Transformer + Rectifier) for
+    major plant loads. It applies a fixed efficiency loss to the energy flow,
+    generating waste heat that must be managed by the cooling system.
 
     Attributes:
-        rated_power_mw (float): Maximum power rating (MW).
-        efficiency (float): Conversion efficiency (0-1).
-        power_factor (float): AC input power factor (0-1).
-        output_voltage_v (float): DC output voltage (V).
+        component_id (str): Unique identifier.
+        efficiency (float): Combined transformer/rectifier efficiency (0.0-1.0).
+        rated_power_mw (float): Maximum output power rating (MW).
+        system_group (str, optional): Tag for grouping (e.g., 'SOEC', 'PEM').
 
-    Example:
-        >>> rect = Rectifier(rated_power_mw=10.0, efficiency=0.97)
-        >>> rect.initialize(dt=1/60, registry=registry)
-        >>> rect.receive_input('ac_in', 5.0, 'electricity')
-        >>> rect.step(t=0.0)
-        >>> print(f"DC out: {rect.dc_output_power_mw:.2f} MW")
+    Ports:
+        - power_in (input): Electricity from grid/source.
+        - power_out (output): Conditioned power to load.
+        - heat_out (output): Waste heat requiring cooling.
     """
 
     def __init__(
         self,
-        component_id: str = "rectifier",
-        rated_power_mw: float = 10.0,
-        efficiency: float = 0.97,
-        power_factor: float = 0.95,
-        output_voltage_v: float = 1000.0
+        component_id: str = "transformer",
+        efficiency: float = 0.95,
+        rated_power_mw: float = 20.0,
+        system_group: Optional[str] = None
     ):
         """
-        Initialize the rectifier.
+        Initialize the power transformer.
 
         Args:
-            component_id (str): Unique identifier for this component.
-                Default: 'rectifier'.
-            rated_power_mw (float): Maximum DC output power rating in MW.
-                Default: 10.0.
-            efficiency (float): AC-to-DC conversion efficiency (0-1).
-                Typical values: 0.96-0.98 for modern rectifiers. Default: 0.97.
-            power_factor (float): Input power factor (0-1). Affects apparent
-                power draw from grid. Default: 0.95.
-            output_voltage_v (float): Regulated DC output voltage in V.
-                Stack-dependent; higher voltages reduce cable losses. Default: 1000.0.
+            component_id (str): Component ID.
+            efficiency (float): Energy conversion efficiency (0 < eta <= 1).
+                                Default 0.95 (includes trafo + rectifier losses).
+            rated_power_mw (float): Maximum permitted OUTPUT power (MW).
+            system_group (str, optional): Subsystem grouping tag (e.g., 'SOEC').
         """
         super().__init__()
         self.component_id = component_id
+        self.efficiency = max(0.01, min(1.0, efficiency))  # Clamp for safety
         self.rated_power_mw = rated_power_mw
-        self.efficiency = efficiency
-        self.power_factor = power_factor
-        self.output_voltage_v = output_voltage_v
+        self.system_group = system_group
 
-        # State variables
-        self.ac_input_power_mw: float = 0.0
-        self.dc_output_power_mw: float = 0.0
+        # Runtime State
+        self.power_in_mw: float = 0.0
+        self.power_out_mw: float = 0.0
         self.power_loss_mw: float = 0.0
         self.load_factor: float = 0.0
 
     def initialize(self, dt: float, registry: Any) -> None:
         """
-        Prepare the component for simulation execution.
-
-        Fulfills the Component Lifecycle Contract initialization phase.
+        Prepare component for simulation.
 
         Args:
-            dt (float): Simulation timestep in hours.
-            registry (ComponentRegistry): Central registry for component access.
+            dt (float): Timestep (h).
+            registry (ComponentRegistry): Component registry.
         """
         super().initialize(dt, registry)
         self.initialized = True
 
     def step(self, t: float) -> None:
         """
-        Execute one simulation timestep.
+        Execute conversion physics.
 
-        Converts AC input power to DC output, applying efficiency losses.
-        Output is capped at rated power regardless of input magnitude.
-
-        Args:
-            t (float): Current simulation time in hours.
+        Energy Balance: P_in = P_out + P_loss
+        - P_out = min(P_in * efficiency, rated_power)
+        - P_loss = P_in - P_out
         """
         super().step(t)
 
-        if self.ac_input_power_mw > 0:
-            # DC output is efficiency-limited and capacity-capped
-            self.dc_output_power_mw = min(
-                self.ac_input_power_mw * self.efficiency,
-                self.rated_power_mw
-            )
-            # Power dissipated as heat
-            self.power_loss_mw = self.ac_input_power_mw - self.dc_output_power_mw
-            # Load factor for equipment utilization tracking
-            self.load_factor = self.dc_output_power_mw / self.rated_power_mw
+        if self.power_in_mw > 0:
+            # Calculate theoretical output
+            potential_out = self.power_in_mw * self.efficiency
+
+            # Apply capacity constraint
+            self.power_out_mw = min(potential_out, self.rated_power_mw)
+
+            # Energy Balance: In = Out + Loss
+            self.power_loss_mw = self.power_in_mw - self.power_out_mw
+
+            self.load_factor = self.power_out_mw / self.rated_power_mw
         else:
-            self.dc_output_power_mw = 0.0
+            self.power_out_mw = 0.0
             self.power_loss_mw = 0.0
             self.load_factor = 0.0
 
-    def get_output(self, port_name: str) -> Any:
+    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """
-        Retrieve output from a specified port.
+        Receive power from upstream (Grid/Dispatch).
 
         Args:
-            port_name (str): Port identifier ('dc_out', 'electricity_out', or 'heat_out').
+            port_name (str): 'power_in' or 'electricity_in'.
+            value (float): Power in MW.
 
         Returns:
-            float: DC power (MW) for power ports, or heat dissipation (kW) for heat port.
+            float: Accepted power (MW).
         """
-        if port_name == "dc_out" or port_name == "electricity_out":
-            return self.dc_output_power_mw
+        if port_name in ["power_in", "electricity_in"]:
+            if isinstance(value, (int, float)):
+                self.power_in_mw = float(value)
+                return self.power_in_mw
+        return 0.0
+
+    def get_output(self, port_name: str) -> Any:
+        """
+        Provide power or heat to downstream components.
+
+        Args:
+            port_name (str): 'power_out', 'dc_out' or 'heat_out'.
+
+        Returns:
+            float: Power (MW) or Heat (kW).
+        """
+        if port_name in ["power_out", "dc_out", "electricity_out"]:
+            return self.power_out_mw
         elif port_name == "heat_out":
+            # Convert MW to kW for thermal consistency with other components
             return self.power_loss_mw * 1000.0
         return 0.0
 
-    def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
-        """
-        Accept AC power input.
-
-        Input is capped to prevent exceeding rated power after efficiency losses.
-
-        Args:
-            port_name (str): Target port ('ac_in' or 'electricity_in').
-            value (Any): Power value in MW.
-            resource_type (str, optional): Resource classification hint.
-
-        Returns:
-            float: Power accepted (MW).
-        """
-        if port_name == "ac_in" or port_name == "electricity_in":
-            if isinstance(value, (int, float)):
-                # Cap input to not exceed rated output after efficiency
-                self.ac_input_power_mw = min(value, self.rated_power_mw / self.efficiency)
-                return self.ac_input_power_mw
-        return 0.0
-
-    def extract_output(self, port_name: str, amount: float, resource_type: str = None) -> None:
-        """
-        Acknowledge extraction of output (no-op for passive component).
-
-        Args:
-            port_name (str): Port from which output was extracted.
-            amount (float): Amount extracted.
-            resource_type (str, optional): Resource classification hint.
-        """
-        pass
-
     def get_ports(self) -> Dict[str, Dict[str, str]]:
-        """
-        Define the physical connection ports for this component.
-
-        Returns:
-            Dict[str, Dict[str, str]]: Port definitions including AC input,
-                DC output, and waste heat output.
-        """
+        """Define component interfaces."""
         return {
-            'ac_in': {'type': 'input', 'resource_type': 'electricity'},
-            'electricity_in': {'type': 'input', 'resource_type': 'electricity'},
-            'dc_out': {'type': 'output', 'resource_type': 'electricity'},
-            'electricity_out': {'type': 'output', 'resource_type': 'electricity'},
+            'power_in': {'type': 'input', 'resource_type': 'electricity'},
+            'power_out': {'type': 'output', 'resource_type': 'electricity'},
             'heat_out': {'type': 'output', 'resource_type': 'heat'}
         }
 
     def get_state(self) -> Dict[str, Any]:
-        """
-        Retrieve the component's current operational state.
-
-        Fulfills the Component Lifecycle Contract state access.
-
-        Returns:
-            Dict[str, Any]: State dictionary containing:
-                - ac_input_power_mw (float): AC power input (MW).
-                - dc_output_power_mw (float): DC power output (MW).
-                - power_loss_mw (float): Heat dissipation (MW).
-                - load_factor (float): Fraction of rated capacity (0-1).
-                - efficiency (float): Conversion efficiency.
-        """
+        """Return operational state snapshot."""
         return {
             **super().get_state(),
             'component_id': self.component_id,
-            'ac_input_power_mw': self.ac_input_power_mw,
-            'dc_output_power_mw': self.dc_output_power_mw,
+            'system_group': self.system_group,
+            'efficiency': self.efficiency,
+            'power_in_mw': self.power_in_mw,
+            'power_out_mw': self.power_out_mw,
             'power_loss_mw': self.power_loss_mw,
-            'load_factor': self.load_factor,
-            'efficiency': self.efficiency
+            'heat_loss_kw': self.power_loss_mw * 1000.0,
+            'load_factor': self.load_factor
         }
+
+
+# Backwards compatibility alias
+Rectifier = PowerTransformer

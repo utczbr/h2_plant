@@ -106,6 +106,18 @@ class PSA(Component):
         # H2 Recovery Tracking
         self._last_h2_in_kg_h: float = 0.0
 
+        # Bed Geometry (Defaults from legacy model)
+        self.bed_diameter_m = kwargs.get('bed_diameter_m', 0.35)
+        self.bed_length_m = kwargs.get('bed_length_m', 1.0)
+
+    @property
+    def volume_m3(self) -> float:
+        """Total volume of all beds (used for CAPEX sizing)."""
+        # V = N_beds * (pi * r^2 * L)
+        radius = self.bed_diameter_m / 2.0
+        bed_vol = 3.14159 * (radius ** 2) * self.bed_length_m
+        return self.num_beds * bed_vol
+
     @property
     def power_kw(self) -> float:
         """Expose power consumption in kW for dispatch tracking."""
@@ -244,9 +256,9 @@ class PSA(Component):
         if flow_m3_s <= 0:
             return 0.0
             
-        # Bed geometry (Assumed typical values matching legacy model)
-        D_bed = 0.35  # m
-        L_bed = 1.0   # m
+        # Bed geometry
+        D_bed = self.bed_diameter_m
+        L_bed = self.bed_length_m
         epsilon = 0.40 # Void fraction
         dp = 0.003     # Particle diameter (m)
         

@@ -105,7 +105,7 @@ try:
     # Thermal & Separation
     plot_water_removal = _wrap_legacy(sg.create_water_removal_total_figure, "Water Removal")
     plot_drains_discarded = _wrap_legacy(sg.create_drains_discarded_figure, "Drains Discarded")
-    plot_chiller = _wrap_legacy(sg.create_chiller_cooling_figure, "Chiller Cooling")
+    plot_chiller = _wrap_legacy(sg.create_chiller_cooling_load_figure, "Chiller Cooling")
     plot_coalescer = _wrap_legacy(sg.create_coalescer_separation_figure, "Coalescer")
     plot_kod = _wrap_legacy(sg.create_kod_separation_figure, "Knock-Out Drum")
     plot_dry_cooler = _wrap_legacy(sg.create_dry_cooler_figure, "Dry Cooler")

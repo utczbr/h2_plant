@@ -2714,32 +2714,42 @@ def create_plant_balance_schematic(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     ax.set_ylim(0, 100)
     ax.axis('off')
     
+    # PERFORMANCE FIX: The simulation history DataFrame may contain large matrices in df.attrs.
+    # Accessing columns (df[c]) triggers __finalize__ which deepcopies these attributes,
+    # causing timeouts when iterating over many columns.
+    # We create a shallow copy and clear attributes to prevent this overhead.
+    df = df.copy(deep=False)
+    df.attrs = {}
+    
     dt_hours = 1.0 / 60.0  # Minutes to hours
     
     # --- Aggregate Metrics ---
+    # PERFORMANCE FIX: Access numpy arrays directly via df[col].to_numpy() to avoid
+    # pandas deepcopy of DataFrame.attrs (which contains large matrices from simulation)
+    
     # H2 Product (sum of all H2 production columns)
     h2_cols = [c for c in df.columns if 'h2_production_kg' in c.lower() or 'h2_soec' in c.lower() or 'h2_pem' in c.lower()]
-    h2_total = sum(df[c].sum() for c in h2_cols) if h2_cols else 0.0
+    h2_total = sum(df[c].to_numpy().sum() for c in h2_cols) if h2_cols else 0.0
     
     # O2 Product (from external O2 sources or O2 stream finals)
     o2_cols = [c for c in df.columns if 'o2_production' in c.lower() or 'outlet_mass' in c.lower() and 'o2' in c.lower()]
-    o2_total = sum(df[c].sum() * dt_hours for c in o2_cols) if o2_cols else 0.0
+    o2_total = sum(df[c].to_numpy().sum() * dt_hours for c in o2_cols) if o2_cols else 0.0
     
     # Electric Power (SOEC + PEM consumption)
     power_cols = [c for c in df.columns if 'p_soec' in c.lower() or 'p_pem' in c.lower()]
-    power_total = sum(df[c].sum() * dt_hours / 60.0 for c in power_cols) if power_cols else 0.0  # MWh
+    power_total = sum(df[c].to_numpy().sum() * dt_hours / 60.0 for c in power_cols) if power_cols else 0.0  # MWh
     
     # Heat Rejected
     heat_cols = [c for c in df.columns if 'cooling_load_kw' in c.lower() or 'heat_removed_kw' in c.lower()]
-    heat_total = sum(df[c].sum() * dt_hours for c in heat_cols) if heat_cols else 0.0  # kWh
+    heat_total = sum(df[c].to_numpy().sum() * dt_hours for c in heat_cols) if heat_cols else 0.0  # kWh
     
     # Water Makeup (from water source or tank inlet)
     water_in_cols = [c for c in df.columns if 'makeup' in c.lower() or 'water_source' in c.lower()]
-    water_makeup = sum(df[c].sum() * dt_hours for c in water_in_cols) if water_in_cols else 0.0
+    water_makeup = sum(df[c].to_numpy().sum() * dt_hours for c in water_in_cols) if water_in_cols else 0.0
     
     # Water Removed (condensed)
     water_out_cols = [c for c in df.columns if 'water_removed' in c.lower() or 'water_condensed' in c.lower()]
-    water_removed = sum(df[c].sum() * dt_hours for c in water_out_cols) if water_out_cols else 0.0
+    water_removed = sum(df[c].to_numpy().sum() * dt_hours for c in water_out_cols) if water_out_cols else 0.0
     
     # --- Draw Control Volume ---
     cv_rect = mpatches.FancyBboxPatch((15, 25), 70, 55, boxstyle='round,pad=0.02',
@@ -3771,49 +3781,67 @@ def create_entrained_liquid_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fig
     return fig
 
 @log_graph_errors
-def create_chiller_cooling_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+def create_chiller_cooling_load_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """
-    Chiller cooling load and electrical consumption over time.
-    
-    Displays cooling load (kW) and electrical power for all chillers found in history.
+    Chiller cooling load over time (kW).
     """
-    fig = Figure(figsize=(12, 8), dpi=dpi, constrained_layout=True)
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
     
     # Find chiller data columns
     cooling_data = _find_component_columns(df, 'Chiller', 'cooling_load_kw')
-    elec_data = _find_component_columns(df, 'Chiller', 'electrical_power_kw')
+    
+    ax = fig.add_subplot(111)
     
     if not cooling_data:
-        ax = fig.add_subplot(111)
         ax.text(0.5, 0.5, 'No chiller data in history.\nEnsure Chiller components expose get_state() metrics.', 
                 ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
         ax.set_title('Chiller Cooling Load')
         return fig
     
-    # Create 2-panel plot
-    ax1 = fig.add_subplot(211)
-    ax2 = fig.add_subplot(212, sharex=ax1)
+    x = df['minute'] if 'minute' in df.columns else df.index
+    
+    # Cooling Load
+    for comp_id, data in cooling_data.items():
+        ax.plot(downsample_for_plot(x), downsample_for_plot(data), 
+                 label=comp_id, linewidth=1.5)
+    ax.set_ylabel('Cooling Load (kW)')
+    ax.set_xlabel('Time (Minutes)')
+    ax.set_title('Chiller Cooling Load Over Time')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, linestyle='--', alpha=0.5)
+    
+    return fig
+
+
+@log_graph_errors
+def create_chiller_power_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
+    """
+    Chiller electrical consumption over time (kW).
+    """
+    fig = Figure(figsize=(12, 6), dpi=dpi, constrained_layout=True)
+    
+    # Find chiller data columns
+    elec_data = _find_component_columns(df, 'Chiller', 'electrical_power_kw')
+    
+    ax = fig.add_subplot(111)
+    
+    if not elec_data:
+        ax.text(0.5, 0.5, 'No chiller power data in history.', 
+                ha='center', va='center', transform=ax.transAxes, fontsize=12, color='gray')
+        ax.set_title('Chiller Electrical Consumption')
+        return fig
     
     x = df['minute'] if 'minute' in df.columns else df.index
     
-    # Panel 1: Cooling Load
-    for comp_id, data in cooling_data.items():
-        ax1.plot(downsample_for_plot(x), downsample_for_plot(data), 
-                 label=comp_id, linewidth=1.5)
-    ax1.set_ylabel('Cooling Load (kW)')
-    ax1.set_title('Chiller Cooling Load Over Time')
-    ax1.legend(loc='upper right', fontsize=8)
-    ax1.grid(True, linestyle='--', alpha=0.5)
-    
-    # Panel 2: Electrical Power
+    # Electrical Power
     for comp_id, data in elec_data.items():
-        ax2.plot(downsample_for_plot(x), downsample_for_plot(data), 
+        ax.plot(downsample_for_plot(x), downsample_for_plot(data), 
                  label=comp_id, linestyle='--', linewidth=1.5)
-    ax2.set_ylabel('Electrical Power (kW)')
-    ax2.set_xlabel('Time (Minutes)')
-    ax2.set_title('Chiller Electrical Consumption (COP-based)')
-    ax2.legend(loc='upper right', fontsize=8)
-    ax2.grid(True, linestyle='--', alpha=0.5)
+    ax.set_ylabel('Electrical Power (kW)')
+    ax.set_xlabel('Time (Minutes)')
+    ax.set_title('Chiller Electrical Consumption (COP-based)')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, linestyle='--', alpha=0.5)
     
     return fig
 
@@ -4700,8 +4728,16 @@ def create_storage_inventory_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Fi
         total_inventory += df[col]
     
     # Estimate capacity
-    # Try to get from config first
-    capacity_kg = get_config(df, 'storage_capacity_kg')
+    # Priority: 1) history column, 2) config, 3) heuristic
+    capacity_kg = None
+    
+    # Try to get from history column first (recorded from topology)
+    if 'storage_capacity_kg' in df.columns:
+        capacity_kg = df['storage_capacity_kg'].iloc[0]
+    
+    # Fallback to config
+    if capacity_kg is None:
+        capacity_kg = get_config(df, 'storage_capacity_kg')
     
     if capacity_kg is None:
         # Heuristic: Use max observed * 1.1 or a reasonable default

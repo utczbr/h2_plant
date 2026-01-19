@@ -18,6 +18,10 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
     
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    x = utils.get_time_axis_hours(df_ds)
+    has_data = False
+    
     # Map friendly variable names to dataframe columns
     col_map = {
         'h2_production': ['h2_production_kg_h', 'H2_kg', 'H2_soec_kg', 'H2_pem_kg'],
@@ -25,9 +29,6 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
         'water_consumption': ['water_consumption_kg_h', 'H2O_in_kg', 'steam_soec_kg']
     }
     candidates = col_map.get(variable, [])
-
-    x = utils.get_time_axis_hours(df)
-    has_data = False
 
     for comp_id in component_ids:
         col_name = None
@@ -46,8 +47,8 @@ def plot_time_series(df: pd.DataFrame, component_ids: list, title: str, config: 
             if col_name:
                 break
         
-        if col_name and col_name in df.columns:
-            ax.plot(x, df[col_name], label=comp_id, linewidth=1.5)
+        if col_name and col_name in df_ds.columns:
+            ax.plot(x, df_ds[col_name], label=comp_id, linewidth=1.5)
             has_data = True
 
     if not has_data:
@@ -110,21 +111,49 @@ def plot_cumulative(df: pd.DataFrame, component_ids: list, title: str, config: d
     """Plots cumulative production."""
     fig = Figure(figsize=(12, 6), constrained_layout=True)
     ax = fig.add_subplot(111)
-    x = df['minute'] / 60.0 if 'minute' in df.columns else df.index
     
-    if 'cumulative_h2_kg' in df.columns:
-        ax.plot(x, df['cumulative_h2_kg'], label='Total System', color='black', linewidth=2)
-        ax.fill_between(x, 0, df['cumulative_h2_kg'], alpha=0.1)
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    x = df_ds['minute'] / 60.0 if 'minute' in df_ds.columns else df_ds.index
+    
+    if 'cumulative_h2_kg' in df_ds.columns:
+        ax.plot(x, df_ds['cumulative_h2_kg'], label='Total System', color='black', linewidth=2)
+        ax.fill_between(x, 0, df_ds['cumulative_h2_kg'], alpha=0.1)
     else:
-        # Calculate cumulative from individual components
-        total = np.zeros(len(df))
+        # Calculate cumulative from individual components (using original df for accuracy, then downsample)
+        # Note: Summing cumulative series from components is tricky if they have different lengths or NaNs.
+        # But here they should be aligned.
+        
+        total_full = np.zeros(len(df))
+        has_cum_data = False
+        
         for comp_id in component_ids:
             if "PEM" in comp_id and 'H2_pem_kg' in df.columns:
-                total = total + df['H2_pem_kg'].cumsum().values
+                total_full = total_full + df['H2_pem_kg'].cumsum().values
+                has_cum_data = True
             elif "SOEC" in comp_id and 'H2_soec_kg' in df.columns:
-                total = total + df['H2_soec_kg'].cumsum().values
-        ax.plot(x, total, label='Calculated Total')
-        ax.fill_between(x, 0, total, alpha=0.1)
+                total_full = total_full + df['H2_soec_kg'].cumsum().values
+                has_cum_data = True
+        
+        if has_cum_data:
+            # Downsample the calculated total
+            total_ds = utils.downsample_dataframe(pd.DataFrame({'total': total_full}), max_points=2000)['total']
+            
+            # Ensure x aligns with total_ds
+            if len(x) == len(total_ds):
+                ax.plot(x, total_ds, label='Calculated Total')
+                ax.fill_between(x, 0, total_ds, alpha=0.1)
+            else:
+                # Re-calculate x for the downsampled series if indices mismatch (e.g. diff sampling)
+                # Fallback: re-downsample x specifically
+                x_ds_fallback = utils.downsample_dataframe(pd.DataFrame({'x': df.index}), max_points=2000)['x']
+                # If 'minute' exists
+                if 'minute' in df.columns:
+                     min_ds = utils.downsample_dataframe(pd.DataFrame({'minute': df['minute']}), max_points=2000)['minute']
+                     x_ds_fallback = min_ds / 60.0
+                
+                if len(x_ds_fallback) == len(total_ds):
+                    ax.plot(x_ds_fallback, total_ds, label='Calculated Total')
+                    ax.fill_between(x_ds_fallback, 0, total_ds, alpha=0.1)
 
     ax.set_title(title, fontsize=14, fontweight='bold')
     ax.set_xlabel("Time (hours)")

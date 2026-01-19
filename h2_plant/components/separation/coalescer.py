@@ -84,6 +84,7 @@ class Coalescer(Component):
         d_shell: float = CoalescerConstants.D_SHELL_DEFAULT_M,
         l_elem: float = CoalescerConstants.L_ELEM_DEFAULT_M,
         gas_type: str = 'H2',
+        volume_m3: Optional[float] = None,
         **kwargs
     ):
         """
@@ -96,6 +97,8 @@ class Coalescer(Component):
                 provide higher efficiency but greater ΔP. Default: from constants.
             gas_type (str): Primary gas type ('H2' or 'O2'). Currently uses
                 H₂ viscosity for both (conservative). Default: 'H2'.
+            volume_m3 (float, optional): Explicit vessel volume in m³ for CAPEX.
+                If None, calculated from d_shell and l_elem.
             **kwargs: Additional arguments including 'component_id'.
 
         Raises:
@@ -105,6 +108,8 @@ class Coalescer(Component):
         self.d_shell = d_shell
         self.l_elem = l_elem
         self.gas_type = gas_type
+        self._volume_m3 = volume_m3 # Store explicit volume
+
         if 'component_id' in kwargs:
             self.component_id = kwargs['component_id']
         
@@ -120,6 +125,53 @@ class Coalescer(Component):
 
         # Pre-calculate geometric constant
         self.area_shell = (math.pi / 4) * (self.d_shell ** 2)
+
+        # Molar mass of primary gas (kg/mol) for rho_mix calculation
+        if gas_type == 'H2':
+            self.M_gas = CoalescerConstants.M_H2
+        elif gas_type == 'O2':
+            self.M_gas = CoalescerConstants.M_O2
+        else:
+            self.M_gas = CoalescerConstants.M_H2  # Default to H2
+
+        # State variables
+        self.pressure_drop_bar = 0.0
+        self.total_liquid_removed_kg: float = 0.0
+        self.total_drain_removed_kg: float = 0.0  # Cumulative drain (liquid + dissolved gas)
+        self.current_delta_p_bar: float = 0.0
+        self.current_power_loss_w: float = 0.0
+        self.output_stream: Optional[Stream] = None
+        self.drain_stream: Optional[Stream] = None
+        self._step_liq_removed: float = 0.0
+        self._step_gas_dissolved: float = 0.0
+        
+        # Mass Balance Tracking (Input vs Output)
+        self._last_dissolved_gas_in_kg_h: float = 0.0
+        self._last_dissolved_gas_out_kg_h: float = 0.0
+
+        # EXPOSED FOR HISTORY RECORDING (engine_dispatch.py)
+        self.drain_flow_kg_h: float = 0.0
+        self.delta_p_bar: float = 0.0
+
+    @property
+    def volume_m3(self) -> float:
+        """
+        Vessel internal volume in m³ for CAPEX sizing.
+        
+        Returns:
+            float: Explicit volume if set, otherwise calculated from shell dimensions.
+        """
+        if self._volume_m3 is not None:
+            return self._volume_m3
+        
+        # Calculate cylindrical volume from dimensions
+        # V = Area_shell * Length
+        return self.area_shell * self.l_elem
+
+    @volume_m3.setter
+    def volume_m3(self, value: float):
+        self._volume_m3 = value
+
 
         # Molar mass of primary gas (kg/mol) for rho_mix calculation
         if gas_type == 'H2':

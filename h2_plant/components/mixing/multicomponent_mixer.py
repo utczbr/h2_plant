@@ -150,6 +150,13 @@ class MultiComponentMixer(Component):
 
         self._lut_manager: Optional[LUTManager] = None
 
+    @property
+    def max_flow_kg_h(self) -> float:
+        """Design flow capacity for CAPEX sizing. Returns outlet flow rate."""
+        if self.outlet_stream:
+            return self.outlet_stream.mass_flow_kg_h
+        return 0.0
+
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """
         Prepare the mixer for simulation execution.

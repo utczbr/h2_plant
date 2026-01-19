@@ -175,6 +175,23 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._pem = self._find_pem(registry)
         self._atr = self._find_atr(registry)
         
+        # Lookup Power Transformers for efficiency gross-up
+        self._soec_trafo = registry.get('SOEC_Transformer')
+        self._pem_trafo = registry.get('PEM_Transformer')
+        self._bop_trafo = registry.get('BOP_Transformer')
+        
+        # Cache transformer efficiencies (default 1.0 if no transformer)
+        self._η_soec_trafo = self._soec_trafo.efficiency if self._soec_trafo else 1.0
+        self._η_pem_trafo = self._pem_trafo.efficiency if self._pem_trafo else 1.0
+        self._η_bop_trafo = self._bop_trafo.efficiency if self._bop_trafo else 1.0
+        
+        if self._soec_trafo:
+            logger.info(f"SOEC Transformer found: η={self._η_soec_trafo:.3f}")
+        if self._pem_trafo:
+            logger.info(f"PEM Transformer found: η={self._η_pem_trafo:.3f}")
+        if self._bop_trafo:
+            logger.info(f"BOP Transformer found: η={self._η_bop_trafo:.3f}")
+        
         # Strategy selection: CLI/config override > topology auto-detection
         if self._strategy_override:
             strategy_name = self._strategy_override.upper()
@@ -317,6 +334,10 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
 
         # 3. Storage Controller Setup (APC)
         self._setup_storage_controller(registry)
+        
+        # Record storage capacity to history for visualization (constant value)
+        if self._storage_total_capacity_kg > 0:
+            self._history['storage_capacity_kg'] = np.full(total_steps, self._storage_total_capacity_kg, dtype=np.float64)
 
         self._state = IntegratedDispatchState()
         logger.info(f"Initialized HybridArbitrageEngineStrategy with {total_steps} steps and Storage APC")
@@ -529,13 +550,21 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         soc = current_mass / self._storage_total_capacity_kg
         return min(max(soc, 0.0), 1.0), current_mass
 
-    def _determine_zone(self, soc: float) -> int:
+    def _determine_zone(self, soc: float, dsoc_dt: float = 0.0) -> int:
         """
         Determine control zone with hysteresis (Schmitt Trigger).
         Zones: 0 (Normal), 1 (Attention), 2 (Alert), 3 (Critical)
+        
+        IMPORTANT: When dsoc_dt < 0 (tank is draining because demand > production),
+        the APC stays in Normal zone to avoid reducing production when it's needed.
         """
         p = self._ctrl_params
         current_zone = self._ctrl_state['current_zone']
+        
+        # CRITICAL FIX: If tank is draining (demand > production), stay in Normal zone
+        # This prevents production reduction when the system is supply-limited
+        if dsoc_dt < -0.001:  # Tank is draining at > 0.1%/hour
+            return 0  # Normal zone - no production reduction
         
         # Thresholds
         z1_thresh = p['SOC_LOW']
@@ -680,13 +709,15 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         dsoc_dt = (soc - prev_soc) / dt if dt > 0 else 0.0
         
         # C. Calculate Time to Full (hours)
+        # Only meaningful when tank is actually filling (dsoc_dt > 0)
         if dsoc_dt > 0.001:
             self._ctrl_state['time_to_full_h'] = (1.0 - soc) / dsoc_dt
         else:
-            self._ctrl_state['time_to_full_h'] = 99.0
+            # Tank is draining or stable - no overflow risk
+            self._ctrl_state['time_to_full_h'] = 999.0
 
-        # D. Determine Zone and Action
-        zone = self._determine_zone(soc)
+        # D. Determine Zone and Action (pass dsoc_dt to handle draining case)
+        zone = self._determine_zone(soc, dsoc_dt)
         self._ctrl_state['current_zone'] = zone
         self._ctrl_state['prev_soc'] = soc
         
@@ -706,12 +737,28 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
 
         # =====================================================================
         # APPLY FINAL SETPOINTS (After APC modulation)
+        # Gross-up power to account for transformer losses: P_grid = P_stack / η
         # =====================================================================
 
         if self._soec:
+            # Calculate grid draw accounting for transformer losses
+            P_soec_grid = P_soec_final / self._η_soec_trafo if self._η_soec_trafo > 0 else P_soec_final
+            
+            # Send power to transformer (or directly to SOEC if no transformer)
+            if self._soec_trafo:
+                self._soec_trafo.receive_input('power_in', P_soec_grid, 'electricity')
+                # SOEC receives P_soec_final after transformer step (η * P_grid)
+            
+            # Still send power command to SOEC for compatibility
             self._soec.receive_input('power_in', P_soec_final, 'electricity')
 
         if self._pem:
+            # Calculate grid draw accounting for transformer losses
+            P_pem_grid = P_pem_final / self._η_pem_trafo if self._η_pem_trafo > 0 else P_pem_final
+            
+            if self._pem_trafo:
+                self._pem_trafo.receive_input('power_in', P_pem_grid, 'electricity')
+            
             # NOTE: Water supply is handled by the topology (PEM_Water_Pump).
             # DO NOT add hardcoded water here - it causes double delivery!
             self._pem.set_power_input_mw(P_pem_final)

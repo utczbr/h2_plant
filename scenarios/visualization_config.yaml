@@ -21,6 +21,11 @@ visualization:
   # Set to true once you've verified all graphs work via orchestrated_graphs
   skip_legacy_graphs: false
 
+  # Explicitly enable/disable specific graphs by ID
+  graphs:
+    arbitrage_opportunity_interactive: false  # Disable the new interactive graph
+    pem_h2_production_over_time: false        # Ensure other Plotly graphs are off
+
   # ========================================================================
   # PLANT METADATA (Used for Graph Calculations)
   # ========================================================================

@@ -103,6 +103,7 @@ class ExternalWaterSource(Component):
         self.pressure_bar = float(pressure_bar)
         self.cost_per_m3 = float(cost_per_m3)
         self.temperature_c = float(temperature_c)
+        self.max_flow_kg_h = self.flow_rate_kg_h  # Alias for standard interface
 
         # Signal buffer (for external_control mode)
         self._signal_request_kg_h: Optional[float] = None
@@ -232,9 +233,8 @@ class ExternalWaterSource(Component):
         """
         if port_name == 'water_out':
             return self._output_stream
-        else:
-            logger.warning(f"ExternalWaterSource: Unknown output port '{port_name}'")
-            return None
+        return None
+
 
     def extract_output(self, port_name: str, amount: float, resource_type: str) -> None:
         """

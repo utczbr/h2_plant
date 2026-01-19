@@ -7,6 +7,8 @@ import numpy as np
 from matplotlib.figure import Figure
 import logging
 
+from h2_plant.visualization import utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,10 +16,12 @@ def plot_active_modules(df: pd.DataFrame, component_ids: list, title: str, confi
     """Plots number of active SOEC modules over time."""
     fig = Figure(figsize=(12, 5), constrained_layout=True)
     ax = fig.add_subplot(111)
-    x = df['minute'] / 60.0 if 'minute' in df.columns else df.index
     
-    if 'soec_active_modules' in df.columns:
-        ax.step(x, df['soec_active_modules'], where='post', color='tab:orange', linewidth=1.5)
+    df_ds = utils.downsample_dataframe(df, max_points=2000)
+    x = df_ds['minute'] / 60.0 if 'minute' in df_ds.columns else df_ds.index
+    
+    if 'soec_active_modules' in df_ds.columns:
+        ax.step(x, df_ds['soec_active_modules'], where='post', color='tab:orange', linewidth=1.5)
         ax.set_ylabel("Active Modules")
         ax.set_ylim(bottom=0)
     else:

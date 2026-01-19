@@ -102,6 +102,11 @@ class ElectricBoiler(Component):
         """Expose power consumption in kW for dispatch tracking."""
         return self.current_power_w / 1000.0
 
+    @property
+    def max_power_kw(self) -> float:
+        """Expose maximum rated power in kW for CAPEX sizing."""
+        return self.max_power_w / 1000.0
+
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """
         Executes the initialization phase of the Component Lifecycle Contract.

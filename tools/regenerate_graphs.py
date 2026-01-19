@@ -54,49 +54,6 @@ def time_limit(seconds: int, graph_name: str):
         signal.signal(signal.SIGALRM, old_handler)
 
 
-def load_history_from_chunks(output_dir: Path) -> dict:
-    """Load history from parquet chunks (memory efficient)."""
-    chunks_dir = output_dir / "history_chunks"
-    
-    if not chunks_dir.exists():
-        return None
-    
-    chunk_files = sorted(chunks_dir.glob("chunk_*.parquet"))
-    if not chunk_files:
-        return None
-    
-    print(f"Loading from {len(chunk_files)} parquet chunks...")
-    dfs = []
-    for i, chunk_file in enumerate(chunk_files):
-        try:
-            df = pd.read_parquet(chunk_file)
-            dfs.append(df)
-            if (i + 1) % 10 == 0:
-                print(f"  Loaded {i + 1}/{len(chunk_files)} chunks...")
-        except Exception as e:
-            print(f"  Warning: Failed to load {chunk_file.name}: {e}")
-    
-    if not dfs:
-        return None
-    
-    result_df = pd.concat(dfs, ignore_index=True)
-    del dfs
-    gc.collect()
-    
-    print(f"  Total: {len(result_df)} rows, {len(result_df.columns)} columns")
-    return {col: result_df[col].values for col in result_df.columns}
-
-
-def load_history_from_csv(csv_path: Path) -> dict:
-    """Load history from CSV file."""
-    print(f"Loading from CSV: {csv_path.name}...")
-    size_gb = csv_path.stat().st_size / (1024**3)
-    print(f"  File size: {size_gb:.2f} GB")
-    
-    df = pd.read_csv(csv_path)
-    print(f"  Loaded {len(df)} rows, {len(df.columns)} columns")
-    return {col: df[col].values for col in df.columns}
-
 
 def regenerate_graphs_with_timeout(output_dir: Path, timeout_seconds: int = 60):
     """

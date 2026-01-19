@@ -94,7 +94,8 @@ class Chiller(Component):
         cop: float = 4.0,
         pressure_drop_bar: float = 0.2,
         enable_dynamics: bool = False,
-        use_central_utility: bool = True
+        use_central_utility: bool = True,
+        area_m2: Optional[float] = None
     ):
         """
         Initialize the chiller.
@@ -110,6 +111,7 @@ class Chiller(Component):
                 Default: 0.2.
             enable_dynamics (bool): Enable pump and thermal inertia dynamics.
                 Disable for steady-state reference matching. Default: False.
+            area_m2 (float, optional): Explicit heat transfer area in m².
         """
         super().__init__()
         self.component_id = component_id
@@ -120,6 +122,8 @@ class Chiller(Component):
         self.pressure_drop_bar = pressure_drop_bar
         self.enable_dynamics = enable_dynamics
         self.use_central_utility = use_central_utility
+        self._area_m2 = area_m2 # Store explicit area or None
+        
         self.cooling_manager = None  # Set during initialize()
         self.cop_nominal = cop  # Store nominal COP for correction
 
@@ -601,6 +605,38 @@ class Chiller(Component):
                 heat_generated_W=Q_absorbed_W,
                 T_control_K=self.target_temp_k
             )
+
+    @property
+    def area_m2(self) -> float:
+        """
+        Heat transfer area in m² for CAPEX sizing.
+        
+        Returns:
+            float: Explicit area if provided, otherwise estimated from capacity
+                   using user-defined heuristic for Gas/Liquid cooling.
+                   
+                   Formula: A = Q / (U * LMTD)
+                   - Q = Cooling Capacity (W)
+                   - U = 150 W/m²K (Conservative for Gas Cooling)
+                   - LMTD = 15 K (Typical chiller approach)
+        """
+        if self._area_m2 is not None:
+             return self._area_m2
+             
+        # User Heuristic:
+        # A = (Power_kW * 1000) / (U_approx * LMTD_approx)
+        U_approx = 150.0   # W/m²K
+        LMTD_approx = 25.0 # K (User specified ~24-26 C delta)
+        
+        if U_approx * LMTD_approx == 0:
+            return 0.0
+        
+        # Use DESIGN capacity for CAPEX sizing, not current load
+        return (self.cooling_capacity_kw * 1000.0) / (U_approx * LMTD_approx)
+
+    @area_m2.setter
+    def area_m2(self, value: float):
+        self._area_m2 = value
 
     def get_output(self, port_name: str) -> Any:
         """

@@ -185,6 +185,33 @@ def calculate_stride(n_points: int, max_points: int = 2000) -> int:
     return max(1, n_points // max_points)
 
 
+def downsample_list(data: Union[List[Any], np.ndarray], max_points: int = 2000) -> List[Any]:
+    """
+    Downsample a list or numpy array for generic usage (e.g. JSON export).
+    
+    Args:
+        data: Input list or array.
+        max_points: Maximum number of points to return.
+        
+    Returns:
+        Downsampled list.
+    """
+    if data is None:
+        return []
+        
+    n = len(data)
+    if n <= max_points:
+        return list(data) if isinstance(data, (np.ndarray, pd.Series)) else data
+        
+    stride = max(1, n // max_points)
+    
+    # Handle list vs numpy/pandas
+    if isinstance(data, (np.ndarray, pd.Series)):
+        return data[::stride].tolist()
+    else:
+        return data[::stride]
+
+
 # ==============================================================================
 # UNIT CONVERSION
 # ==============================================================================

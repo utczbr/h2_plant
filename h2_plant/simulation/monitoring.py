@@ -26,6 +26,7 @@ import numpy as np
 
 from h2_plant.core.component_registry import ComponentRegistry
 from h2_plant.simulation.flow_tracker import FlowTracker
+from h2_plant.visualization import utils
 
 logger = logging.getLogger(__name__)
 
@@ -84,16 +85,23 @@ class MonitoringSystem:
         >>> monitoring.export_dashboard_data()
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, lightweight_mode: bool = False):
         """
         Initialize the monitoring system.
 
         Args:
             output_dir (Path): Base directory for output files.
+            lightweight_mode (bool): If True, skip per-component metrics collection
+                to reduce memory usage for long simulations. Default: False.
         """
         self.output_dir = output_dir
         self.metrics_dir = output_dir / "metrics"
         self.metrics_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Memory optimization flag
+        self._lightweight_mode = lightweight_mode
+        if lightweight_mode:
+            logger.info("MonitoringSystem: Lightweight mode enabled (skipping component_metrics)")
 
         self.flow_tracker = FlowTracker()
 
@@ -107,6 +115,7 @@ class MonitoringSystem:
             'total_compression_energy_kwh': []
         }
 
+        # Per-component metrics - disabled in lightweight mode to save memory
         self.component_metrics: Dict[str, Dict[str, List]] = {}
 
         self.total_production_kg = 0.0
@@ -209,6 +218,7 @@ class MonitoringSystem:
         self.timeseries['total_compression_energy_kwh'].append(self.total_compression_energy_kwh)
 
         # Record flows and component-specific metrics
+        # In lightweight mode, skip component_metrics to save memory
         for comp_id, state in states.items():
             if state is None:
                 continue
@@ -231,6 +241,10 @@ class MonitoringSystem:
                             unit=flow_data.get('unit', '')
                         )
 
+            # Skip per-component metrics in lightweight mode (major memory saver)
+            if self._lightweight_mode:
+                continue
+                
             if comp_id not in self.component_metrics:
                 self.component_metrics[comp_id] = {}
             for metric_name, metric_value in state.items():
@@ -271,34 +285,34 @@ class MonitoringSystem:
                 'timestep_hours': 1.0
             },
             'timeseries': {
-                'hour': self.timeseries['hour'],
+                'hour': utils.downsample_list(self.timeseries['hour']),
                 'production': {
-                    'electrolyzer_kg': (
+                    'electrolyzer_kg': utils.downsample_list(
                         self._extract_component_metric('electrolyzer', 'h2_output_kg') or
                         self._extract_component_metric('pem_electrolyzer_detailed', 'h2_output_kg')
                     ),
-                    'atr_kg': (
+                    'atr_kg': utils.downsample_list(
                         self._extract_component_metric('atr', 'h2_output_kg') or
                         self._extract_component_metric('atr_system', 'h2_output_kg')
                     ),
-                    'total_kg': self.timeseries['total_production_kg']
+                    'total_kg': utils.downsample_list(self.timeseries['total_production_kg'])
                 },
                 'storage': {
-                    'lp_level_kg': self._extract_component_metric('lp_tanks', 'total_mass_kg'),
-                    'hp_level_kg': self._extract_component_metric('hp_tanks', 'total_mass_kg')
+                    'lp_level_kg': utils.downsample_list(self._extract_component_metric('lp_tanks', 'total_mass_kg')),
+                    'hp_level_kg': utils.downsample_list(self._extract_component_metric('hp_tanks', 'total_mass_kg'))
                 },
                 'energy': {
-                    'electrolyzer_kwh': (
+                    'electrolyzer_kwh': utils.downsample_list(
                         self._extract_component_metric('electrolyzer', 'cumulative_energy_kwh') or
                         self._extract_component_metric('pem_electrolyzer_detailed', 'cumulative_energy_kwh')
                     ),
-                    'compression_kwh': self._extract_component_metric('filling_compressor', 'cumulative_energy_kwh'),
+                    'compression_kwh': utils.downsample_list(self._extract_component_metric('filling_compressor', 'cumulative_energy_kwh')),
                 },
                 'demand': {
-                    'requested_kg': self.timeseries['total_demand_kg'],
+                    'requested_kg': utils.downsample_list(self.timeseries['total_demand_kg']),
                 },
                 'price': {
-                    'per_mwh': self.timeseries['energy_price_mwh']
+                    'per_mwh': utils.downsample_list(self.timeseries['energy_price_mwh'])
                 }
             },
             'flows': {

@@ -41,13 +41,15 @@ class Interchanger(Component):
         component_id: str,
         min_approach_temp_k: float = 10.0,
         target_cold_out_temp_c: float = 95.0,
-        efficiency: float = 0.95
+        efficiency: float = 0.95,
+        area_m2: float = 100.0
     ):
         super().__init__()
         self.component_id = component_id
         self.min_approach_temp_k = min_approach_temp_k
         self.target_cold_temp_k = target_cold_out_temp_c + 273.15
         self.efficiency = efficiency
+        self._area_m2 = area_m2
 
         # Inputs
         self.hot_stream: Optional[Stream] = None
@@ -58,6 +60,11 @@ class Interchanger(Component):
         self.cold_out: Optional[Stream] = Stream(0.0, temperature_k=target_cold_out_temp_c+273.15, pressure_pa=101325.0, phase='liquid')
         
         self.q_transferred_kw = 0.0
+
+    @property
+    def area_m2(self) -> float:
+        """Heat transfer area for CAPEX sizing (m²)."""
+        return self._area_m2
 
     def initialize(self, dt: float, registry: 'ComponentRegistry') -> None:
         """

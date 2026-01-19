@@ -17,13 +17,24 @@ class Boiler(ATRBaseComponent):
     Acts as a 'Sensor' that reports the heat duty available at specific 
     points in the plant based on the regression model.
     """
-    def __init__(self, component_id: str = None, lookup_id: str = None):
+    def __init__(self, component_id: str = None, lookup_id: str = None, max_power_kw: float = 500.0):
         super().__init__()
         self.component_id = component_id
         self.lookup_id = lookup_id or component_id
         self.duty_kw = 0.0
         self.current_stream: Stream = None
         self.current_o2_flow_kmol_h = 15.0 # Default fallback
+        self._max_power_kw = max_power_kw
+
+    @property
+    def max_power_kw(self) -> float:
+        """Design capacity for CAPEX (kW)."""
+        return self._max_power_kw
+
+    @property
+    def power_kw(self) -> float:
+        """Current operating power/duty (kW)."""
+        return self.duty_kw
 
     def step(self, t: float) -> None:
         # Use current O2 flow to calculate duty

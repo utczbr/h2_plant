@@ -1,0 +1,1111 @@
+# Equipment Mappings for CAPEX Generator
+# 
+# This file maps equipment tags to topology component IDs and defines
+# cost calculation parameters. Edit this file to add new equipment or
+# update coefficients without modifying code.
+#
+# Format:
+#   tag: Equipment tag (e.g., MTC-1)
+#   name: Equipment description
+#   topology_ids: List of component IDs from plant_topology.yaml
+#   component_type: Type for coefficient lookup
+#   capacity_variable: What to measure (power_kw, area_m2, volume_m3, flow_kg_h)
+#   capacity_unit: Unit for reporting
+#   capacity_aggregation: How to combine multiple (sum, max, avg)
+#   cost_source: Estimation method (turton, vendor_quote, percentage)
+#   capacity_mode: (optional) Override global capacity_mode for this equipment
+
+# =============================================================================
+# GLOBAL SETTINGS
+# =============================================================================
+
+# CEPCI Inflation Data
+cepci:
+  base_year: 2001
+  base_index: 397.0
+  current_year: 2026
+  current_index: 820.0
+
+# Capacity Mode: Controls how design capacity is determined for cost calculations
+#   - "design":  Use design parameters from topology (max_power_kw, volume_m3, etc.)
+#                This represents what the equipment is SIZED for.
+#   - "history": Use maximum observed values from simulation history.
+#                This represents what the equipment actually USED during operation.
+#
+# Example: A compressor with max_power_kw=500 that only reaches 230 kW in simulation:
+#   - design mode:  capacity = 500 kW (sizing-based costing)
+#   - history mode: capacity = 230 kW (operational-based costing)
+#
+# Per-equipment override: Add 'capacity_mode: design|history' to any equipment entry
+capacity_mode: history
+
+# =============================================================================
+# INSTALLATION FACTORS (% of Block Equipment Total)
+# =============================================================================
+# These percentages are applied to the sum of equipment C_BM costs per block
+# to calculate indirect/installation costs. Based on CAPEX_BASE.csv methodology.
+#
+# Block -> Category -> Percentage
+
+installation_factors:
+  PEM:
+    electrical: 0.50          # 45-55% (midpoint)
+    instrumentation: 0.20     # 20%
+    piping: 0.15              # 15%
+  SOEC:
+    electrical: 0.50          # 45-55% (midpoint)
+    instrumentation: 0.20     # 20%
+    piping: 0.15              # 15%
+  ATR:
+    piping: 0.65              # 60-70% (midpoint)
+    civil_foundations: 0.25   # 25%
+    insulation: 0.10          # 10%
+  Storage:
+    piping: 0.15              # ~15%
+    civil_foundations: 0.10   # ~10%
+  Water_Treatment:
+    piping: 0.10              # ~10%
+  General:
+    engineering_supervision: 0.33   # 33% (indirect)
+    construction_expenses: 0.15     # 15% (indirect)
+    contingency: 0.15               # 15% (extra)
+
+
+# Equipment Definitions
+equipment:
+  # ============================================================================
+  # COMPRESSORS
+  # ============================================================================
+  
+  - tag: "MTC-1"
+    block: "SOEC"
+    name: "Multistage Steam Compressor (SOEC Feed)"
+    topology_ids:
+      - "SOEC_Steam_Compressor_1"
+      - "SOEC_Steam_Compressor_2"
+    component_type: "Centrifugal Compressor"
+    process_description: "Two-stage steam compression for SOEC feed preparation"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    restrictions:
+      - "450 ≤ W_shaft ≤ 3000 kW"
+    notes:
+      - "Stainless Steel 316 required for 250°C steam"
+  
+  - tag: "MTC-2"
+    block: "SOEC"
+    name: "Multistage O2 Compressor (4 stages)"
+    topology_ids:
+      - "SOEC_O2_compressor_1"
+      - "SOEC_O2_compressor_2"
+      - "SOEC_O2_compressor_3"
+      - "SOEC_O2_compressor_4"
+    component_type: "Centrifugal Compressor"
+    process_description: "Four-stage O2 compression from 1 bar to 15 bar"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    restrictions:
+      - "450 ≤ W_shaft ≤ 3000 kW"
+      - "NOTE: Actual capacity (~60 kW) is below correlation bounds. Cost estimated via extrapolation (lower accuracy)."
+  
+  - tag: "MTC-4"
+    block: "SOEC"
+    name: "Multistage H2 Compressor (6 stages - SOEC Train)"
+    topology_ids:
+      - "SOEC_H2_Compressor_S1"
+      - "SOEC_H2_Compressor_S2"
+      - "SOEC_H2_Compressor_S3"
+      - "SOEC_H2_Compressor_S4"
+      - "SOEC_H2_Compressor_S5"
+      - "SOEC_H2_Compressor_S6"
+    component_type: "Reciprocating Compressor"
+    process_description: "Six-stage H2 compression from 1 bar to 41 bar"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    restrictions:
+      - "10 ≤ W_shaft ≤ 10000 kW"
+    notes:
+      - "Reciprocating type for high pressure ratio"
+      - "Alloy steel construction for H2 service"
+  
+  - tag: "HP-COMP"
+    block: "Storage"
+    name: "HP Storage Compressor Train (4 stages)"
+    topology_ids:
+      - "HP_Compressor_S2"
+      - "HP_Compressor_S3"
+      - "HP_Compressor_S4"
+      - "HP_Compressor_S5"
+    component_type: "Reciprocating Compressor"
+    process_description: "Compression from LP tank (30 bar) to HP storage (400+ bar)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+  
+  # ============================================================================
+  # HEAT EXCHANGERS / COOLERS
+  # ============================================================================
+  
+  - tag: "DCL-7"
+    block: "SOEC"
+    name: "SOEC H2 Intercoolers (6 units)"
+    topology_ids:
+      - "SOEC_H2_Intercooler_1"
+      - "SOEC_H2_Intercooler_2"
+      - "SOEC_H2_Intercooler_3"
+      - "SOEC_H2_Intercooler_4"
+      - "SOEC_H2_Intercooler_5"
+      - "SOEC_H2_Intercooler_6"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Intercooling between compressor stages (135°C → 40°C)"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    restrictions:
+      - "10 ≤ A ≤ 1000 m²"
+  
+  
+  - tag: "CHL-1"
+    block: "SOEC"
+    name: "SOEC H2 Chiller"
+    topology_ids:
+      - "SOEC_H2_Chiller_1"
+    component_type: "Electrical Chiller"
+    process_description: "Deep cooling for water knockout (40°C → 4°C)"
+    capacity_variable: "cooling_capacity_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 4.2523
+      K2: 0.7615
+      K3: -0.0031
+      F_BM: 1.3
+      F_m: 1.0
+      capacity_min: 10
+      capacity_max: 1000
+  
+  # ============================================================================
+  # SEPARATORS / VESSELS
+  # ============================================================================
+  
+  - tag: "KOT-3"
+    block: "SOEC"
+    name: "SOEC H2 Knock-Out Drums (2 stages)"
+    topology_ids:
+      - "SOEC_H2_KOD_1"
+      - "SOEC_H2_KOD_2"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Two-stage water knockout with demister pads"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 3.1
+      F_m_note: "SS316 for H2 service"
+      F_p: 1.0
+      B1: 2.25
+      B2: 1.82
+      F_multi: 1.2
+      F_multi_note: "Demister pad addon"
+      capacity_min: 0.3
+      capacity_max: 520
+  
+  - tag: "LP-TANK"
+    block: "Storage"
+    name: "LP H2 Storage Tank"
+    topology_ids:
+      - "LP_Storage_Tank"
+    component_type: "Horizontal Pressure Vessel"
+    process_description: "Low pressure hydrogen buffer storage (30-70 bar)"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+  
+  
+  # ============================================================================
+  # ELECTROLYZERS
+  # ============================================================================
+  
+  - tag: "SOEC-1"
+    block: "SOEC"
+    name: "SOEC Electrolyzer Stack Array"
+    topology_ids:
+      - "SOEC_Cluster"
+    component_type: "Electrolyzer SOEC"
+    process_description: "Solid Oxide Electrolyzer Cell array for steam electrolysis"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 24197358.17
+    quote_year: 2026
+    notes:
+      - "Modular factory-built units"
+      - "Stack replacement schedule: 40,000-60,000 hours"
+      - "Cost source: CAPEX_BASE.csv (Direct cost: €24,197,358.17)"
+  
+  - tag: "PEM-1"
+    block: "PEM"
+    name: "PEM Electrolyzer Array"
+    topology_ids:
+      - "PEM_Electrolyzer"
+    component_type: "Electrolyzer PEM"
+    process_description: "Proton Exchange Membrane electrolyzer for water electrolysis"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 4403091.58
+    quote_year: 2026
+    notes:
+      - "Rapid response capability for grid services"
+      - "Cost source: CAPEX_BASE.csv (Direct cost: €4,403,091.58)"
+  
+  # ============================================================================
+  # PURIFICATION
+  # ============================================================================
+  
+  - tag: "PSA-H2"
+    block: "SOEC"
+    name: "H2 PSA Units"
+    topology_ids:
+      - "SOEC_H2_PSA_1"
+      - "PEM_H2_PSA_1"
+    component_type: "PSA Unit"
+    process_description: "Pressure Swing Adsorption for H2 purification to 99.999%"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 3.1
+      F_m_note: "Alloy/Stainless Steel"
+      F_p: 2.27
+      F_p_note: "Adjusted for 40 bar operation (Ref: MCY-2 Line 71)"
+      B1: 2.25
+      B2: 1.82
+      F_multi: 1.25 
+      F_multi_note: "Auxiliary multiplier (C_BM = 1.25 * ...)"
+      capacity_min: 0.3
+      capacity_max: 520
+    notes:
+      - "4-bed cycle design"
+      - "H2 recovery: 85-90%"
+      - "Cost model: Turton Pressure Vessel (Volume)"
+  
+  - tag: "DEOXO-1"
+    block: "SOEC"
+    name: "Catalytic Deoxo Reactor"
+    topology_ids:
+      - "SOEC_H2_Deoxo_1"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Catalytic removal of O2 traces from H2 stream"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    notes:
+      - "Pd/Al2O3 catalyst bed"
+      - "O2 reduction: >20 ppm → <5 ppm"
+
+  # ============================================================================
+  # SOEC - Additional Equipment
+  # ============================================================================
+  
+  - tag: "SOEC_Cluster"
+    block: "SOEC"
+    name: "SOEC Stack Module (6 modules)"
+    topology_ids:
+      - "SOEC_Cluster"
+    component_type: "Electrolyzer SOEC"
+    process_description: "Electrochemical water splitting at high temperature (650-850°C)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 26617094.0
+    notes:
+      - "ROGER study fixed cost: €24,197,358"
+      - "6 modules × 2.4 MW each = 11.52 MW"
+
+  - tag: "ATT-1"
+    block: "SOEC"
+    name: "Attemperator (Venturi)"
+    topology_ids:
+      - "SOEC_Feed_Attemperator"
+    component_type: "Spray Water Attemperator"
+    process_description: "Mixes compressed steam with bypass water for 156.9°C superheat"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.6298
+      K2: -0.4991
+      K3: 0.0411
+      F_m: 3.1
+      F_p: 1.0
+      B1: 2.25
+      B2: 1.82
+      capacity_min: 0.05
+      capacity_max: 50
+
+  - tag: "HTX-3"
+    block: "SOEC"
+    name: "Electric Process Heaters (SOEC Train)"
+    topology_ids:
+      - "SOEC_H2_Boiler"
+      - "SOEC_H2_ElectricBoiler_PSA"
+      - "SOEC_Steam_Boiler"
+    component_type: "Electric Heater"
+    process_description: "Steam generation and H2 heating for PSA"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "CYC-SOEC-VESSEL"
+    block: "SOEC"
+    name: "SOEC H2 Cyclone Separators (Vessel)"
+    topology_ids:
+      - "SOEC_H2_Cyclone_1"
+      - "SOEC_H2_Cyclone_2"
+      - "SOEC_H2_Cyclone_3"
+      - "SOEC_H2_Cyclone_4"
+      - "SOEC_H2_Cyclone_5"
+      - "SOEC_H2_Cyclone_6"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Multi-cyclone vessel shell"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 2.1  # SS316
+      F_p: 2.27 # High pressure check
+      B1: 2.25
+      B2: 1.82
+    notes:
+      - "Shell cost only. Part 1 of composite cost."
+
+  - tag: "CYC-SOEC-INTERNALS"
+    block: "SOEC"
+    name: "SOEC H2 Cyclone Separators (Internals)"
+    topology_ids:
+      - "SOEC_H2_Cyclone_1"
+      - "SOEC_H2_Cyclone_2"
+      - "SOEC_H2_Cyclone_3"
+      - "SOEC_H2_Cyclone_4"
+      - "SOEC_H2_Cyclone_5"
+      - "SOEC_H2_Cyclone_6"
+    component_type: "Cyclone Internals"
+    process_description: "Multi-cyclone vane pack internals"
+    capacity_variable: "cross_sectional_area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.349
+      K2: 0.4669
+      K3: 0.1243
+      F_m: 1.0
+      F_p: 1.0  # Internals not pressure bearing in same way
+    notes:
+      - "Internals cost only. Part 2 of composite cost."
+
+  - tag: "PMP-1"
+    block: "SOEC"
+    name: "SOEC Feed Pump"
+    topology_ids:
+      - "SOEC_Feed_Pump"
+    component_type: "Centrifugal Pump"
+    process_description: "Bypass water pressurization for attemperator"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "PMP-DRAIN"
+    block: "SOEC"
+    name: "SOEC Drain Pumps (3 units)"
+    topology_ids:
+      - "SOEC_DRAIN_PUMP_1"
+      - "SOEC_DRAIN_PUMP_2"
+      - "SOEC_Drain_Pump"
+    component_type: "Centrifugal Pump"
+    process_description: "Drain recovery pumps from KODs"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.3892
+      K2: 0.0536
+      K3: 0.1538
+      F_m: 2.41
+      F_m_note: "SS316 material"
+      F_p: 1.0
+      B1: 1.89
+      B2: 1.35
+
+  - tag: "RCT-2"
+    block: "SOEC"
+    name: "Rectifier and Transformer (SOEC)"
+    topology_ids:
+      - "SOEC_Cluster"
+    component_type: "Power Electronics"
+    process_description: "AC-DC conversion for SOEC stack (11.52 MW)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "iea_scaling"
+    coefficients:
+      K1: 200.0    # 200 USD/kW (Unit Cost)
+      K2: 0.0
+      K3: 0.0
+      F_m: 1.0
+      F_p: 1.0
+      B1: 2.15     # Installation factor
+      B2: 0.0
+    notes:
+      - "Cp0 = 200 USD/kW (IEA estimate)"
+
+  - tag: "DCL-O2-TRAIN"
+    block: "SOEC"
+    name: "SOEC O2 Dry Coolers (4 units)"
+    topology_ids:
+      - "SOEC_O2_Drycooler_1"
+      - "SOEC_O2_Drycooler_2"
+      - "SOEC_O2_Drycooler_3"
+      - "SOEC_O2_Drycooler_4"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "O2 compression train intercoolers"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "CHL-2"
+    block: "SOEC"
+    name: "SOEC H2 Chiller (Post-Deoxo)"
+    topology_ids:
+      - "SOEC_H2_Chiller_2"
+    component_type: "Shell and Tube Heat Exchanger"
+    process_description: "Deep cooling after deoxo for final water knockout"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  # ============================================================================
+  # PEM - Complete Equipment Set
+  # ============================================================================
+
+  - tag: "PEM_Electrolyzer"
+    block: "PEM"
+    name: "PEM Electrolyzer Stack"
+    topology_ids:
+      - "PEM_Electrolyzer"
+    component_type: "Electrolyzer PEM"
+    process_description: "Low-temperature water electrolysis at 40 bar"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 5500000.0
+    notes:
+      - "5 MW rated, 1100 USD/kW (2026 projection)"
+
+  - tag: "RCT-1"
+    block: "PEM"
+    name: "Rectifier and Transformer (PEM)"
+    topology_ids:
+      - "PEM_Electrolyzer"
+    component_type: "Power Electronics"
+    process_description: "AC-DC conversion for PEM stack (5 MW)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "iea_scaling"
+    coefficients:
+      K1: 200.0    # 200 USD/kW
+      K2: 0.0
+      K3: 0.0
+      F_m: 1.0
+      F_p: 1.0
+      B1: 2.15
+      B2: 0.0
+    notes:
+      - "Cp0 = 200 USD/kW"
+
+  - tag: "KOT-PEM"
+    block: "PEM"
+    name: "PEM Knock-Out Drums (H2 + O2)"
+    topology_ids:
+      - "PEM_H2_KOD_1"
+      - "PEM_O2_KOD_1"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Primary water knockout for PEM at 40 bar"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 3.1
+      F_p: 1.0
+      B1: 2.25
+      B2: 1.82
+      F_multi: 1.2
+
+  - tag: "COA-PEM"
+    block: "PEM"
+    name: "PEM Coalescers (H2 + O2)"
+    topology_ids:
+      - "PEM_H2_Coalescer_1"
+      - "PEM_H2_Coalescer_2"
+      - "PEM_O2_Coalescer_1"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Fiber-bed coalescing filters for fine mist removal"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 2.1
+      F_p: 1.38
+      B1: 2.25
+      B2: 1.82
+      F_multi: 1.25
+      F_multi_note: "Coalescer internals addon"
+
+  - tag: "HTR-PEM"
+    block: "PEM"
+    name: "PEM Electric Heaters"
+    topology_ids:
+      - "PEM_H2_ElectricBoiler_1"
+      - "PEM_H2_ElectricBoiler_2"
+      - "PEM_O2_ElectricBoiler"
+    component_type: "Electric Heater"
+    process_description: "Temperature control heaters (pre-Deoxo, pre-PSA, O2)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "CHL-PEM"
+    block: "PEM"
+    name: "PEM Chillers (H2 + O2)"
+    topology_ids:
+      - "PEM_H2_Chiller_1"
+      - "PEM_H2_Chiller_2"
+      - "PEM_O2_Chiller_1"
+    component_type: "Shell and Tube Heat Exchanger"
+    process_description: "Deep cooling for water knockout (4°C)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "DCL-PEM"
+    block: "PEM"
+    name: "PEM Dry Coolers"
+    topology_ids:
+      - "PEM_H2_DryCooler_1"
+      - "PEM_O2_Drycooler_1"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Primary cooling for PEM outlet streams"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "MCY-PEM"
+    block: "PEM"
+    name: "PEM Cyclone Separators"
+    topology_ids:
+      - "PEM_H2_Cyclone_1"
+      - "PEM_H2_Cyclone_2"
+      - "PEM_O2_Cyclone_1"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Multi-element centrifugal separators at 40 bar"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "DGS-PEM"
+    block: "PEM"
+    name: "PEM Degasser Tanks"
+    topology_ids:
+      - "PEM_Degasser_1"
+      - "PEM_Degasser_2"
+    component_type: "Atmospheric Separation Tank"
+    process_description: "Gas-water separation tanks for drain water"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_BM: 1.0
+
+  - tag: "VAL-PEM"
+    block: "PEM"
+    name: "PEM Control Valves"
+    topology_ids:
+      - "PEM_Water_Return_Valve_1"
+      - "PEM_Water_Return_Valve_2"
+      - "PEM_O2_Valve"
+    component_type: "Ball Valve"
+    process_description: "Pressure control valves (40→4 bar for degassing)"
+    capacity_variable: "unknown"
+    capacity_unit: "inches"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.1491
+      K2: 0.5841
+      K3: -0.0125
+      F_m: 2.4
+      F_p: 1.0
+      B1: 1.63
+      B2: 1.66
+
+  - tag: "DEOXO-PEM"
+    block: "PEM"
+    name: "PEM H2 Deoxidizer"
+    topology_ids:
+      - "PEM_H2_Deoxo_1"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Catalytic O2 removal from PEM H2 stream"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "PMP-PEM"
+    block: "PEM"
+    name: "PEM Water Pump"
+    topology_ids:
+      - "PEM_Water_Pump"
+    component_type: "Centrifugal Pump"
+    process_description: "Makeup water pump for PEM"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  # ============================================================================
+  # ATR - Complete Equipment Set
+  # ============================================================================
+
+  - tag: "ATR"
+    block: "ATR"
+    name: "Autothermal Reformer Reactor"
+    topology_ids:
+      - "ATR_Plant"
+    component_type: "Process Reactor"
+    process_description: "Autothermal reforming of biogas to syngas"
+    capacity_variable: "unknown"
+    capacity_unit: "-"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 3430523.0
+    notes:
+      - "Fixed cost from Carlini, G. (2025): €3,118,657"
+
+  - tag: "HT-WGS"
+    block: "ATR"
+    name: "High Temperature Water-Gas Shift Reactor"
+    topology_ids:
+      - "ATR_Plant"
+    component_type: "Process Reactor"
+    process_description: "HT-WGS catalyst (Fe/Cr) at 350-450°C"
+    capacity_variable: "unknown"
+    capacity_unit: "-"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 480273.0
+    notes:
+      - "Fixed cost from Carlini: €436,612"
+
+  - tag: "LT-WGS"
+    block: "ATR"
+    name: "Low Temperature Water-Gas Shift Reactor"
+    topology_ids:
+      - "ATR_Plant"
+    component_type: "Process Reactor"
+    process_description: "LT-WGS catalyst (Cu/Zn) at 200-250°C"
+    capacity_variable: "unknown"
+    capacity_unit: "-"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 480273.0
+    notes:
+      - "Fixed cost from Carlini: €436,612"
+
+  - tag: "MTC-6"
+    block: "ATR"
+    name: "Biogas Compressor (3 stages)"
+    topology_ids:
+      - "Biogas_Compressor_1"
+      - "Biogas_Compressor_2"
+      - "Biogas_Compressor_3"
+    component_type: "Reciprocating Compressor"
+    process_description: "Biogas compression for ATR feed"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 2.03
+      K2: 1.25
+      K3: -0.06
+      F_m: 1.5
+      F_m_note: "Carbon steel + upgraded internals for biogas"
+      F_BM: 2.15
+
+  - tag: "DCL-BG"
+    block: "ATR"
+    name: "Biogas Intercoolers"
+    topology_ids:
+      - "Biogas_Intercooler_1"
+      - "Biogas_Intercooler_2"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Biogas compression train intercoolers"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "ATR-O2-COMP"
+    block: "ATR"
+    name: "ATR O2 Compressor"
+    topology_ids:
+      - "ATR_O2_Compressor"
+    component_type: "Centrifugal Compressor"
+    process_description: "Oxygen compression for ATR feed"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 2.2891
+      K2: 1.3604
+      K3: -0.1027
+      F_m: 3.5
+      F_m_note: "Nickel alloys/Monel for O2 service"
+      F_BM: 2.15
+
+  - tag: "MCT-7"
+    block: "ATR"
+    name: "ATR H2 Compressor (2 stages)"
+    topology_ids:
+      - "ATR_H2_Compressor_1"
+      - "ATR_H2_Compressor_2"
+    component_type: "Reciprocating Compressor"
+    process_description: "ATR H2 compression to LP storage pressure"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "DCL-ATR"
+    block: "ATR"
+    name: "ATR Dry Coolers"
+    topology_ids:
+      - "ATR_DryCooler"
+      - "ATR_H2_Drycooler"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "ATR syngas and H2 cooling"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "CHL-ATR"
+    block: "ATR"
+    name: "ATR Chiller"
+    topology_ids:
+      - "ATR_Chiller_1"
+    component_type: "Shell and Tube Heat Exchanger"
+    process_description: "Deep cooling of syngas for water knockout"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "MCY-ATR"
+    block: "ATR"
+    name: "ATR Cyclone Separators"
+    topology_ids:
+      - "ATR_Cyclone_1"
+      - "ATR_Cyclone_2"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Syngas mist removal after cooling"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "COA-ATR"
+    block: "ATR"
+    name: "ATR Coalescer"
+    topology_ids:
+      - "ATR_Coalescer_1"
+    component_type: "Vertical Pressure Vessel"
+    process_description: "Fine mist removal before PSA"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 2.1
+      F_p: 1.2
+      B1: 2.25
+      B2: 1.82
+      F_multi: 1.25
+
+  - tag: "PSA-ATR"
+    block: "ATR"
+    name: "ATR PSA Unit"
+    topology_ids:
+      - "ATR_PSA_1"
+    component_type: "PSA Unit"
+    process_description: "H2 purification from ATR syngas"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "HTX-ATR"
+    block: "ATR"
+    name: "ATR Electric Heaters"
+    topology_ids:
+      - "ATR_H01_Boiler"
+      - "ATR_H02_Boiler"
+      - "ATR_H04_Boiler"
+    component_type: "Electric Heater"
+    process_description: "ATR feed preheating (biogas, O2, steam)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "PMP-ATR"
+    block: "ATR"
+    name: "ATR Feed/Drain Pumps"
+    topology_ids:
+      - "ATR_Feed_Pump"
+      - "ATR_Drain_Pump_1"
+      - "ATR_Drain_Pump_2"
+    component_type: "Centrifugal Pump"
+    process_description: "ATR water feed and drain pumps"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "SYNGAS-CLR"
+    block: "ATR"
+    name: "ATR Syngas Cooler"
+    topology_ids:
+      - "ATR_Syngas_Cooler"
+    component_type: "Shell and Tube Heat Exchanger"
+    process_description: "Syngas cooling with heat recovery to SOEC water"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  # ============================================================================
+  # STORAGE & DISPENSING
+  # ============================================================================
+
+  - tag: "FST"
+    block: "Storage"
+    name: "Filling Loading Docks (5 stations)"
+    topology_ids:
+      - "Truck_Station_1"
+    component_type: "Dispensing Station"
+    process_description: "Truck filling stations for H2 distribution"
+    capacity_variable: "unknown"
+    capacity_unit: "-"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 2124121.0
+    notes:
+      - "ROGER fixed cost: €1,931,019"
+
+  - tag: "HBT"
+    block: "Storage"
+    name: "Underground H2 Storage"
+    topology_ids: []
+    component_type: "Underground Storage"
+    process_description: "Underground hydrogen storage facility"
+    capacity_variable: "unknown"
+    capacity_unit: "-"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 7409895.0
+    notes:
+      - "ROGER fixed cost: €6,736,268"
+
+  - tag: "LP-COMP"
+    block: "Storage"
+    name: "LP Compressor (to Tank)"
+    topology_ids:
+      - "LP_Compressor_S1"
+    component_type: "Reciprocating Compressor"
+    process_description: "Compression to LP storage (30 bar)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "LP-ICL"
+    block: "Storage"
+    name: "LP Compressor Intercooler"
+    topology_ids:
+      - "LP_Intercooler_1"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "LP compression train intercooler"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "HP-ICL"
+    block: "Storage"
+    name: "HP Compressor Intercoolers"
+    topology_ids:
+      - "HP_Intercooler_2"
+      - "HP_Intercooler_3"
+      - "HP_Intercooler_4"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "HP compression train intercoolers"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  # ============================================================================
+  # WATER TREATMENT
+  # ============================================================================
+
+  - tag: "WTR-SRC"
+    block: "Water_Treatment"
+    name: "Water Source/Supply"
+    topology_ids:
+      - "Water_Source"
+    component_type: "Utility System"
+    process_description: "Makeup water supply system"
+    capacity_variable: "flow_kg_h"
+    capacity_unit: "kg/h"
+    capacity_aggregation: "sum"
+    cost_source: "excluded"
+    notes:
+      - "Included in BOP/installation costs"
+      - "Not quantified as discrete equipment per CAPEX_BASE methodology"
+
+  - tag: "WTR-PUR"
+    block: "Water_Treatment"
+    name: "Water Purifier (UltraPure)"
+    topology_ids:
+      - "Water_Purifier"
+    component_type: "Water Treatment"
+    process_description: "Deionization/RO for electrolyzer-grade water"
+    capacity_variable: "flow_kg_h"
+    capacity_unit: "kg/h"
+    capacity_aggregation: "sum"
+    cost_source: "fixed"
+    fixed_cost_eur: 1288210.70
+    notes:
+      - "Direct cost from Roger: €1,288,210.70"
+
+  - tag: "WTR-TANK"
+    block: "Water_Treatment"
+    name: "UltraPure Water Tank"
+    topology_ids:
+      - "UltraPure_Tank"
+    component_type: "Atmospheric Tank"
+    process_description: "Buffer storage for purified water"
+    capacity_variable: "volume_m3"
+    capacity_unit: "m³"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    coefficients:
+      K1: 3.4974
+      K2: 0.4485
+      K3: 0.1074
+      F_m: 1.0
+      F_m_note: "Carbon Steel (atmospheric tank)"
+      F_p: 1.0
+      F_p_note: "Atmospheric pressure"
+      capacity_min: 0.3
+      capacity_max: 520
+    notes:
+      - "Turton coefficients for atmospheric tank"
+
+  # ============================================================================
+  # PRODUCTION MIXING
+  # ============================================================================
+
+  - tag: "H2-MIX"
+    block: "General"
+    name: "H2 Production Mixer"
+    topology_ids:
+      - "H2_Production_Mixer"
+    component_type: "Flow Mixer"
+    process_description: "Combines H2 from SOEC, PEM, ATR"
+    capacity_variable: "flow_kg_h"
+    capacity_unit: "kg/h"
+    capacity_aggregation: "sum"
+    cost_source: "excluded"
+    notes:
+      - "Flow Mixers are NOT discrete equipment per CAPEX_BASE"
+      - "Included in piping installation percentages (15-20% of block cost)"
+
+  - tag: "H2-CLR"
+    block: "General"
+    name: "H2 Production Cooler"
+    topology_ids:
+      - "H2_Production_Cooler"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Final cooling before LP compression"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+

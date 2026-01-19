@@ -570,6 +570,16 @@ class PlantGraphBuilder:
                 arrival_probability=float(node.params.get('arrival_probability', 0.3))
             )
 
+        elif node.type == "PowerTransformer":
+            from h2_plant.components.power.rectifier import PowerTransformer
+            return PowerTransformer(
+                component_id=node.id,
+                efficiency=float(node.params.get('efficiency', 0.95)),
+                rated_power_mw=float(node.params.get('rated_power_mw', 20.0)),
+                system_group=node.params.get('system_group', None)
+            )
+
         else:
             logger.warning(f"Unknown component type: {node.type} (ID: {node.id}) -> Instantiating PassiveComponent")
             return PassiveComponent()
+
