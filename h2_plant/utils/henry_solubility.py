@@ -24,12 +24,19 @@ Physical Basis:
 References:
     - Sander, R. (2015). Compilation of Henry's law constants.
     - NIST Chemistry WebBook.
+
+Performance Note:
+    Core calculations are JIT-compiled via Numba in h2_plant.optimization.numba_ops
+    for ~10-100x speedup in simulation hot paths.
 """
 
-import math
 from typing import Literal
 
-from h2_plant.core.constants import HenryConstants
+from h2_plant.optimization.numba_ops import (
+    calculate_dissolved_gas_mg_kg_jit,
+    HENRY_H2_H298, HENRY_H2_C, HENRY_H2_MW,
+    HENRY_O2_H298, HENRY_O2_C, HENRY_O2_MW
+)
 
 
 def calculate_dissolved_gas_mg_kg(
@@ -39,6 +46,8 @@ def calculate_dissolved_gas_mg_kg(
 ) -> float:
     """
     Calculate dissolved gas concentration in liquid water using Henry's Law.
+    
+    This is a thin wrapper around the JIT-compiled numba implementation.
     
     Args:
         temperature_k: Liquid temperature in Kelvin.
@@ -57,38 +66,17 @@ def calculate_dissolved_gas_mg_kg(
         >>> print(f"{conc:.3f} mg/kg")
         15.876 mg/kg
     """
-    if temperature_k <= 0 or gas_partial_pressure_pa <= 0:
-        return 0.0
-    
-    # Get species-specific constants
     if gas_species == 'H2':
-        H_298 = HenryConstants.H2_H_298_L_ATM_MOL  # L·atm/mol at 298.15K
-        C = HenryConstants.H2_DELTA_H_R_K          # K (temperature coefficient)
-        MW_kg_mol = HenryConstants.H2_MOLAR_MASS_KG_MOL
+        return calculate_dissolved_gas_mg_kg_jit(
+            temperature_k, gas_partial_pressure_pa,
+            HENRY_H2_H298, HENRY_H2_C, HENRY_H2_MW
+        )
     elif gas_species == 'O2':
-        H_298 = HenryConstants.O2_H_298_L_ATM_MOL
-        C = HenryConstants.O2_DELTA_H_R_K
-        MW_kg_mol = HenryConstants.O2_MOLAR_MASS_KG_MOL
-    else:
-        return 0.0
-    
-    T0 = 298.15  # Reference temperature (K)
-    
-    # Temperature-corrected Henry constant (L·atm/mol)
-    H_T = H_298 * math.exp(C * (1.0 / temperature_k - 1.0 / T0))
-    
-    # Convert pressure to atm
-    p_atm = gas_partial_pressure_pa / 101325.0
-    
-    # Molar concentration (mol/L)
-    c_mol_L = p_atm / H_T
-    
-    # Convert to mass concentration (mg/kg)
-    # Assuming water density ~1 kg/L, so mol/L ≈ mol/kg_water
-    mw_g_mol = MW_kg_mol * 1000.0  # kg/mol -> g/mol
-    c_mg_kg = c_mol_L * mw_g_mol * 1000.0  # mol/L * g/mol * 1000 mg/g
-    
-    return c_mg_kg
+        return calculate_dissolved_gas_mg_kg_jit(
+            temperature_k, gas_partial_pressure_pa,
+            HENRY_O2_H298, HENRY_O2_C, HENRY_O2_MW
+        )
+    return 0.0
 
 
 def calculate_dissolved_gas_kg_h(

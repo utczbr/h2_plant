@@ -47,6 +47,8 @@ from h2_plant.components.storage.h2_tank import TankArray
 from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
 from h2_plant.components.storage.detailed_tank import DetailedTankArray
 from h2_plant.components.water.ultrapure_water_tank import UltraPureWaterTank
+from h2_plant.components.delivery.discharge_station import DischargeStation
+from h2_plant.optimization.numba_ops import calculate_storage_mpc_factor
 
 logger = logging.getLogger(__name__)
 
@@ -77,61 +79,7 @@ class StreamRecorder:
     # Specific component metric arrays (optional)
     extra_metric_arrs: List[Tuple[str, np.ndarray]] = field(default_factory=list)
 
-    def record(self, step_idx: int):
-        stream = getattr(self.component, self.stream_attr, None)
-        if stream:
-            self.temp_arr[step_idx] = stream.temperature_k - 273.15
-            self.press_arr[step_idx] = stream.pressure_pa / 1e5
-            self.flow_arr[step_idx] = stream.mass_flow_kg_h
-            # Calculate Total Mass Flow (Gas + Entrained Liquid)
-            m_dot_gas = stream.mass_flow_kg_h
-            m_dot_liq = getattr(stream, 'entrained_liq_kg_s', 0.0) * 3600.0
-            m_dot_total = m_dot_gas + m_dot_liq
-            
-            # Total H2O = Vapor + Liquid
-            h2o_vap_frac = stream.composition.get('H2O', 0.0)
-            m_h2o_vap = m_dot_gas * h2o_vap_frac
-            m_h2o_total = m_h2o_vap + m_dot_liq
-            
-            # Record Total Mass Fraction if flow > 0
-            if m_dot_total > 1e-9:
-                self.h2o_frac_arr[step_idx] = m_h2o_total / m_dot_total
-            else:
-                self.h2o_frac_arr[step_idx] = 0.0
-                
-            # Water vapor mass flow (kg/h) - keep as vapor only for specific tracking
-            self.h2o_vapor_arr[step_idx] = m_h2o_vap
-            
-            # Mole fractions
-            # Use 'mole_fractions' property (dict), do NOT call as method
-            mole_fractions = stream.mole_fractions
-            self.mole_arrs[0][step_idx] = mole_fractions.get('H2', 0.0)
-            self.mole_arrs[1][step_idx] = mole_fractions.get('O2', 0.0)
-            self.mole_arrs[2][step_idx] = mole_fractions.get('N2', 0.0)
-            
-            # Use get_total_mole_frac for H2O to include entrained liquid if present
-            self.mole_arrs[3][step_idx] = stream.get_total_mole_frac('H2O')
-            
-            self.mole_arrs[4][step_idx] = mole_fractions.get('CH4', 0.0)
-            self.mole_arrs[5][step_idx] = mole_fractions.get('CO2', 0.0)
-        else:
-            # If stream is None (e.g., component not active or no outlet), record zeros
-            self.temp_arr[step_idx] = 0.0
-            self.press_arr[step_idx] = 0.0
-            self.flow_arr[step_idx] = 0.0
-            self.h2o_frac_arr[step_idx] = 0.0
-            self.h2o_vapor_arr[step_idx] = 0.0
-            for arr in self.mole_arrs:
-                arr[step_idx] = 0.0
 
-        # Record extra metrics (try direct attribute, fallback to get_state())
-        for obj_attr, arr in self.extra_metric_arrs:
-            val = getattr(self.component, obj_attr, None)
-            if val is None:
-                # Fallback: Check get_state() dict (for metrics not exposed as attributes)
-                state = self.component.get_state() if hasattr(self.component, 'get_state') else {}
-                val = state.get(obj_attr, 0.0)
-            arr[step_idx] = val if val is not None else 0.0
 
 
 class EngineDispatchStrategy(ABC):
@@ -385,10 +333,33 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # Also add SOEC Cluster if it has a stream
         soec = self._soec
         if soec:
-             # Manually add SOEC
+             # Manually add SOEC - now properly binds a recorder to 'h2_out' port
              cid = soec.component_id if hasattr(soec, 'component_id') else 'SOEC_Cluster'
              self._alloc_stream_history(cid, total_steps)
-             # SOEC stream is often constructed on fly, handled specially in loop
+             
+             # Allocate extra metric array for O2 PPM (fetched from get_state)
+             self._history[f"{cid}_outlet_o2_ppm_mol"] = np.zeros(total_steps, dtype=np.float64)
+             
+             # Create recorder bound to 'h2_out' port
+             soec_recorder = StreamRecorder(
+                 component=soec,
+                 stream_attr='h2_out',  # This is the OUTPUT PORT name
+                 temp_arr=self._history[f"{cid}_outlet_temp_c"],
+                 press_arr=self._history[f"{cid}_outlet_pressure_bar"],
+                 flow_arr=self._history[f"{cid}_outlet_mass_flow_kg_h"],
+                 h2o_frac_arr=self._history[f"{cid}_outlet_h2o_frac"],
+                 h2o_vapor_arr=self._history[f"{cid}_h2o_vapor_kg_h"],
+                 mole_arrs=(
+                     self._history[f"{cid}_outlet_H2_molf"],
+                     self._history[f"{cid}_outlet_O2_molf"],
+                     self._history[f"{cid}_outlet_N2_molf"],
+                     self._history[f"{cid}_outlet_H2O_molf"],
+                     self._history[f"{cid}_outlet_CH4_molf"],
+                     self._history[f"{cid}_outlet_CO2_molf"]
+                 ),
+                 extra_metric_arrs=[('outlet_o2_ppm_mol', self._history[f"{cid}_outlet_o2_ppm_mol"])]
+             )
+             self._recorders.append(soec_recorder)
         
         # Separate dict for 2D matrix arrays (not compatible with HistoryDictProxy)
         # These are always in-memory numpy arrays regardless of chunked mode
@@ -541,6 +512,27 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                        f"total capacity = {total_cap:.1f} kg")
         else:
             logger.warning("Storage APC: No storage components found in registry")
+        
+        # --- MPC: Locate Discharge Station for Demand Forecasting ---
+        self._discharge_station = None
+        self._ds_params = None
+        for cid, comp in registry.list_components():
+            if isinstance(comp, DischargeStation):
+                self._discharge_station = comp
+                logger.info(f"Storage MPC: Found DischargeStation {cid} for demand forecasting")
+                break
+        
+        # Pre-calculate station params to avoid lookup in loop
+        if self._discharge_station:
+            ds = self._discharge_station
+            self._ds_params = {
+                'max_rate_kg_h': ds.max_fill_rate * 60.0 * ds.n_stations,
+                'min_rate_kg_h': ds.min_fill_rate * 60.0 * ds.n_stations,
+                'day_limit_hour': ds.h_in_day_max if ds.h_in_day_max else 24.0,
+                'is_scheduled': ds.h_in_day_max is not None
+            }
+            logger.info(f"Storage MPC: Discharge params - max={self._ds_params['max_rate_kg_h']:.1f} kg/h, "
+                       f"schedule={'YES' if self._ds_params['is_scheduled'] else 'NO'}")
 
     def _get_aggregate_soc(self) -> Tuple[float, float]:
         """Calculate Plant-Wide State of Charge (0.0 to 1.0) and current mass."""
@@ -732,16 +724,80 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             # Tank is draining or stable - no overflow risk
             self._ctrl_state['time_to_full_h'] = 999.0
 
-        # D. Determine Zone and Action (pass dsoc_dt to handle draining case)
-        zone = self._determine_zone(soc, dsoc_dt)
+        # D. Storage Control Mode Selection
+        # =====================================================================
+        # Read control mode from config (defaults to SCHMITT_TRIGGER)
+        storage_control_mode = getattr(self._context.simulation, 'storage_control_mode', 'SCHMITT_TRIGGER')
+        if storage_control_mode is None:
+            storage_control_mode = 'SCHMITT_TRIGGER'
+        storage_control_mode = storage_control_mode.upper()
+        
+        if storage_control_mode == 'MPC':
+            # -----------------------------------------------------------------
+            # MPC-based Action Factor Calculation (Predictive)
+            # -----------------------------------------------------------------
+            # Build production forecast from wind profile (next ~60 min)
+            HORIZON = 60  # minutes
+            remaining_steps = len(wind) - step_idx
+            
+            if remaining_steps >= HORIZON:
+                wind_forecast = wind[step_idx : step_idx + HORIZON]
+            else:
+                # Pad end with last value
+                wind_slice = wind[step_idx:]
+                if len(wind_slice) > 0:
+                    pad = np.full(HORIZON - len(wind_slice), wind_slice[-1])
+                    wind_forecast = np.concatenate([wind_slice, pad])
+                else:
+                    wind_forecast = np.zeros(HORIZON)
+            
+            # Convert MW Wind -> kg/h H2 Potential
+            # Safe assumption: best-case efficiency 37.5 kWh/kg (conservative for overflow prevention)
+            prod_kwh_kg = 37.5
+            production_forecast_kg_h = (wind_forecast * 1000.0) / prod_kwh_kg
+            
+            # Build demand forecast from DischargeStation schedule
+            demand_forecast_kg_h = np.zeros(HORIZON, dtype=np.float64)
+            
+            if self._ds_params and self._ds_params['is_scheduled']:
+                # Vectorized schedule: hour-of-day based
+                time_offsets = np.arange(HORIZON, dtype=np.float64) / 60.0
+                future_times = t + time_offsets
+                hours_of_day = future_times % 24.0
+                
+                limit = self._ds_params['day_limit_hour']
+                max_r = self._ds_params['max_rate_kg_h']
+                min_r = self._ds_params['min_rate_kg_h']
+                
+                demand_forecast_kg_h = np.where(hours_of_day < limit, max_r, min_r)
+            elif self._ds_params:
+                # Stochastic mode: assume average 30% utilization
+                avg_rate = self._ds_params['max_rate_kg_h'] * 0.3
+                demand_forecast_kg_h[:] = avg_rate
+            
+            # Execute MPC Solver
+            action_factor = calculate_storage_mpc_factor(
+                current_soc=soc,
+                total_capacity_kg=self._storage_total_capacity_kg,
+                production_profile_kg_h=production_forecast_kg_h.astype(np.float64),
+                demand_profile_kg_h=demand_forecast_kg_h,
+                dt_hours=dt,
+                soc_limit_high=0.98,
+                horizon_steps=HORIZON
+            )
+            
+            # Fallback: Determine zone for critical safety (hard stop at 95%)
+            zone = self._determine_zone(soc, dsoc_dt)
+        else:
+            # -----------------------------------------------------------------
+            # SCHMITT_TRIGGER (Default) - Reactive Zone-Based Control
+            # -----------------------------------------------------------------
+            zone = self._determine_zone(soc, dsoc_dt)
+            action_factor = self._calculate_action_factor(zone, soc, dsoc_dt)
+        
+        # Update control state
         self._ctrl_state['current_zone'] = zone
         self._ctrl_state['prev_soc'] = soc
-        
-        action_factor = self._calculate_action_factor(zone, soc, dsoc_dt)
-
-        # APC DEBUG: Commented after verification
-        # if True:
-        #      logger.info(f\"APC DEBUG: Step={step_idx}, Mass={current_mass:.1f}kg, SOC={soc*100:.2f}%, Zone={zone}, Factor={action_factor:.4f}, dSOC/dt={dsoc_dt:.5f}/h\")
 
         # E. Modulate Power (Apply action factor to reduce production)
         P_soec_final = result.P_soec * action_factor
@@ -1009,10 +1065,18 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         for rec in self._recorders:
             # 2a. Get Stream
             # Handle method calls vs attributes
-            if rec.stream_attr == 'outlet' or rec.stream_attr == 'purified_gas_out': # Compressor/PSA method
+            # 2a. Get Stream
+            # Handle method calls vs attributes
+            if rec.stream_attr in ('outlet', 'purified_gas_out', 'h2_out'): # Explicit ports
                 stream = rec.component.get_output(rec.stream_attr)
             else:
                 stream = getattr(rec.component, rec.stream_attr, None)
+                if stream is None and hasattr(rec.component, 'get_output'):
+                    # Fallback: Try get_output just in case
+                    try:
+                        stream = rec.component.get_output(rec.stream_attr)
+                    except Exception:
+                        pass
 
             # 2b. Zero-Flow Optimization
             if stream is not None and stream.mass_flow_kg_h > 1e-6:
@@ -1024,17 +1088,16 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 h2o_val = stream.composition.get('H2O', 0.0) + stream.composition.get('H2O_liq', 0.0)
                 rec.h2o_frac_arr[step_idx] = h2o_val
 
-                # Direct Mole Fraction Write (using cached array)
-                # Note: stream.get_composition_arrays() triggers the JIT cache if needed
-                _, mole_fracs, _, _ = stream.get_composition_arrays()
+                # Direct Mole Fraction Write (Total Phase: Gas + Liquid)
+                # FIX: Use get_total_mole_frac to include liquid water in the denominator.
+                # This matches the summary table and avoids inflating O2 PPM in "wet" streams.
                 
-                # Unrolled tuple unpacking
-                rec.mole_arrs[0][step_idx] = mole_fracs[0] # H2
-                rec.mole_arrs[1][step_idx] = mole_fracs[1] # O2
-                rec.mole_arrs[2][step_idx] = mole_fracs[2] # N2
-                rec.mole_arrs[3][step_idx] = mole_fracs[3] # H2O
-                rec.mole_arrs[4][step_idx] = mole_fracs[4] # CH4
-                rec.mole_arrs[5][step_idx] = mole_fracs[5] # CO2
+                rec.mole_arrs[0][step_idx] = stream.get_total_mole_frac('H2')
+                rec.mole_arrs[1][step_idx] = stream.get_total_mole_frac('O2')
+                rec.mole_arrs[2][step_idx] = stream.get_total_mole_frac('N2')
+                rec.mole_arrs[3][step_idx] = stream.get_total_mole_frac('H2O') # Includes Liq + Vap
+                rec.mole_arrs[4][step_idx] = stream.get_total_mole_frac('CH4')
+                rec.mole_arrs[5][step_idx] = stream.get_total_mole_frac('CO2')
             
             # 2c. Record Extra Metrics (Independent of flow)
             for attr_name, metric_arr in rec.extra_metric_arrs:

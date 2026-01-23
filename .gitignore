@@ -20,6 +20,8 @@ vendor/
 *.zip
 .venv/
 
+backups/
+legacy/
 .h2_plant/
 
 # removed to allow tracking of LFS cache files

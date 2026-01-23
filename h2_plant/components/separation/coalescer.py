@@ -221,53 +221,18 @@ class Coalescer(Component):
         """
         Calculate gas solubility in liquid water using Henry's Law.
 
-        Applies the temperature-dependent Henry's Law constant to determine
-        equilibrium concentration of gas in the liquid phase.
-
-        Formula:
-            H(T) = H_298 * exp(C * (1/T - 1/298.15))
-            c_mol_L = P_gas_atm / H(T)
-            c_mg_kg = c_mol_L * MW * 1000^2
+        Delegates to JIT-compiled centralized implementation in henry_solubility.
 
         Args:
             temp_k (float): Temperature in Kelvin.
-            pressure_pa (float): Total pressure in Pascals.
+            pressure_pa (float): Partial pressure in Pascals.
             gas_type (str): 'H2' or 'O2'.
 
         Returns:
             float: Solubility in mg/kg water.
         """
-        if gas_type == 'H2':
-            H_298 = HenryConstants.H2_H_298_L_ATM_MOL
-            C = HenryConstants.H2_DELTA_H_R_K
-            MW = HenryConstants.H2_MOLAR_MASS_KG_MOL
-        elif gas_type == 'O2':
-            H_298 = HenryConstants.O2_H_298_L_ATM_MOL
-            C = HenryConstants.O2_DELTA_H_R_K
-            MW = HenryConstants.O2_MOLAR_MASS_KG_MOL
-        else:
-            return 0.0
-            
-        T0 = 298.15
-        if temp_k <= 0: return 0.0
-        
-        # Calculate temperature-corrected Henry constant
-        # Justification: Solubility varies significantly with temperature
-        H_T = H_298 * math.exp(C * (1.0/temp_k - 1.0/T0))
-        
-        # Calculate partial pressure in atm
-        # Assumption: Gas phase is dominated by the primary species (y ~ 1.0)
-        p_atm = pressure_pa / 101325.0
-        
-        # Calculate molar concentration (mol/L)
-        c_mol_L = p_atm / H_T
-        
-        # Convert to mass concentration (mg/kg)
-        # Assumes water density ~1 kg/L
-        mw_g_mol = MW * 1000.0
-        c_mg_L = c_mol_L * mw_g_mol * 1000.0
-        
-        return c_mg_L # mg/kg water assuming rho=1
+        from h2_plant.utils.henry_solubility import calculate_dissolved_gas_mg_kg
+        return calculate_dissolved_gas_mg_kg(temp_k, pressure_pa, gas_type)
 
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """

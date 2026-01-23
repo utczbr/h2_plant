@@ -373,26 +373,30 @@ class Interchanger(Component):
                 w_h2o_vap_global = psi_gas * w_w_gas
                 w_h2o_liq_global = psi_liq
                 
+                # --- REPLACEMENT LOGIC FOR COMPOSITION RECONSTRUCTION ---
+
+                # 1. Preserve Inert Mass Fractions Exactly (Fixes H2 Creation)
                 new_composition = {}
-                w_h2o_total = w_h2o_vap_global + w_h2o_liq_global
-                
-                # Calculate sum of inerts in original composition
-                sum_inerts = sum(mf for s, mf in comp_copy.items() if s not in ('H2O', 'H2O_liq'))
-                
-                # Robust Normalization: Scale inerts to fill the space left by H2O
-                # This ensures Sum = 1.0 even if H2O mass fraction shifted slightly in Flash
-                if sum_inerts > 0:
-                    scale_factor = (1.0 - w_h2o_total) / sum_inerts
-                else:
-                    scale_factor = 1.0
-                    
                 for s, mf in comp_copy.items():
                     if s not in ('H2O', 'H2O_liq'):
-                        new_composition[s] = mf * scale_factor
+                        new_composition[s] = mf 
+
+                # 2. Conserve Total Water Mass
+                w_h2o_total_input = comp_copy.get('H2O', 0.0) + comp_copy.get('H2O_liq', 0.0)
+
+                # 3. Distribute Water based on Flash Result
+                calc_total_water_split = w_h2o_vap_global + w_h2o_liq_global
                 
-                # Set H2O values
-                new_composition['H2O'] = w_h2o_vap_global
-                new_composition['H2O_liq'] = w_h2o_liq_global
+                vap_ratio = 1.0 # Default if no water or issue
+                if calc_total_water_split > 1e-12:
+                    vap_ratio = w_h2o_vap_global / calc_total_water_split
+                else:
+                     # Fallback phase check
+                     if final_vap_frac < 0.01: vap_ratio = 0.0
+                
+                # Apply strictly to input water mass
+                new_composition['H2O'] = w_h2o_total_input * vap_ratio
+                new_composition['H2O_liq'] = w_h2o_total_input * (1.0 - vap_ratio)
                 
                 break
                 
@@ -407,22 +411,23 @@ class Interchanger(Component):
         elif final_vap_frac <= 0.001: output_phase = 'liquid'
         else: output_phase = 'mixed'
 
-        # --- ROBUST NORMALIZATION (Ensure sum = 1.0) ---
-        # This handles both converged and fallback cases.
-        sum_fracs = sum(new_composition.values())
-        if abs(sum_fracs - 1.0) > 1e-6 and sum_fracs > 0:
-            inv_sum = 1.0 / sum_fracs
-            new_composition = {k: v * inv_sum for k, v in new_composition.items()}
+
 
         # --- 7. Final Output Streams ---
         
         # Hot Out (Cooled)
+        # Check if we dropped 'extra' (entrained liquid) from the input
+        out_extra = {}
+        if self.hot_stream and self.hot_stream.extra:
+             out_extra = self.hot_stream.extra.copy()
+
         self.hot_out = Stream(
             mass_flow_kg_h=m_h_kg_h,
             temperature_k=T_out_final,
             pressure_pa=P_h_in,
             composition=new_composition,
-            phase=output_phase
+            phase=output_phase,
+            extra=out_extra
         )
 
         # Cold Out (Heated) - Calculate T_c_out

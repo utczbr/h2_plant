@@ -31,6 +31,9 @@ soec_cluster:
   ramp_step_mw: 0.24
   degradation_rate_per_1000h: 0.002 # Example
   steam_input_ratio_kg_per_kg_h2: 10.5 # 4032 kg/h steam for 384 kg/h H2
+  
+  # Gas Phase Impurities (Cathode Exhaust)
+  o2_crossover_ppm_molar: 200.0  # O2 crossover through electrolyte (molar ppm)
 
 hhv_h2_kwh_kg: 39.4
 lhv_h2_kwh_kg: 33.3

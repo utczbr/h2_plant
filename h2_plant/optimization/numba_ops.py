@@ -52,6 +52,64 @@ GAS_MW_KG_MOL = GAS_MW * 1e-3
 LIQ_CP_COEFFS = np.array([75.3, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
 LIQ_MW = 18.015
 
+# =============================================================================
+# Henry's Law Constants (Hardcoded for JIT - from HenryConstants)
+# Formula: H(T) = H_298 * exp(C * (1/T - 1/298.15))
+# =============================================================================
+HENRY_H2_H298 = 1300.0       # L·atm/mol at 298.15K
+HENRY_H2_C = 500.0           # K (temperature coefficient = -ΔH_sol/R)
+HENRY_H2_MW = 0.002016       # kg/mol
+
+HENRY_O2_H298 = 770.0        # L·atm/mol at 298.15K
+HENRY_O2_C = 1700.0          # K
+HENRY_O2_MW = 0.031998       # kg/mol
+
+
+@njit(cache=True)
+def calculate_dissolved_gas_mg_kg_jit(
+    temperature_k: float,
+    gas_partial_pressure_pa: float,
+    species_H298: float,
+    species_C: float,
+    species_MW_kg_mol: float
+) -> float:
+    """
+    JIT-compiled Henry's Law calculation for dissolved gas concentration.
+    
+    Physical Basis:
+        Henry's Law: C = P_gas / H(T)
+        Temperature dependence: H(T) = H_298 * exp(C * (1/T - 1/298.15))
+    
+    Args:
+        temperature_k: Liquid temperature in Kelvin.
+        gas_partial_pressure_pa: Partial pressure of gas species (Pa).
+        species_H298: Henry constant at 298.15K (L·atm/mol).
+        species_C: Temperature coefficient -ΔH_sol/R (K).
+        species_MW_kg_mol: Molar mass of gas species (kg/mol).
+    
+    Returns:
+        Dissolved gas concentration in mg per kg of water.
+    """
+    if temperature_k <= 0.0 or gas_partial_pressure_pa <= 0.0:
+        return 0.0
+    
+    T0 = 298.15
+    
+    # Temperature-corrected Henry constant (L·atm/mol)
+    H_T = species_H298 * np.exp(species_C * (1.0 / temperature_k - 1.0 / T0))
+    
+    # Convert pressure to atm
+    p_atm = gas_partial_pressure_pa / 101325.0
+    
+    # Molar concentration (mol/L)
+    c_mol_L = p_atm / H_T
+    
+    # Convert to mass concentration (mg/kg water, assuming ρ_water ≈ 1 kg/L)
+    mw_g_mol = species_MW_kg_mol * 1000.0  # kg/mol -> g/mol
+    c_mg_kg = c_mol_L * mw_g_mol * 1000.0  # mol/L * g/mol * 1000 mg/g
+    
+    return c_mg_kg
+
 
 @njit(cache=True)
 def fast_composition_properties(mass_fracs: np.ndarray) -> Tuple[np.ndarray, float, float]:
@@ -388,6 +446,110 @@ def simulate_filling_timestep(
     stored = production - overflow
 
     return stored, overflow
+
+
+# =============================================================================
+# STORAGE MPC (Model Predictive Control)
+# =============================================================================
+
+@njit(cache=True)
+def calculate_storage_mpc_factor(
+    current_soc: float,
+    total_capacity_kg: float,
+    production_profile_kg_h: np.ndarray,
+    demand_profile_kg_h: np.ndarray,
+    dt_hours: float,
+    soc_limit_high: float = 0.98,
+    horizon_steps: int = 60
+) -> float:
+    """
+    Simplified MPC: Calculates action factor to prevent storage overflow.
+    
+    Robustness Logic:
+    - Tracks mass balance forward in time.
+    - Clamps internal SOC state to 1.0 to prevent numerical overflow.
+    - Accumulates 'spilled' mass into violation metric to ensure controller
+      cuts production sufficiently to avoid the spill.
+    
+    Args:
+        current_soc: Starting State of Charge (0.0 - 1.0).
+        total_capacity_kg: Total storage mass capacity (kg).
+        production_profile_kg_h: Forecasted max production (kg/h) array.
+        demand_profile_kg_h: Forecasted demand (kg/h) array.
+        dt_hours: Timestep duration (h).
+        soc_limit_high: Target max SOC (default 0.98).
+        horizon_steps: Lookahead steps (default 60).
+    
+    Returns:
+        float: Optimal action factor (0.0 to 1.0).
+    """
+    if total_capacity_kg <= 1e-6:
+        return 0.0
+
+    # Simulation State
+    sim_soc = current_soc
+    max_violation_kg = 0.0
+    
+    # Accumulators for proportional reduction
+    cum_potential_production_kg = 0.0
+    
+    # Physics constraints
+    steps = min(len(production_profile_kg_h), horizon_steps)
+    demand_len = len(demand_profile_kg_h)
+    
+    for i in range(steps):
+        # 1. Get Flows
+        prod = production_profile_kg_h[i]
+        dem = demand_profile_kg_h[i] if i < demand_len else 0.0
+        
+        # Track total potential production (denominator for reduction ratio)
+        step_prod_kg = prod * dt_hours
+        cum_potential_production_kg += step_prod_kg
+        
+        # 2. Update Mass Balance
+        delta_mass = (prod - dem) * dt_hours
+        delta_soc = delta_mass / total_capacity_kg
+        sim_soc += delta_soc
+        
+        # 3. Robustness: Handle Overflow
+        # If SOC > 1.0, we clamp it but record the excess as a violation.
+        current_excess_soc = 0.0
+        if sim_soc > 1.0:
+            current_excess_soc = sim_soc - 1.0
+            sim_soc = 1.0  # Clamp state to physical reality
+            
+        # 4. Calculate Violation
+        # Violation = (Mass above Limit) + (Mass theoretically spilled)
+        limit_violation_soc = 0.0
+        if sim_soc > soc_limit_high:
+            limit_violation_soc = sim_soc - soc_limit_high
+            
+        total_violation_soc = limit_violation_soc + current_excess_soc
+        total_violation_kg = total_violation_soc * total_capacity_kg
+        
+        # We need to cut enough to cover the WORST violation in the horizon
+        if total_violation_kg > max_violation_kg:
+            max_violation_kg = total_violation_kg
+
+    # 5. Calculate Factor
+    if max_violation_kg <= 1e-6:
+        return 1.0
+        
+    if cum_potential_production_kg <= 1e-6:
+        return 0.0  # Violation predicted but no production to cut? Force stop.
+
+    # Reduction Ratio: "I need to remove X kg. I have Y kg total production to cut from."
+    reduction_ratio = max_violation_kg / cum_potential_production_kg
+    
+    factor = 1.0 - reduction_ratio
+    
+    # Clamp result
+    if factor < 0.0:
+        return 0.0
+    if factor > 1.0:
+        return 1.0
+    
+    return factor
 
 
 # =============================================================================

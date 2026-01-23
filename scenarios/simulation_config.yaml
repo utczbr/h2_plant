@@ -11,3 +11,9 @@ wind_data_file: "../h2_plant/data/producao_horaria_2_turbinas.csv"
 # - REFERENCE_HYBRID: Hybrid SOEC/PEM with price arbitrage (default)
 # - ECONOMIC_SPOT: Economic spot purchase for non-RFNBO H2 production
 dispatch_strategy: ECONOMIC_SPOT  # or SOEC_ONLY, REFERENCE_HYBRID
+
+# Storage Control Mode Selection
+# Options: SCHMITT_TRIGGER (default), MPC
+# - SCHMITT_TRIGGER: Reactive zone-based control with hysteresis
+# - MPC: Model Predictive Control with 60-min demand forecasting
+storage_control_mode: SCHMITT_TRIGGER

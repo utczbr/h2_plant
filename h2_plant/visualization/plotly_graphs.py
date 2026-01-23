@@ -3648,46 +3648,134 @@ def plot_process_train_profile(df: pd.DataFrame, **kwargs) -> go.Figure:
         MW_O2 = 32.0
         
         for cid in components:
-            # Find columns with fallback patterns
-            temp_col = next((c for c in df.columns if c == f'{cid}_outlet_temp_c'), None)
-            press_col = next((c for c in df.columns if c == f'{cid}_outlet_pressure_bar'), None)
-            flow_col = next((c for c in df.columns if c == f'{cid}_outlet_mass_flow_kg_h'), None)
+            # 1. IDENTIFY COLUMN NAMES FIRST
+            flow_col = next((c for c in df.columns if c in [
+                f'{cid}_outlet_mass_flow_kg_h', f'{cid}_mass_flow_kg_h'
+            ]), None)
             
-            # Use mass fraction for H2O (outlet_h2o_frac works, outlet_H2O_molf often zero)
-            h2o_mass_col = next((c for c in df.columns if c == f'{cid}_outlet_h2o_frac'), None)
+            temp_col = next((c for c in df.columns if c in [
+                f'{cid}_outlet_temp_c', f'{cid}_temperature_c', f'{cid}_temp_c', f'{cid}_T_c'
+            ]), None)
             
-            # Impurity: O2 in H2 trains, H2 in O2 trains (still use mole fraction columns)
-            if stream_type == 'H2':
-                impurity_col = next((c for c in df.columns if c == f'{cid}_outlet_O2_molf'), None)
+            # Pressure
+            press_col = next((c for c in df.columns if c in [
+                f'{cid}_outlet_pressure_bar', f'{cid}_pressure_bar', f'{cid}_P_bar'
+            ]), None)
+            
+            # 2. FILTER FOR ACTIVE FLOW (Issue 3: Representative Averaging)
+            # Create a view of the dataframe where flow > cutoff
+            if flow_col and flow_col in df.columns:
+                df_active = df[df[flow_col] > 1e-6]
+                if df_active.empty:
+                    # No active flow, fall back to full DF but expect zeros
+                    df_active = df 
             else:
-                impurity_col = next((c for c in df.columns if c == f'{cid}_outlet_H2_molf'), None)
+                df_active = df
             
-            # Only include if at least temp or flow exists
-            if temp_col or flow_col:
-                data['components'].append(cid)
-                data['temp'].append(df[temp_col].mean() if temp_col else np.nan)
-                data['press'].append(df[press_col].mean() if press_col else np.nan)
-                data['flow'].append(df[flow_col].mean() if flow_col else np.nan)
+            # 3. CALCULATE AVERAGES FROM ACTIVE DATA
+            flow_val = df[flow_col].mean() if flow_col else 0.0 # Flow always mean of TOTAL time (production)
+            
+            temp_val = 0.0
+            if temp_col:
+                temp_val = df_active[temp_col].mean()
+            else:
+                # Kelvin fallback
+                temp_k_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_temp_k', f'{cid}_temperature_k', f'{cid}_temp_k'
+                ]), None)
+                if temp_k_col:
+                    temp_val = df_active[temp_k_col].mean() - 273.15
+            
+            press_val = 0.0
+            if press_col:
+                press_val = df_active[press_col].mean()
+            else:
+                 # Pa fallback
+                press_pa_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_pressure_pa', f'{cid}_pressure_pa'
+                ]), None)
+                if press_pa_col:
+                    press_val = df_active[press_pa_col].mean() / 1e5
+            
+            # --- IMPURITY CALCULATIONS (Issue 2/4) ---
+            impurity_val = np.nan
+            
+            if stream_type == 'H2':
+                # O2 Impurity
+                ppm_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_o2_ppm_mol', f'{cid}_outlet_O2_ppm_mol', f'{cid}_o2_ppm'
+                ]), None)
+                molf_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_O2_molf', f'{cid}_outlet_o2_molf', f'{cid}_y_O2', f'{cid}_y_o2'
+                ]), None)
                 
-                # Convert mole fraction to ppm (multiply by 1e6)
-                impurity_val = df[impurity_col].mean() * 1e6 if impurity_col else np.nan
-                data['impurity'].append(impurity_val)
+                if ppm_col:
+                    impurity_val = df_active[ppm_col].mean()
+                elif molf_col:
+                    impurity_val = df_active[molf_col].mean() * 1e6
+                else: 
+                     # Mass fraction fallback (legacy)
+                    mass_col = next((c for c in df.columns if c in [
+                        f'{cid}_mass_fraction_o2', f'{cid}_w_o2'
+                    ]), None)
+                    if mass_col:
+                        impurity_val = df_active[mass_col].mean() * (MW_H2/MW_O2) * 1e6 # Approx
+            else:
+                # H2 Impurity
+                ppm_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_h2_ppm_mol', f'{cid}_outlet_H2_ppm_mol', f'{cid}_h2_ppm'
+                ]), None)
+                molf_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_H2_molf', f'{cid}_outlet_h2_molf', f'{cid}_y_H2', f'{cid}_y_h2'
+                ]), None)
                 
-                # H2O: Convert mass fraction to mole fraction, then to PPM
-                # y_H2O = (w_H2O / MW_H2O) / ((w_H2O / MW_H2O) + ((1 - w_H2O) / MW_carrier))
-                if h2o_mass_col:
-                    w_h2o = df[h2o_mass_col].mean()
-                    MW_carrier = MW_H2 if stream_type == 'H2' else MW_O2
-                    if w_h2o > 0 and w_h2o < 1:
-                        moles_h2o = w_h2o / MW_H2O
-                        moles_carrier = (1 - w_h2o) / MW_carrier
-                        y_h2o = moles_h2o / (moles_h2o + moles_carrier)
-                        h2o_ppm = y_h2o * 1e6
-                    else:
-                        h2o_ppm = 0.0 if w_h2o <= 0 else 1e6  # 0% or 100%
-                    data['h2o_ppm'].append(h2o_ppm)
+                if ppm_col:
+                    impurity_val = df_active[ppm_col].mean()
+                elif molf_col:
+                    impurity_val = df_active[molf_col].mean() * 1e6
+
+            # --- H2O PPM (Issue 2 Fix) ---
+            h2o_ppm = 0.0
+            
+            # Priority: Direct Mole Fraction Column (New Standard)
+            h2o_molf_col = next((c for c in df.columns if c in [
+                f'{cid}_outlet_H2O_molf', f'{cid}_outlet_h2o_molf', f'{cid}_y_H2O'
+            ]), None)
+            
+            if h2o_molf_col:
+                # FIX: Filter strictly positive values to represent "Wet" intervals
+                # This prevents zero-flow periods (where mole_frac=0) from dragging average down
+                valid_vals = df_active[h2o_molf_col][df_active[h2o_molf_col] > 1e-9]
+                if not valid_vals.empty:
+                    h2o_ppm = valid_vals.mean() * 1e6
                 else:
-                    data['h2o_ppm'].append(np.nan)
+                    h2o_ppm = df_active[h2o_molf_col].mean() * 1e6
+            else:
+                # Fallback: Estimate from mass fraction (Simplified)
+                h2o_mass_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_h2o_frac', f'{cid}_mass_fraction_h2o'
+                ]), None)
+                
+                if h2o_mass_col:
+                     w_h2o = df_active[h2o_mass_col].mean()
+                     # If very small, use ppm approx
+                     if w_h2o < 1.0:
+                         MW_c = MW_H2 if stream_type == 'H2' else MW_O2
+                         h2o_ppm = (w_h2o / MW_H2O) / ((1-w_h2o)/MW_c + w_h2o/MW_H2O) * 1e6
+                     else:
+                         h2o_ppm = 1e6
+
+            # If values exist (even if flow is 0, we might have config data, but usually we skip)
+            # Logic: If we have a valid column for T or Flow, we include point.
+            if temp_col or flow_col:
+                if np.isnan(impurity_val): impurity_val = 0.0
+                
+                data['components'].append(cid)
+                data['temp'].append(temp_val)
+                data['press'].append(press_val)
+                data['flow'].append(flow_val)
+                data['impurity'].append(impurity_val)
+                data['h2o_ppm'].append(h2o_ppm)
         
         return data
     

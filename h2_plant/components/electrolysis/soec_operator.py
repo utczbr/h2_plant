@@ -135,6 +135,9 @@ class SOECOperator(Component):
 
             # UPDATE: Default pressure to 1.0 bar (Legacy Alignment), override constant
             self.out_pressure_pa = getattr(config, 'out_pressure_pa', 100000.0)
+            
+            # O2 Crossover: Configurable impurity level (default 200 ppm molar)
+            self.o2_crossover_ppm_molar = getattr(config, 'o2_crossover_ppm_molar', 200.0)
 
             self.config = config.dict()
             self.physics_config = {}
@@ -164,6 +167,12 @@ class SOECOperator(Component):
             
             # Flow Control: Target steam utilization for setpoint calculation
             self.target_steam_utilization = config.get("target_steam_utilization", 0.80)
+            
+            # O2 Crossover: Configurable impurity level (default 200 ppm molar)
+            self.o2_crossover_ppm_molar = config.get("o2_crossover_ppm_molar", 200.0)
+
+            # Entrained Water: Liquid mist carryover fraction (default 0.0)
+            self.entrained_water_fraction = config.get("entrained_water_fraction", 0.0)
 
         # Lifecycle parameter for degradation reset (hours)
         if isinstance(config, dict):
@@ -595,9 +604,8 @@ class SOECOperator(Component):
             # === CATHODE EXHAUST (Wet Hydrogen) ===
             # Composition: H2 (Produced) + H2O (Unreacted) + O2 (Crossover leak)
 
-            # 1. Determine Mass of Crossover O2
-            # Assumption: Y_O2_IN_H2 (Molar) = 0.0002 (200 ppm) relative to H2
-            y_o2_molar = 0.0002
+            # Assumption: Y_O2_IN_H2 (Molar) = configurable (default 200 ppm) relative to H2
+            y_o2_molar = self.o2_crossover_ppm_molar / 1e6  # Convert ppm to fraction
             mw_h2 = 2.016
             mw_o2 = 32.00
 
@@ -617,12 +625,28 @@ class SOECOperator(Component):
                 # Default safety state (Steam purge)
                 w_h2, w_h2o, w_o2 = 0.0, 1.0, 0.0
 
+            # 4. Handle Entrained Liquid Water (Mist)
+            # This is "extra" mass carried by the stream but not part of the gas phase thermodynamics
+            extra_attributes = {}
+            if self.entrained_water_fraction > 0:
+                 # entrained_fraction is Fraction of TOTAL stream that is liquid
+                 # m_liq / (m_gas + m_liq) = frac
+                 # m_liq = m_gas * frac / (1 - frac)
+                 
+                 # Here we treat internal variables (h2_flow + steam_flow + o2_flow) as GAS PHASE
+                 m_gas_total = total_mass_flow
+                 if m_gas_total > 0 and self.entrained_water_fraction < 1.0:
+                     m_liq_total = m_gas_total * self.entrained_water_fraction / (1.0 - self.entrained_water_fraction)
+                     # Store as kg/s for compatibility with other components (e.g. Separator)
+                     extra_attributes['m_dot_H2O_liq_accomp_kg_s'] = m_liq_total / 3600.0
+
             return Stream(
                 mass_flow_kg_h=total_mass_flow,
                 temperature_k=425.15,  # 152 °C (exit temp per legacy design)
                 pressure_pa=self.out_pressure_pa,
                 composition={'H2': w_h2, 'H2O': w_h2o, 'O2': w_o2},
-                phase='gas'
+                phase='gas',
+                extra=extra_attributes
             )
 
         elif port_name == 'o2_out':
@@ -730,11 +754,45 @@ class SOECOperator(Component):
         Returns:
             Dict[str, Any]: Complete state dictionary for monitoring and persistence.
         """
+        # Calculate outlet properties dynamically for logging
+        # This ensures graph visibility without side effects
+        h2_out_stream = self.get_output('h2_out')
+        
+        # Calculate O2 PPM (Wet Molar Basis) from actual stream composition
+        # This reflects the TRUE molar concentration in the stream (diluted by steam)
+        o2_ppm_wet = 0.0
+        if h2_out_stream.mass_flow_kg_h > 0:
+            # Get mass fractions from stream
+            w_h2 = h2_out_stream.composition.get('H2', 0.0)
+            w_o2 = h2_out_stream.composition.get('O2', 0.0)
+            w_h2o = h2_out_stream.composition.get('H2O', 0.0)
+            
+            # Calculate moles per unit mass (ni = wi / MWi)
+            MW_H2 = 2.016
+            MW_O2 = 32.0
+            MW_H2O = 18.015
+            
+            n_h2 = w_h2 / MW_H2 if w_h2 > 0 else 0.0
+            n_o2 = w_o2 / MW_O2 if w_o2 > 0 else 0.0
+            n_h2o = w_h2o / MW_H2O if w_h2o > 0 else 0.0
+            
+            total_moles = n_h2 + n_o2 + n_h2o
+            if total_moles > 1e-12:
+                y_o2 = n_o2 / total_moles
+                o2_ppm_wet = y_o2 * 1e6
+        
         return {
             **super().get_state(),
             **self.get_status(),
             # Expose unreacted steam for external logging (was previously steam_out)
             'last_water_output_kg': getattr(self, 'last_water_output_kg', 0.0),
             'required_flow_kg_h': self.required_flow_kg_h,
-            'target_steam_utilization': self.target_steam_utilization
+            'target_steam_utilization': self.target_steam_utilization,
+            
+            # EXPORT OUTLET PROPERTIES FOR GRAPHING
+            'outlet_temp_c': h2_out_stream.temperature_k - 273.15,
+            'outlet_pressure_bar': h2_out_stream.pressure_pa / 1e5,
+            'outlet_mass_flow_kg_h': h2_out_stream.mass_flow_kg_h,
+            'outlet_o2_ppm_mol': o2_ppm_wet,
+            'outlet_h2o_frac': h2_out_stream.composition.get('H2O', 0.0)
         }

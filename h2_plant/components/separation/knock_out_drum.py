@@ -189,52 +189,18 @@ class KnockOutDrum(Component):
         """
         Calculate gas solubility in liquid water using Henry's Law.
 
-        Determines equilibrium concentration of dissolved gas in the liquid drain,
-        which represents a product loss that must be accounted for in mass balance.
-
-        Formula:
-            H(T) = H_298 * exp(C * (1/T - 1/298.15))
-            c_mol_L = P_gas_atm / H(T)
-            c_mg_kg = c_mol_L * MW * 1000^2
+        Delegates to JIT-compiled centralized implementation in henry_solubility.
 
         Args:
             temp_k (float): Temperature in Kelvin.
-            pressure_pa (float): Total pressure in Pascals.
+            pressure_pa (float): Partial pressure in Pascals.
             gas_type (str): 'H2' or 'O2'.
 
         Returns:
             float: Solubility in mg/kg water.
         """
-        if gas_type == 'H2':
-            H_298 = HenryConstants.H2_H_298_L_ATM_MOL
-            C = HenryConstants.H2_DELTA_H_R_K
-            MW = HenryConstants.H2_MOLAR_MASS_KG_MOL
-        elif gas_type == 'O2':
-            H_298 = HenryConstants.O2_H_298_L_ATM_MOL
-            C = HenryConstants.O2_DELTA_H_R_K
-            MW = HenryConstants.O2_MOLAR_MASS_KG_MOL
-        else:
-            # Fallback/No solubility model for this species
-            return 0.0
-            
-        T0 = 298.15
-        if temp_k <= 0:
-            return 0.0
-        
-        # Temperature-corrected Henry constant
-        H_T = H_298 * math.exp(C * (1.0/temp_k - 1.0/T0))
-        
-        # Partial pressure in atm (assume gas phase is dominated by species)
-        p_atm = pressure_pa / 101325.0
-        
-        # Molar concentration (mol/L)
-        c_mol_L = p_atm / H_T
-        
-        # Convert to mass concentration (mg/kg, assuming water density ~1 kg/L)
-        mw_g_mol = MW * 1000.0
-        c_mg_L = c_mol_L * mw_g_mol * 1000.0
-        
-        return c_mg_L
+        from h2_plant.utils.henry_solubility import calculate_dissolved_gas_mg_kg
+        return calculate_dissolved_gas_mg_kg(temp_k, pressure_pa, gas_type)
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:
         """

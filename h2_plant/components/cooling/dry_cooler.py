@@ -557,11 +557,7 @@ class DryCooler(Component):
         if 'm_dot_H2O_liq_accomp_kg_s' in out_extra:
             del out_extra['m_dot_H2O_liq_accomp_kg_s']
 
-        # --- ROBUST NORMALIZATION (Ensure sum = 1.0) ---
-        sum_fracs = sum(outlet_comp.values())
-        if abs(sum_fracs - 1.0) > 1e-6 and sum_fracs > 0:
-            inv_sum = 1.0 / sum_fracs
-            outlet_comp = {k: v * inv_sum for k, v in outlet_comp.items()}
+
 
         self.outlet_stream = Stream(
             mass_flow_kg_h=m_total_new,

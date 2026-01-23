@@ -309,6 +309,8 @@ class HydrogenMultiCyclone(Component):
         """
         Calculate gas solubility in liquid water using Henry's Law.
         
+        Delegates to JIT-compiled centralized implementation in henry_solubility.
+        
         Args:
             temp_k: Temperature in Kelvin.
             pressure_pa: Partial pressure of gas in Pascals.
@@ -316,28 +318,8 @@ class HydrogenMultiCyclone(Component):
         Returns:
             float: Solubility in mg/kg water.
         """
-        import math
-        from h2_plant.core.constants import HenryConstants
-        
-        if self.gas_species == 'H2':
-            H_298 = HenryConstants.H2_H_298_L_ATM_MOL
-            C = HenryConstants.H2_DELTA_H_R_K
-            MW = HenryConstants.H2_MOLAR_MASS_KG_MOL
-        elif self.gas_species == 'O2':
-            H_298 = HenryConstants.O2_H_298_L_ATM_MOL
-            C = HenryConstants.O2_DELTA_H_R_K
-            MW = HenryConstants.O2_MOLAR_MASS_KG_MOL
-        else:
-            return 0.0
-        
-        T0 = 298.15
-        if temp_k <= 0 or pressure_pa <= 0:
-            return 0.0
-        
-        H_T = H_298 * math.exp(C * (1.0 / temp_k - 1.0 / T0))
-        p_atm = pressure_pa / 101325.0
-        c_mol_L = p_atm / H_T
-        return c_mol_L * (MW * 1000.0) * 1000.0
+        from h2_plant.utils.henry_solubility import calculate_dissolved_gas_mg_kg
+        return calculate_dissolved_gas_mg_kg(temp_k, pressure_pa, self.gas_species)
 
     def step(self, t: float) -> None:
         """
