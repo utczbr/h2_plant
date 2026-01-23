@@ -165,7 +165,8 @@ def run_with_dispatch_strategy(
     
     # Use chunked history for simulations > 7 days (memory optimization)
     # Threshold: 7 days × 24 hours × 60 minutes = 10,080 steps
-    use_chunked_history = total_steps > 10_080
+    # Always use chunked history for consistent parquet output (enables graph compatibility)
+    use_chunked_history = True  # Previously: total_steps > 10_080
     engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history)
 
     # Run simulation

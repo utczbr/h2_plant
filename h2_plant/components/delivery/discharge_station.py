@@ -327,7 +327,7 @@ class DischargeStation(Component):
             
         # 4. Set Output Buffers
         self._demand_signal = total_demand_kg / self.dt if self.dt > 0 else 0.0
-        
+     
         self._h2_out_stream = Stream(
             mass_flow_kg_h=total_received_mass / self.dt if self.dt > 0 else 0.0,
             temperature_k=293.15,
@@ -337,6 +337,7 @@ class DischargeStation(Component):
         )
         
         self._h2_in_stream = None
+
 
     def get_output(self, port_name: str = 'demand_signal') -> Optional[Stream]:
         if port_name == 'demand_signal':

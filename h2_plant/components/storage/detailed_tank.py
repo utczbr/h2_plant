@@ -231,8 +231,6 @@ class DetailedTankArray(Component):
             val = stream.mass_flow_kg_h if stream else 0.0
             if val is not None:
                 self._demand_signal_rate = float(val)
-                # DEBUG: Trace signal reception
-                # logger.info(f"DetailedTankArray({self.component_id}) RECEIVED demand_signal: {self._demand_signal_rate:.2f} kg/h")
             else:
                 self._demand_signal_rate = 0.0
             return 0.0 # Signals are not "consumed" resources
@@ -266,6 +264,10 @@ class DetailedTankArray(Component):
             # Apply discharge immediately when demand signal is received
             discharge_mass, avg_pressure = self._distribute_emptying(requested_mass, apply=True)
             self._last_discharge_pressure_pa = avg_pressure
+            
+        # DEBUG: Trace demand fulfillment
+        total_mass = sum(t.mass_kg for t in self.tanks)
+        logger.debug(f"[DEBUG] DetailedTankArray({self.component_id}) step(t={t:.4f}h): demand_rate={self._demand_signal_rate:.2f} kg/h, h2_in_rate={self._h2_in_rate:.2f} kg/h, discharge={discharge_mass:.4f} kg, inventory={total_mass:.1f} kg")
             
         # 3. Distribute Incoming Hydrogen (Filling Second)
         if self._h2_in_rate > 0:

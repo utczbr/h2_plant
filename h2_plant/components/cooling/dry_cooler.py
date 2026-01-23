@@ -464,18 +464,27 @@ class DryCooler(Component):
             K_value = P_sat / P_out
             
             # 4. Solve Flash (Rachford-Rice optimized for single condensable)
-            # Returns beta (Vapor Fraction V/F)
+            # Returns beta (Vapor Fraction V/F) - fraction of TOTAL FEED that is vapor
             beta = numba_ops.solve_rachford_rice_single_condensable(z_H2O, K_value)
             
-            # 5. Convert back to Mass
-            # 5. Convert back to Mass
-            n_dot_vapor = n_dot_total * beta
-            n_dot_liquid = n_dot_total * (1.0 - beta)
+            # Vapor phase H2O mole fraction at equilibrium
+            if K_value < 1.0 and beta < 1.0:
+                # Below saturation (partial condensation)
+                # y_H2O = K_value (in limit of single condensable with pure liquid)
+                y_H2O_vapor = K_value
+            else:
+                # No condensation (all vapor)
+                y_H2O_vapor = z_H2O
             
-            # In single condensable assumption, liquid is pure water
-            # m_H2O_liq_out represents TOTAL liquid water at equilibrium
-            m_H2O_liq_out = n_dot_liquid * MW_H2O
-            m_H2O_vapor_out = m_H2O_total_in - m_H2O_liq_out
+            # Moles of vapor phase (includes all inerts + some H2O vapor)
+            n_vapor = n_dot_total * beta
+            n_H2O_vapor = n_vapor * y_H2O_vapor
+            
+            # Mass of H2O in vapor
+            m_H2O_vapor_out = n_H2O_vapor * MW_H2O
+            
+            # Mass of H2O condensed (by difference to conserve total H2O mass)
+            m_H2O_liq_out = m_H2O_total_in - m_H2O_vapor_out
                  
             # Clamp for physics safety
             m_H2O_liq_out = max(0.0, min(m_H2O_total_in, m_H2O_liq_out))
@@ -547,6 +556,12 @@ class DryCooler(Component):
         out_extra = self.inlet_stream.extra.copy() if self.inlet_stream.extra else {}
         if 'm_dot_H2O_liq_accomp_kg_s' in out_extra:
             del out_extra['m_dot_H2O_liq_accomp_kg_s']
+
+        # --- ROBUST NORMALIZATION (Ensure sum = 1.0) ---
+        sum_fracs = sum(outlet_comp.values())
+        if abs(sum_fracs - 1.0) > 1e-6 and sum_fracs > 0:
+            inv_sum = 1.0 / sum_fracs
+            outlet_comp = {k: v * inv_sum for k, v in outlet_comp.items()}
 
         self.outlet_stream = Stream(
             mass_flow_kg_h=m_total_new,

@@ -64,7 +64,7 @@ DEFAULT_RAMP_STEP_MW = 0.24
 # Empirical degradation curves based on accelerated aging tests.
 # Efficiency increases (worsens) and capacity decreases over operating years.
 DEG_YEARS = np.array([0, 1, 2, 3, 3.5, 4, 5, 5.5, 6, 7])
-DEG_EFFICIENCY_KWH_KG = np.array([37.5, 37.5, 37.5, 37.5, 37.5, 38, 39, 40, 41, 42])
+DEG_EFFICIENCY_KWH_KG = np.array([37.54, 37.54, 37.54, 37.54, 37.54, 38.0, 39.0, 40.0, 41.0, 42.0])
 DEG_CAPACITY_FACTOR = np.array([100, 100, 100, 100, 100, 100, 100, 90, 85, 75])
 
 
@@ -213,6 +213,47 @@ class SOECOperator(Component):
         """
         return np.interp(x, xp, fp)
 
+    def _fit_efficiency_curve(self) -> None:
+        """
+        Fit cubic spline to the SEC (Specific Energy Consumption) vs Load curve.
+        
+        Uses scipy.interpolate.CubicSpline for one-time fitting during initialization.
+        Coefficients are extracted into Numba-compatible arrays for fast evaluation
+        in the simulation hot path.
+        
+        The curve represents Beginning of Life (BOL) performance. Degradation is
+        applied as a multiplier during production calculation.
+        
+        Data Source:
+            Empirical SEC curve from SOEC characterization (image_5533ac.png).
+            Higher SEC at low load reflects the fixed losses and reduced Faradaic
+            efficiency at part-load operation.
+        """
+        from scipy.interpolate import CubicSpline, PchipInterpolator
+        
+        # Empirical data points (Load % -> SEC kWh/kg)
+        loads = np.array([5.198120655873119, 5.257970023663251, 10.113199626222173, 22.739088505837863, 48.41771267237127, 74.0637039375442, 87.0933634210993, 99.73832173278575], dtype=np.float64)
+        secs = np.array([70.76723737184231, 69.87292482925062, 58.14489426628968, 45.79174727000371, 40.26193002895275, 38.36213726990495, 37.5833863338206, 37.54086060502432], dtype=np.float64)
+        
+        # Use PCHIP (Shape Preserving) to prevent oscillations (Runge's phenomenon).
+        # Ensures SEC decreases monotonically as load increases, preventing unrealistic dips.
+        cs = PchipInterpolator(loads, secs)
+        
+        # Extract break-points (x coordinates)
+        self.spline_breaks = np.ascontiguousarray(cs.x, dtype=np.float64)
+        
+        # Extract coefficients for Numba
+        # SciPy stores coefficients as (4, N-1) with rows [d, c, b, a] (highest power first)
+        # We need (N-1, 4) with columns [a, b, c, d] for Horner's method
+        # cs.c shape is (4, n_intervals) where row 0 = d (x^3 coeff), row 3 = a (constant)
+        coeffs_scipy = cs.c.T  # Now (N-1, 4) with columns [d, c, b, a]
+        
+        # Reverse columns to get [a, b, c, d] order for our Numba kernel
+        self.spline_coeffs = np.ascontiguousarray(coeffs_scipy[:, ::-1], dtype=np.float64)
+        
+        # Store BOL baseline efficiency for degradation calculation
+        self.bol_efficiency_kwh_kg = 37.54  # SEC at 100% load
+
     def _initialize_state(self) -> None:
         """
         Initialize internal state variables for all modules.
@@ -229,6 +270,9 @@ class SOECOperator(Component):
             self._interpolate(self.degradation_year, DEG_YEARS, DEG_CAPACITY_FACTOR)
         )
         self.current_capacity_factor = cap_percent / 100.0
+
+        # Fit SEC curve for dynamic efficiency (one-time scipy call)
+        self._fit_efficiency_curve()
 
         # Effective maximum power accounts for capacity degradation
         self.effective_max_module_power = self.max_nominal_power * self.current_capacity_factor
@@ -449,10 +493,23 @@ class SOECOperator(Component):
 
         self.previous_real_states = np.copy(self.real_states)
 
-        # Production calculation using energy balance
-        energy_consumed_mwh = current_total_power * self.dt
-        h2_prod_rate_kg_mwh = 1000.0 / self.current_efficiency_kwh_kg
-        h2_produced_kg = energy_consumed_mwh * h2_prod_rate_kg_mwh
+        # Production calculation using dynamic load-dependent efficiency
+        from h2_plant.optimization.numba_ops import calculate_h2_production_dynamic
+        
+        # Degradation factor: ratio of current degraded efficiency to BOL baseline
+        # At BOL (year 0): deg_factor = 37.5 / 37.54 ≈ 1.0
+        # At year 5: deg_factor = 39.0 / 37.54 ≈ 1.04 (4% worse)
+        deg_factor = self.current_efficiency_kwh_kg / self.bol_efficiency_kwh_kg
+        
+        # Calculate H2 production using vectorized per-module spline evaluation
+        h2_produced_kg = calculate_h2_production_dynamic(
+            self.real_powers,
+            self.max_nominal_power,
+            self.spline_breaks,
+            self.spline_coeffs,
+            deg_factor,
+            self.dt
+        )
         self.total_h2_produced += h2_produced_kg
         self.last_step_h2_kg = h2_produced_kg
 

@@ -1321,6 +1321,135 @@ def simulate_soec_step_jit(
 
 
 # =============================================================================
+# SOEC DYNAMIC EFFICIENCY (Spline-Based SEC Curve)
+# =============================================================================
+
+@njit(cache=True)
+def eval_cubic_spline(x_val: float, breaks: np.ndarray, coeffs: np.ndarray) -> float:
+    """
+    Evaluate cubic spline at x_val using pre-computed coefficients.
+    
+    This is a lightweight spline evaluator compatible with Numba JIT compilation.
+    The spline coefficients are pre-fitted using scipy.interpolate.CubicSpline
+    during initialization and passed as NumPy arrays.
+    
+    Algorithm:
+        1. Clamp input to break-point bounds (flat extrapolation at edges).
+        2. Binary search for the containing interval.
+        3. Evaluate cubic polynomial using Horner's method.
+    
+    Args:
+        x_val (float): Input value (e.g., Load Factor %).
+        breaks (np.ndarray): Spline break-points (x coordinates), shape (N,).
+        coeffs (np.ndarray): Coefficient array, shape (N-1, 4).
+            Each row contains [a, b, c, d] for polynomial:
+            y = a + b*dx + c*dx^2 + d*dx^3, where dx = x - x_i
+    
+    Returns:
+        float: Interpolated y value (e.g., SEC kWh/kg).
+    """
+    n_breaks = len(breaks)
+    
+    # Clamp to bounds (flat extrapolation)
+    if x_val <= breaks[0]:
+        # Return value at first break-point
+        return coeffs[0, 0]  # 'a' coefficient = y value at break
+    if x_val >= breaks[-1]:
+        # Evaluate at last break-point
+        idx = n_breaks - 2
+        dx = breaks[-1] - breaks[idx]
+        a = coeffs[idx, 0]
+        b = coeffs[idx, 1]
+        c = coeffs[idx, 2]
+        d = coeffs[idx, 3]
+        return a + dx * (b + dx * (c + dx * d))
+    
+    # Binary search for interval
+    idx = np.searchsorted(breaks, x_val) - 1
+    if idx < 0:
+        idx = 0
+    if idx >= n_breaks - 1:
+        idx = n_breaks - 2
+    
+    # Local coordinate
+    x_i = breaks[idx]
+    dx = x_val - x_i
+    
+    # Horner's method: a + dx*(b + dx*(c + dx*d))
+    a = coeffs[idx, 0]
+    b = coeffs[idx, 1]
+    c = coeffs[idx, 2]
+    d = coeffs[idx, 3]
+    
+    return a + dx * (b + dx * (c + dx * d))
+
+
+@njit(cache=True)
+def calculate_h2_production_dynamic(
+    powers_mw: np.ndarray,
+    nominal_mw: float,
+    breaks: np.ndarray,
+    coeffs: np.ndarray,
+    deg_factor: float,
+    dt: float
+) -> float:
+    """
+    Calculate total H₂ production using load-dependent efficiency (vectorized).
+    
+    This function captures the physics where modules at low load are less
+    efficient than modules at high load. This incentivizes running fewer
+    modules at higher load rather than many modules at low load.
+    
+    Physics:
+        For each module i:
+        - Load_i (%) = (P_i / P_nominal) × 100
+        - SEC_i (kWh/kg) = spline(Load_i) × deg_factor
+        - H2_i (kg) = (P_i × dt × 1000) / SEC_i
+        
+        Total H₂ = Σ H2_i
+    
+    Args:
+        powers_mw (np.ndarray): Power consumption per module (MW).
+        nominal_mw (float): Rated power per module (MW).
+        breaks (np.ndarray): SEC spline break-points (Load %).
+        coeffs (np.ndarray): SEC spline coefficients.
+        deg_factor (float): Degradation multiplier (>=1.0, higher = worse).
+        dt (float): Timestep duration (hours).
+    
+    Returns:
+        float: Total H₂ produced across all modules (kg).
+    """
+    total_h2 = 0.0
+    energy_factor = dt * 1000.0  # MWh -> kWh
+    
+    for i in range(len(powers_mw)):
+        p_mw = powers_mw[i]
+        
+        # Skip standby/off modules (negligible production)
+        if p_mw < 0.01:
+            continue
+        
+        # Calculate load percentage
+        load_pct = (p_mw / nominal_mw) * 100.0
+        
+        # Get base SEC from spline (Beginning of Life curve)
+        base_sec = eval_cubic_spline(load_pct, breaks, coeffs)
+        
+        # Apply degradation (SEC increases over time)
+        actual_sec = base_sec * deg_factor
+        
+        # Guard against division by zero
+        if actual_sec < 1.0:
+            actual_sec = 1.0
+        
+        # Calculate H2 production: Energy (kWh) / SEC (kWh/kg) = kg
+        h2_kg = (p_mw * energy_factor) / actual_sec
+        total_h2 += h2_kg
+    
+    return total_h2
+
+
+# =============================================================================
 # INTERPOLATION
 # =============================================================================
 

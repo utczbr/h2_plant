@@ -373,7 +373,24 @@ class Interchanger(Component):
                 w_h2o_vap_global = psi_gas * w_w_gas
                 w_h2o_liq_global = psi_liq
                 
-                new_composition = comp_copy.copy()
+                new_composition = {}
+                w_h2o_total = w_h2o_vap_global + w_h2o_liq_global
+                
+                # Calculate sum of inerts in original composition
+                sum_inerts = sum(mf for s, mf in comp_copy.items() if s not in ('H2O', 'H2O_liq'))
+                
+                # Robust Normalization: Scale inerts to fill the space left by H2O
+                # This ensures Sum = 1.0 even if H2O mass fraction shifted slightly in Flash
+                if sum_inerts > 0:
+                    scale_factor = (1.0 - w_h2o_total) / sum_inerts
+                else:
+                    scale_factor = 1.0
+                    
+                for s, mf in comp_copy.items():
+                    if s not in ('H2O', 'H2O_liq'):
+                        new_composition[s] = mf * scale_factor
+                
+                # Set H2O values
                 new_composition['H2O'] = w_h2o_vap_global
                 new_composition['H2O_liq'] = w_h2o_liq_global
                 
@@ -390,6 +407,12 @@ class Interchanger(Component):
         elif final_vap_frac <= 0.001: output_phase = 'liquid'
         else: output_phase = 'mixed'
 
+        # --- ROBUST NORMALIZATION (Ensure sum = 1.0) ---
+        # This handles both converged and fallback cases.
+        sum_fracs = sum(new_composition.values())
+        if abs(sum_fracs - 1.0) > 1e-6 and sum_fracs > 0:
+            inv_sum = 1.0 / sum_fracs
+            new_composition = {k: v * inv_sum for k, v in new_composition.items()}
 
         # --- 7. Final Output Streams ---
         

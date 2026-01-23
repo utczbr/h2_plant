@@ -80,22 +80,38 @@ class StreamRecorder:
     def record(self, step_idx: int):
         stream = getattr(self.component, self.stream_attr, None)
         if stream:
-            self.temp_arr[step_idx] = stream.T_C
-            self.press_arr[step_idx] = stream.P_bar
+            self.temp_arr[step_idx] = stream.temperature_k - 273.15
+            self.press_arr[step_idx] = stream.pressure_pa / 1e5
             self.flow_arr[step_idx] = stream.mass_flow_kg_h
-            self.h2o_frac_arr[step_idx] = stream.h2o_mass_fraction
+            # Calculate Total Mass Flow (Gas + Entrained Liquid)
+            m_dot_gas = stream.mass_flow_kg_h
+            m_dot_liq = getattr(stream, 'entrained_liq_kg_s', 0.0) * 3600.0
+            m_dot_total = m_dot_gas + m_dot_liq
             
-            # Water vapor mass flow (kg/h) = total_flow * H2O_mass_fraction (vapor only)
-            # Note: H2O in composition is gas-phase water vapor, H2O_liq is separate
+            # Total H2O = Vapor + Liquid
             h2o_vap_frac = stream.composition.get('H2O', 0.0)
-            self.h2o_vapor_arr[step_idx] = stream.mass_flow_kg_h * h2o_vap_frac
+            m_h2o_vap = m_dot_gas * h2o_vap_frac
+            m_h2o_total = m_h2o_vap + m_dot_liq
+            
+            # Record Total Mass Fraction if flow > 0
+            if m_dot_total > 1e-9:
+                self.h2o_frac_arr[step_idx] = m_h2o_total / m_dot_total
+            else:
+                self.h2o_frac_arr[step_idx] = 0.0
+                
+            # Water vapor mass flow (kg/h) - keep as vapor only for specific tracking
+            self.h2o_vapor_arr[step_idx] = m_h2o_vap
             
             # Mole fractions
-            mole_fractions = stream.mole_fractions_dict()
+            # Use 'mole_fractions' property (dict), do NOT call as method
+            mole_fractions = stream.mole_fractions
             self.mole_arrs[0][step_idx] = mole_fractions.get('H2', 0.0)
             self.mole_arrs[1][step_idx] = mole_fractions.get('O2', 0.0)
             self.mole_arrs[2][step_idx] = mole_fractions.get('N2', 0.0)
-            self.mole_arrs[3][step_idx] = mole_fractions.get('H2O', 0.0)
+            
+            # Use get_total_mole_frac for H2O to include entrained liquid if present
+            self.mole_arrs[3][step_idx] = stream.get_total_mole_frac('H2O')
+            
             self.mole_arrs[4][step_idx] = mole_fractions.get('CH4', 0.0)
             self.mole_arrs[5][step_idx] = mole_fractions.get('CO2', 0.0)
         else:
@@ -563,7 +579,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         
         # CRITICAL FIX: If tank is draining (demand > production), stay in Normal zone
         # This prevents production reduction when the system is supply-limited
-        if dsoc_dt < -0.001:  # Tank is draining at > 0.1%/hour
+        if dsoc_dt < -0.001 and soc < p['SOC_HIGH']:  # Tank is draining at > 0.1%/hour AND not in high SOC
             return 0  # Normal zone - no production reduction
         
         # Thresholds
@@ -776,41 +792,36 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['spot_price'][step_idx] = current_price
         self._history['ppa_price_effective_eur_mwh'][step_idx] = current_ppa_price
         # Record RFNBO classification metrics
-        # For ECONOMIC_SPOT: get from result.state_update
-        # For other strategies: ALL H2 is RFNBO (100% renewable-powered)
-        dt = self._context.simulation.timestep_hours
+        # NOTE: RFNBO is now calculated from ACTUAL production in record_post_step
+        # This section only sets dispatch-related metrics (spot_purchased, threshold)
         
         if 'h2_rfnbo_kg' in result.state_update:
-            # EconomicSpotDispatchStrategy returns RFNBO metrics directly
-            h2_rfnbo = result.state_update.get('h2_rfnbo_kg', 0.0)
-            h2_non_rfnbo = result.state_update.get('h2_non_rfnbo_kg', 0.0)
+            # EconomicSpotDispatchStrategy: extract spot metrics
             spot_purchased = result.state_update.get('spot_purchased_mw', 0.0)
             spot_threshold = result.state_update.get('spot_threshold_eur_mwh', 0.0)
+            # h2_non_rfnbo comes from spot purchase (PEM powered by grid)
+            h2_non_rfnbo = result.state_update.get('h2_non_rfnbo_kg', 0.0)
         else:
-            # Non-ECONOMIC_SPOT: all H2 is RFNBO (renewable-powered only)
-            # Calculate H2 production from power allocation
-            h2_soec = (P_soec_final * dt * 1000) / soec_kwh_kg if soec_kwh_kg > 0 else 0.0
-            h2_pem = (P_pem_final * dt * 1000) / pem_kwh_kg if pem_kwh_kg > 0 else 0.0
-            h2_rfnbo = h2_soec + h2_pem
-            h2_non_rfnbo = 0.0  # No grid power used
+            # Non-ECONOMIC_SPOT: no spot purchase, all renewable
             spot_purchased = 0.0
             spot_threshold = 0.0
+            h2_non_rfnbo = 0.0
         
-        self._history['h2_rfnbo_kg'][step_idx] = h2_rfnbo
+        # Initialize with 0 - actual values are set in record_post_step using actual H2 production
+        self._history['h2_rfnbo_kg'][step_idx] = 0.0  # Will be overwritten
         self._history['h2_non_rfnbo_kg'][step_idx] = h2_non_rfnbo
         self._history['spot_purchased_mw'][step_idx] = spot_purchased
         self._history['spot_threshold_eur_mwh'][step_idx] = spot_threshold
         
-        # Update cumulative RFNBO metrics
+        # Cumulative RFNBO will be updated in record_post_step with actual production values
+        # Initialize with previous value (will be incremented in record_post_step)
         if step_idx > 0:
-            self._history['cumulative_h2_rfnbo_kg'][step_idx] = (
-                self._history['cumulative_h2_rfnbo_kg'][step_idx - 1] + h2_rfnbo
-            )
+            self._history['cumulative_h2_rfnbo_kg'][step_idx] = self._history['cumulative_h2_rfnbo_kg'][step_idx - 1]
             self._history['cumulative_h2_non_rfnbo_kg'][step_idx] = (
                 self._history['cumulative_h2_non_rfnbo_kg'][step_idx - 1] + h2_non_rfnbo
             )
         else:
-            self._history['cumulative_h2_rfnbo_kg'][step_idx] = h2_rfnbo
+            self._history['cumulative_h2_rfnbo_kg'][step_idx] = 0.0
             self._history['cumulative_h2_non_rfnbo_kg'][step_idx] = h2_non_rfnbo
         
         self._state.step_idx = step_idx
@@ -950,6 +961,17 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['H2_pem_kg'][step_idx] = h2_pem
         self._history['H2_atr_kg'][step_idx] = h2_atr
         self._history['cumulative_h2_kg'][step_idx] = self._state.cumulative_h2_kg
+        # === RFNBO CALCULATION FROM ACTUAL PRODUCTION ===
+        # Use actual H2 production values instead of dispatch estimates
+        # This ensures cumulative_h2_rfnbo_kg == cumulative_h2_kg when Non-RFNBO is 0
+        h2_rfnbo_actual = h2_soec + h2_pem + h2_atr
+        
+        # Set h2_rfnbo_kg (was initialized to 0 in _record_dispatch)
+        self._history['h2_rfnbo_kg'][step_idx] = h2_rfnbo_actual
+        
+        # Update cumulative RFNBO with actual production
+        self._history['cumulative_h2_rfnbo_kg'][step_idx] += h2_rfnbo_actual
+        
         self._history['steam_soec_kg'][step_idx] = steam_soec
         self._history['P_bop_mw'][step_idx] = P_bop_mw
         self._history['sell_decision'][step_idx] = 1 if P_sold_corrected > 0 else 0
@@ -1016,9 +1038,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             
             # 2c. Record Extra Metrics (Independent of flow)
             for attr_name, metric_arr in rec.extra_metric_arrs:
-                # We assume these attributes exist because we checked the class type in init
-                val = getattr(rec.component, attr_name, 0.0)
-                metric_arr[step_idx] = val
+                # Try direct attribute first, fallback to get_state() for state-only metrics
+                val = getattr(rec.component, attr_name, None)
+                if val is None:
+                    # Fallback: Check get_state() dict
+                    state = rec.component.get_state() if hasattr(rec.component, 'get_state') else {}
+                    val = state.get(attr_name, 0.0)
+                metric_arr[step_idx] = val if val is not None else 0.0
 
         # 3. DetailedTankArray Matrix Recording
         for comp, p_matrix, m_matrix in self._detailed_tank_recorders:

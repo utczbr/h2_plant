@@ -117,7 +117,7 @@ COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
     'energy_flows': CORE_COLUMNS + ['compressor_power_kw', '*_power_kw'],
     'energy_flow': CORE_COLUMNS + ['*_power_kw', 'compressor_power_kw'],
     'q_breakdown': ['minute', '*_cooling*', '*_duty*', '*_heat*'],
-    'thermal_load_breakdown_time_series': ['minute', '*_cooling*', '*_duty*', '*Chiller*', '*Intercooler*'],
+    'thermal_load_breakdown_time_series': ['minute', '*_cooling*', '*_duty*', '*Chiller*', '*Intercooler*', '*Boiler*_power_input*'],
     'plant_balance': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
     'mixer_comparison': ['minute', '*Mixer*'],
     
@@ -392,16 +392,145 @@ class GraphCatalog:
         # =====================================================================
         # These will be enabled post-refactor when Plotly data adapter is ready.
         
+        # =====================================================================
+        # PLOTLY EXPLICIT GRAPHS (Refactored to accept DataFrame)
+        # =====================================================================
+        
+        # 1. Dispatch Strategy (Twin for legacy 'dispatch')
+        self.register(GraphMetadata(
+            graph_id='dispatch_plotly',
+            title='Power Dispatch Strategy (Interactive)',
+            description='Stacked power consumption and grid sales',
+            function=pg.plot_dispatch_strategy,
+            library=GraphLibrary.PLOTLY,
+            data_required=['P_pem', 'P_soec', 'P_sold', 'spot_price'],
+            priority=GraphPriority.HIGH,
+            category='economics',
+            enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+
+        # 2. Cumulative Production (Twin for 'cumulative_h2')
+        self.register(GraphMetadata(
+            graph_id='cumulative_h2_plotly',
+            title='Cumulative H2 Production (Interactive)',
+            description='Cumulative hydrogen production from both systems',
+            function=pg.plot_cumulative_production,
+            library=GraphLibrary.PLOTLY,
+            # Use ACTUAL columns from parquet:
+            # - cumulative_h2_kg (total), cumulative_h2_rfnbo_kg, cumulative_h2_non_rfnbo_kg
+            # - H2_pem, H2_soec, H2_atr_kg (rates for per-source breakdown)
+            data_required=['cumulative_h2_kg', 'cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg',
+                          'H2_pem', 'H2_soec', 'H2_atr_kg'],
+            priority=GraphPriority.HIGH,
+            category='production',
+            enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+
+        # 3. Energy Pie (Twin for 'energy_pie')
+        self.register(GraphMetadata(
+            graph_id='energy_pie_plotly',
+            title='Power Consumption Breakdown (Interactive)',
+            description='Pie chart showing power distribution',
+            function=pg.plot_power_breakdown_pie,
+            library=GraphLibrary.PLOTLY,
+            data_required=['P_pem', 'P_soec', 'compressor_power_kw'],
+            priority=GraphPriority.MEDIUM,
+            category='economics',
+            enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+        
+        # 4. Arbitrage (Twin for 'arbitrage')
+        self.register(GraphMetadata(
+            graph_id='arbitrage_plotly',
+            title='Arbitrage Opportunity (Interactive)',
+            description='Interactive dual-axis chart of H2 production vs Prices',
+            function=pg.plot_arbitrage_opportunity,
+            library=GraphLibrary.PLOTLY,
+            data_required=['spot_price', 'ppa_price', 'H2_soec', 'H2_pem'],
+            priority=GraphPriority.HIGH,
+            category='economics',
+            enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+
+        # 5. PEM Efficiency (Twin for 'legacy_efficiency' - partial)
+        self.register(GraphMetadata(
+            graph_id='efficiency_curve_plotly',
+            title='PEM Efficiency (Interactive)',
+            description='PEM system efficiency (%) over time',
+            function=pg.plot_pem_efficiency_timeline,
+            library=GraphLibrary.PLOTLY,
+            data_required=['pem_efficiency'],
+            priority=GraphPriority.HIGH,
+            category='performance',
+            enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+
+        # 6. Wind Duration (New/Twin)
+        self.register(GraphMetadata(
+            graph_id='wind_duration_plotly',
+            title='Wind Utilization Duration Curve',
+            description='Duration curve of wind power usage',
+            function=pg.plot_wind_utilization_duration_curve,
+            library=GraphLibrary.PLOTLY,
+            data_required=['wind_coefficient', 'P_pem', 'P_soec'],
+            priority=GraphPriority.HIGH,
+            category='grid_integration',
+            enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+        
+        # P2 FIX: Missing Plotly twins (identified as unreachable by audit)
+        # These now mirror their Matplotlib counterparts and will be auto-enabled by dual-mode logic.
+        
+        # 7. Storage APC (Twin for 'storage_apc')
+        self.register(GraphMetadata(
+            graph_id='storage_apc_plotly',
+            title='Storage APC Control (Interactive)',
+            description='State of Charge, control zones, and power modulation factor',
+            function=pg.plot_storage_apc,  # P2 FIX: Now points to dedicated implementation
+            library=GraphLibrary.PLOTLY,
+            data_required=['storage_soc', 'storage_zone', 'storage_action_factor'],
+            priority=GraphPriority.HIGH,
+            category='storage',
+            enabled=True
+        ))
+        
+        # 8. Temporal Averages (Twin for 'temporal_averages')
+        self.register(GraphMetadata(
+            graph_id='temporal_averages_plotly',
+            title='Temporal Averages (Interactive)',
+            description='Hourly aggregated price, power, H2 data',
+            function=pg.plot_temporal_averages,  # P2 FIX: Now points to dedicated implementation
+            library=GraphLibrary.PLOTLY,
+            data_required=['spot_price', 'P_pem', 'P_soec', 'H2_pem_kg', 'H2_soec_kg'],
+            priority=GraphPriority.MEDIUM,
+            category='legacy',
+            enabled=True
+        ))
+        
+        # 9. Effective PPA (Twin for 'effective_ppa')
+        self.register(GraphMetadata(
+            graph_id='effective_ppa_plotly',
+            title='Effective PPA Price (Interactive)',
+            description='Weighted average PPA price over time',
+            function=pg.plot_effective_ppa,  # P2 FIX: Now points to dedicated implementation
+            library=GraphLibrary.PLOTLY,
+            data_required=['ppa_price_effective_eur_mwh', 'spot_price'],
+            priority=GraphPriority.HIGH,
+            category='economics',
+            enabled=True
+        ))
+        
+        # Keep existing explicit IDs for direct access if needed
         self.register(GraphMetadata(
             graph_id='pem_h2_production_over_time',
             title='PEM H2 Production Rate',
             description='PEM hydrogen production rate (kg/h) over time',
             function=pg.plot_pem_production_timeline,
             library=GraphLibrary.PLOTLY,
-            data_required=get_columns_for_graph('pem_h2_production_over_time'),
+            data_required=['H2_pem_kg'],
             priority=GraphPriority.CRITICAL,
             category='production',
-            enabled=False  # Plotly graphs disabled until data adapter ready
+            enabled=False 
         ))
         
         self.register(GraphMetadata(
@@ -546,7 +675,9 @@ class GraphCatalog:
             description='Duration curve of wind power usage',
             function=pg.plot_wind_utilization_duration_curve,
             library=GraphLibrary.PLOTLY,
-            data_required=['pricing.wind_coefficient', 'pem.power_mw', 'soec.power_mw'],
+            # Use P_offer (actual renewable power) instead of wind_coefficient
+            # Need 'minute' to calculate true duration if downsampled
+            data_required=['P_offer', 'pem_power_mw', 'soec_power_mw', 'minute'],
             priority=GraphPriority.HIGH,
             category='grid_integration',
             enabled=False  # Plotly disabled
@@ -809,6 +940,137 @@ class GraphCatalog:
             category='thermal',
             enabled=True
         ))
+        
+        # Plotly Twins: Chiller & DryCooler
+        self.register(GraphMetadata(
+            graph_id='chiller_cooling_plotly',
+            title='Chiller Cooling Load (Interactive)',
+            description='Interactive chiller cooling load over time (kW)',
+            function=pg.plot_chiller_cooling_load,
+            library=GraphLibrary.PLOTLY,
+            data_required=['*Chiller*cooling_load*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        
+        self.register(GraphMetadata(
+            graph_id='chiller_power_plotly',
+            title='Chiller Electrical Power (Interactive)',
+            description='Interactive chiller electrical power consumption (kW)',
+            function=pg.plot_chiller_power,
+            library=GraphLibrary.PLOTLY,
+            data_required=['*Chiller*electrical_power*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        
+        self.register(GraphMetadata(
+            graph_id='dry_cooler_performance_plotly',
+            title='Dry Cooler Performance (Interactive)',
+            description='Interactive dry cooler/intercooler heat rejection and outlet temperature',
+            function=pg.plot_dry_cooler_performance,
+            library=GraphLibrary.PLOTLY,
+            data_required=['*Cooler*heat_rejected*', '*Intercooler*heat_rejected*', '*Cooler*outlet_temp*', '*Intercooler*outlet_temp*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+        
+        # Q Breakdown (Average Bar Chart)
+        self.register(GraphMetadata(
+            graph_id='q_breakdown_plotly',
+            title='Thermal Load Breakdown (Avg)',
+            description='Average thermal load by subsystem and heat type',
+            function=pg.plot_q_breakdown,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*_cooling*', '*_duty*', '*_heat*', '*_power_input*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+
+        # Thermal Load Time Series (Hierarchical Legend + Dropdown)
+        self.register(GraphMetadata(
+            graph_id='thermal_load_breakdown_time_series_plotly',
+            title='Thermal Load Time Series',
+            description='Dynamic cooling/heating load profile with hierarchical legend and subsystem filters',
+            function=pg.plot_thermal_load_breakdown_timeseries,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*_cooling*', '*_duty*', '*_heat_rejected*', '*Boiler*_power_input*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=True
+        ))
+
+        # Stacked Thermal Load Time Series
+        # DISABLED: Now merged into plot_thermal_load_time_series with toggle
+        self.register(GraphMetadata(
+            graph_id='thermal_load_stacked_time_series_plotly',
+            title='Stacked Thermal Load Time Series',
+            description='Stacked area chart showing thermal load composition over time',
+            function=pg.plot_thermal_load_stacked_timeseries,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*_cooling*', '*_duty*', '*_heat_rejected*', '*Boiler*_power_input*'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=False  # Merged with toggle
+        ))
+
+        # Enhanced Stacked Graphs with UX improvements
+        # DISABLED: Now merged into plot_chiller_cooling_load with toggle
+        self.register(GraphMetadata(
+            graph_id='chiller_cooling_load_stacked_plotly',
+            title='Chiller Cooling Load - Stacked',
+            description='Stacked area chart of chiller cooling loads with enhanced UX',
+            function=pg.plot_chiller_cooling_load_stacked,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*Chiller*_cooling_load_kw'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=False  # Merged with toggle
+        ))
+
+        # DISABLED: Now merged into plot_chiller_power with toggle
+        self.register(GraphMetadata(
+            graph_id='chiller_power_stacked_plotly',
+            title='Chiller Electrical Power - Stacked',
+            description='Stacked area chart of chiller electrical power with enhanced UX',
+            function=pg.plot_chiller_power_stacked,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*Chiller*_electrical_power_kw'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=False  # Merged with toggle
+        ))
+
+        # DISABLED: Now merged into plot_cumulative_production with toggle
+        self.register(GraphMetadata(
+            graph_id='cumulative_h2_stacked_plotly',
+            title='Cumulative H2 Production - Stacked',
+            description='Stacked area chart showing H2 production composition by source',
+            function=pg.plot_cumulative_production_stacked,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', 'H2_pem_kg', 'H2_soec_kg'],
+            priority=GraphPriority.HIGH,
+            category='production',
+            enabled=False  # Merged with toggle
+        ))
+
+        # DISABLED: Now merged into plot_dry_cooler_performance with toggle
+        self.register(GraphMetadata(
+            graph_id='dry_cooler_stacked_plotly',
+            title='Dry Cooler Heat Rejection - Stacked',
+            description='Stacked area chart of dry cooler heat rejection with enhanced UX',
+            function=pg.plot_dry_cooler_stacked,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*DryCooler*_heat_rejected_kw', '*Intercooler*_heat_rejected_kw'],
+            priority=GraphPriority.MEDIUM,
+            category='thermal',
+            enabled=False  # Merged with toggle
+        ))
+        
         self.register(GraphMetadata(
             graph_id='coalescer_separation',
             title='Coalescer Separation',
@@ -820,6 +1082,20 @@ class GraphCatalog:
             category='separation',
             enabled=True
         ))
+        
+        # Coalescer Plotly Twin
+        self.register(GraphMetadata(
+            graph_id='coalescer_separation_plotly',
+            title='Coalescer Separation (Interactive)',
+            description='Plotly: Pressure drop and liquid removal with enhanced UX',
+            function=pg.plot_coalescer_separation,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*Coalescer*_delta_p_bar', '*Coalescer*_drain_flow_kg_h'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        
         self.register(GraphMetadata(
             graph_id='kod_separation',
             title='Knock-Out Drum',
@@ -829,6 +1105,45 @@ class GraphCatalog:
             data_required=['history'],
             priority=GraphPriority.MEDIUM,
             category='separation',
+            enabled=True
+        ))
+        
+        # KOD Plotly Twin
+        self.register(GraphMetadata(
+            graph_id='kod_separation_plotly',
+            title='Knock-Out Drum (Interactive)',
+            description='Plotly: Gas density, velocity, and liquid drainage with enhanced UX',
+            function=pg.plot_kod_separation,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*KOD*_rho_g', '*KOD*_v_real', '*KOD*_water_removed_kg_h'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        
+        # Mixer Comparison Plotly (no Matplotlib twin listed here, but adding it)
+        self.register(GraphMetadata(
+            graph_id='mixer_comparison_plotly',
+            title='Drain/Mixer Comparison (Interactive)',
+            description='Plotly: Temperature, pressure, and flow comparison with enhanced UX',
+            function=pg.plot_mixer_comparison,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute', '*Mixer*', '*DrainRecorder*', '*Combiner*'],
+            priority=GraphPriority.MEDIUM,
+            category='separation',
+            enabled=True
+        ))
+        
+        # Process Train Profile Plotly
+        self.register(GraphMetadata(
+            graph_id='process_train_profile_plotly',
+            title='Process Train Profile (Interactive)',
+            description='Plotly: Temperature, Pressure, and Composition profiles along H2/O2 trains with selector',
+            function=pg.plot_process_train_profile,
+            library=GraphLibrary.PLOTLY,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='profile',
             enabled=True
         ))
         self.register(GraphMetadata(

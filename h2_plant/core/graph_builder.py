@@ -561,9 +561,12 @@ class PlantGraphBuilder:
             # Truck loading station with compression energy
             return DischargeStation(
                 station_id=int(node.params.get('station_id', 1)),
+                n_stations=int(node.params.get('n_stations', 1)),
                 truck_capacity_kg=float(node.params.get('truck_capacity_kg', 1000.0)),
                 delivery_pressure_bar=float(node.params.get('delivery_pressure_bar', 500.0)),
                 max_fill_rate_kg_min=float(node.params.get('max_fill_rate_kg_min', 60.0)),
+                min_fill_rate_kg_min=float(node.params.get('min_fill_rate_kg_min', 10.0)),
+                h_in_day_max=float(node.params.get('h_in_day_max', 0)) if node.params.get('h_in_day_max') is not None else None,
                 isen_efficiency=float(node.params.get('isen_efficiency', 0.75)),
                 mech_efficiency=float(node.params.get('mech_efficiency', 0.95)),
                 cooldown_minutes=float(node.params.get('cooldown_minutes', 150.0)),

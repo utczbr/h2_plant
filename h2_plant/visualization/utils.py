@@ -11,7 +11,85 @@ import numpy as np
 from typing import Optional, List, Dict, Any, Union
 import logging
 
+import logging
+import yaml
+from pathlib import Path
+
 logger = logging.getLogger(__name__)
+
+_CACHED_CONFIG = None
+
+def load_viz_config(config_path: Path = None) -> Dict[str, Any]:
+    """Load visualization config once and cache it."""
+    global _CACHED_CONFIG
+    if _CACHED_CONFIG is None:
+        if config_path is None:
+            # Assuming this file is in h2_plant/visualization/, config is in scenarios/
+            # Original path logic from user plan was Path(__file__).parent.parent / 'visualization_config.yaml' -> h2_plant/visualization_config.yaml?
+            # User system has it in /home/stuart/Documentos/Planta Hidrogenio/scenarios/visualization_config.yaml
+            # So from h2_plant/visualization/utils.py:
+            #   parent -> visualization
+            #   parent -> h2_plant
+            #   parent -> Planta Hidrogenio
+            #   then -> scenarios/visualization_config.yaml
+            base_dir = Path(__file__).resolve().parent.parent.parent
+            config_path = base_dir / 'scenarios' / 'visualization_config.yaml'
+            
+        try:
+            with open(config_path) as f:
+                _CACHED_CONFIG = yaml.safe_load(f)
+        except Exception as e:
+            logger.warning(f"Failed to load visualization config from {config_path}: {e}")
+            _CACHED_CONFIG = {}
+            
+    return _CACHED_CONFIG
+
+def get_viz_config(key: str, default: Any = None) -> Any:
+    """
+    Get visualization config value with dot notation.
+    
+    Examples:
+        >>> get_viz_config('styling.colors.pem', '#2196F3')
+        >>> get_viz_config('performance.max_points_default', 2000)
+    """
+    config = load_viz_config()
+    keys = key.split('.')
+    value = config
+    for k in keys:
+        if isinstance(value, dict):
+            value = value.get(k)
+        else:
+            return default
+    return value if value is not None else default
+
+def get_library_preference(graphid: str = None, category: str = None) -> List[str]:
+    """Returns ['matplotlib', 'plotly'] or subset based on config."""
+    config = load_viz_config()
+    dual = config.get('dual_generation', {})
+    
+    prefs = []
+    
+    # 1. Graph specific override
+    if graphid and graphid in dual.get('graphs', {}):
+        p = dual['graphs'][graphid]
+        prefs = p.split() if isinstance(p, str) else []
+    # 2. Category override
+    elif category and category in dual.get('categories', {}):
+        p = dual['categories'][category]
+        prefs = p.split() if isinstance(p, str) else []
+    # 3. Global preference
+    else:
+        p = dual.get('preference', 'both')
+        prefs = p.split() if isinstance(p, str) else []
+    
+    # Resolve 'both', 'auto' keywords to actual libraries
+    libs = []
+    if 'matplotlib' in prefs or 'both' in prefs or 'auto' in prefs:
+        libs.append('matplotlib')
+    if 'plotly' in prefs or 'both' in prefs or 'auto' in prefs:
+        libs.append('plotly')
+        
+    return libs
 
 
 # ==============================================================================

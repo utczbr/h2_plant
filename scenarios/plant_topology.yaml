@@ -146,7 +146,7 @@ nodes:
       num_modules: 6
       max_power_nominal_mw: 2.4
       optimal_limit: 0.80
-      steam_input_ratio_kg_per_kg_h2: 11.0 
+      steam_input_ratio_kg_per_kg_h2: 10.3 
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
       lifecycle: 43800  # 5 years lifecycle for degradation reset
@@ -629,6 +629,7 @@ nodes:
       outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
+      max_flow_kg_h: 2400.0
     connections:
       - source_port: "outlet"
         target_name: "SOEC_O2_Drycooler_2"
@@ -653,6 +654,7 @@ nodes:
       outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
+      max_flow_kg_h: 2400.0
     connections:
       - source_port: "outlet"
         target_name: "SOEC_O2_Drycooler_3"
@@ -677,6 +679,7 @@ nodes:
       outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
+      max_flow_kg_h: 2400.0
     connections:
       - source_port: "outlet"
         target_name: "SOEC_O2_Drycooler_4"
@@ -701,6 +704,7 @@ nodes:
       outlet_pressure_bar: 15.0
       max_temp_c: 135.0
       temperature_limited: true
+      max_flow_kg_h: 2400.0
       system_group: "SOEC_O2_Train"
       process_step: 33
     connections:

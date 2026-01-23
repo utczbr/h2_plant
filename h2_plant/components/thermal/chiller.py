@@ -78,7 +78,7 @@ class Chiller(Component):
         pressure_drop_bar (float): Pressure loss through exchanger (bar).
 
     Example:
-        >>> chiller = Chiller(cooling_capacity_kw=100.0, cop=4.0, target_temp_k=298.15)
+        >>> chiller = Chiller(cooling_capacity_kw=100.0, cop=6.0, target_temp_k=298.15)
         >>> chiller.initialize(dt=1/60, registry=registry)
         >>> chiller.receive_input('fluid_in', hot_stream, 'stream')
         >>> chiller.step(t=0.0)
@@ -91,7 +91,7 @@ class Chiller(Component):
         cooling_capacity_kw: float = 100.0,
         efficiency: float = 0.95,
         target_temp_k: float = 298.15,
-        cop: float = 4.0,
+        cop: float = 6.0,
         pressure_drop_bar: float = 0.2,
         enable_dynamics: bool = False,
         use_central_utility: bool = True,
@@ -106,7 +106,7 @@ class Chiller(Component):
             efficiency (float): Heat transfer efficiency (0-1). Default: 0.95.
             target_temp_k (float): Target outlet temperature in K. Default: 298.15 (25°C).
             cop (float): Coefficient of Performance. Higher values indicate more
-                efficient cooling. Typical range: 3-5. Default: 4.0.
+                efficient cooling. Typical range: 3-6. Default: 6.0.
             pressure_drop_bar (float): Pressure loss through exchanger in bar.
                 Default: 0.2.
             enable_dynamics (bool): Enable pump and thermal inertia dynamics.

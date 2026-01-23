@@ -11,6 +11,34 @@ visualization:
       enabled: false
       filename: "dashboard.html"
       title: "H2 Plant Simulation Dashboard"
+
+    # Dual Generation Settings
+    dual_generation:
+      enabled: true
+      preference: "both"  # Options: matplotlib, plotly, both, auto
+      categories:
+        production: "both"
+        economics: "both"
+        performance: "both"
+      graphs:
+        production_time_series: "both"
+        arbitrage_opportunity: "both"
+        
+    # Export formats
+    export_formats:
+      matplotlib: "png"
+      plotly: "html"
+
+    # Global Styling
+    styling:
+      colors:
+        pem: "#1f77b4"
+        soec: "#ff7f0e"
+        h2total: "#2ca02c"
+        price: "#9467bd"
+      fonts:
+        family: "Arial, sans-serif"
+        size: 12
   
   performance:
     downsample_threshold: 10000
@@ -23,8 +51,21 @@ visualization:
 
   # Explicitly enable/disable specific graphs by ID
   graphs:
-    arbitrage_opportunity_interactive: false  # Disable the new interactive graph
-    pem_h2_production_over_time: false        # Ensure other Plotly graphs are off
+    # Interactive Plotly graphs (enabled for dual-mode generation)
+    arbitrage_opportunity_interactive: true
+    pem_h2_production_over_time: true
+    
+    # Plotly twins (matching Matplotlib counterparts)
+    dispatch_plotly: true
+    cumulative_h2_plotly: true
+    energy_pie_plotly: true
+    arbitrage_plotly: true
+    efficiency_curve_plotly: true
+    wind_duration_plotly: true
+    storage_apc_plotly: true
+    temporal_averages_plotly: true
+    effective_ppa_plotly: true
+    process_train_profile_plotly: true
 
   # ========================================================================
   # PLANT METADATA (Used for Graph Calculations)

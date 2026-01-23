@@ -173,9 +173,46 @@ class UnifiedGraphExecutor:
         # Handle orchestrated_graphs section (enable specific plots)
         self._register_orchestrated_graphs(viz.get('orchestrated_graphs', {}))
         
+        # ----------------------------------------------------------------------
+        # DUAL GENERATION LOGIC
+        # Automatically enable/disable graphs based on library preferences
+        # ----------------------------------------------------------------------
+        from h2_plant.visualization.utils import get_library_preference
+        
+        # Snapshot of currently enabled graphs to iterate safely
+        initial_enabled = list(self.catalog.get_enabled())
+        
+        for meta in initial_enabled:
+            # We only process "primary" graphs (not the _plotly twins themselves)
+            # to avoid infinite recursion or double handling.
+            # Assuming primary graphs don't end in _plotly.
+            if meta.graph_id.endswith('_plotly'):
+                continue
+                
+            prefs = get_library_preference(meta.graph_id, meta.category)
+            
+            # Check for Plotly twin
+            plotly_id = f"{meta.graph_id}_plotly"
+            has_twin = plotly_id in self.catalog
+            
+            # 1. Handle Plotly preference
+            if 'plotly' in prefs:
+                if has_twin:
+                    self.catalog.enable(plotly_id)
+                elif meta.library.value == 'plotly':
+                     # If the graph itself IS plotly (e.g. new orchestrated ones?), ensure enabled
+                     pass
+            
+            # 2. Handle Matplotlib preference
+            if 'matplotlib' not in prefs:
+                # If matplotlib is EXPLICITLY excluded, disable this primary graph
+                # (assuming primary is MPL)
+                if meta.library.value == 'matplotlib':
+                    self.catalog.disable(meta.graph_id)
+        
         self._configured = True
         enabled = self.catalog.list_enabled()
-        logger.info(f"Configured {len(enabled)} enabled graphs from YAML")
+        logger.info(f"Configured {len(enabled)} enabled graphs from YAML (Dual Mode Active)")
 
     def _infer_columns_for_graph_type(self, graph_type: str, components: List[str]) -> List[str]:
         """
@@ -236,6 +273,12 @@ class UnifiedGraphExecutor:
             'storage_inventory': ['minute', '*inventory*', '*Tank*', '*_kg*'],
             'storage_pressure_heatmap': ['minute', '*Tank*pressure*', '*_bar'],
             'water_tank_inventory': ['minute', '*UltraPure*', '*mass_kg*', '*control_zone*'],
+            
+            # P2 FIX: Missing graph types (were causing empty DataFrames)
+            'rfnbo_compliance': ['minute', 'h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'purchase_threshold_eur_mwh', 'P_grid_renewable*'],
+            'deoxo_profile': ['minute', '*Deoxo*', '*_inlet_temp*', '*_outlet_temp*', '*_o2_in*'],
+            'drain_properties': ['minute', '*Drain*', '*_drain_temp*', '*_drain_pressure*', '*_liquid_removed*'],
+            'energy_flow': ['minute', '*_power_kw*', '*_duty*', 'compressor_power_kw'],
         }
         
         patterns = base_patterns.get(graph_type, ['minute']).copy()
@@ -636,7 +679,16 @@ class UnifiedGraphExecutor:
         
         # Create lightweight shallow copy for graph functions
         df_light = df.copy(deep=False)
-        df_light.attrs = {}
+        
+        # P0 FIX: Preserve essential config keys instead of stripping all attrs.
+        # This prevents LCOH, Arbitrage, and other config-dependent graphs from failing.
+        df_light.attrs = {
+            'config': df.attrs.get('config', {}),
+            'dt_seconds': df.attrs.get('dt_seconds', 60.0),
+            'metrics': df.attrs.get('metrics', {}),
+            'start_date': df.attrs.get('start_date', None),
+            'scenario_name': df.attrs.get('scenario_name', 'Scenario'),
+        }
         
         results: Dict[str, GraphResult] = {}
         enabled_graphs = self.catalog.get_enabled()  # Already sorted by priority
@@ -690,7 +742,13 @@ class UnifiedGraphExecutor:
                     elif meta.library.value == 'plotly':
                         filename = f"{meta.title.replace(' ', '_').replace('/', '_')}.html"
                         output_path = self.output_dir / filename
-                        fig.write_html(str(output_path))
+                        # PERFORMANCE: Use CDN for plotly.js (reduces file size from ~5MB to ~500KB)
+                        fig.write_html(
+                            str(output_path),
+                            include_plotlyjs='cdn',
+                            full_html=True,
+                            config={'displayModeBar': True, 'responsive': True}
+                        )
                         
                     else:
                         # Seaborn or unknown - treat as matplotlib

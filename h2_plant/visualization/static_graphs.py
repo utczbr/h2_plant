@@ -257,7 +257,11 @@ def create_dispatch_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create power dispatch stacked area chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
-    minutes = downsample_for_plot(df['minute'])
+    
+    # P2 FIX: Use hours for X-axis (parity with Plotly twin)
+    hours = get_time_axis_hours(df)
+    hours_ds = downsample_for_plot(pd.Series(hours))
+    
     P_soec = downsample_for_plot(df['P_soec'])
     P_pem = downsample_for_plot(df['P_pem'])
     P_sold = downsample_for_plot(df['P_sold'])
@@ -273,14 +277,17 @@ def create_dispatch_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     else:
         P_aux = np.zeros_like(P_soec)
     
-    ax.fill_between(minutes, 0, P_soec, label='SOEC Consumption', color=COLORS['soec'], alpha=0.6)
-    ax.fill_between(minutes, P_soec, P_soec + P_pem, label='PEM Consumption', color=COLORS['pem'], alpha=0.6)
-    ax.fill_between(minutes, P_soec + P_pem, P_soec + P_pem + P_aux, label='Auxiliary', color='#9467bd', alpha=0.6)
-    ax.fill_between(minutes, P_soec + P_pem + P_aux, P_soec + P_pem + P_aux + P_sold, label='Grid Sale', color=COLORS['sold'], alpha=0.6)
-    ax.plot(minutes, P_offer, label='Offered Power', color=COLORS['offer'], linestyle='--', linewidth=1.5)
+    ax.fill_between(hours_ds, 0, P_soec, label='SOEC Consumption', color=COLORS['soec'], alpha=0.6)
+    ax.fill_between(hours_ds, P_soec, P_soec + P_pem, label='PEM Consumption', color=COLORS['pem'], alpha=0.6)
+    
+    # Reordered: Grid Sale then BOP on top
+    ax.fill_between(hours_ds, P_soec + P_pem, P_soec + P_pem + P_sold, label='Grid Export', color=COLORS['sold'], alpha=0.6)
+    ax.fill_between(hours_ds, P_soec + P_pem + P_sold, P_soec + P_pem + P_sold + P_aux, label='Balance Of Plant (BOP)', color='#9467bd', alpha=0.6)
+    
+    ax.plot(hours_ds, P_offer, label='RFNBO Wind Power', color=COLORS['offer'], linestyle='--', linewidth=1.5)
     
     ax.set_title('Hybrid Dispatch: SOEC + PEM + Auxiliary + Arbitrage', fontsize=12)
-    ax.set_xlabel('Time (Minutes)')
+    ax.set_xlabel('Time (hours)')
     ax.set_ylabel('Power (MW)')
     ax.legend(loc='upper left', fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -291,14 +298,17 @@ def create_arbitrage_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create price scenario chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
-    minutes = downsample_for_plot(df['minute'])
+    
+    # P2 FIX: Use hours for X-axis
+    hours = get_time_axis_hours(df)
+    hours_ds = downsample_for_plot(pd.Series(hours))
     spot_price = downsample_for_plot(df['Spot'])
     
     # Get prices from config (or show message if not available)
     ppa_price = get_config(df, 'ppa_price_eur_mwh')
     h2_equiv_price = calculate_h2_equiv_price(df)
     
-    ax.plot(minutes, spot_price, label='Spot Price (EUR/MWh)', color=COLORS['price'])
+    ax.plot(hours_ds, spot_price, label='Spot Price (EUR/MWh)', color=COLORS['price'])
     
     if ppa_price is not None:
         ax.axhline(y=ppa_price, color=COLORS['ppa'], linestyle='--', label=f'PPA Price ({ppa_price:.0f})')
@@ -307,7 +317,7 @@ def create_arbitrage_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         ax.axhline(y=h2_equiv_price, color='green', linestyle='-.', label=f'H2 Breakeven (~{h2_equiv_price:.0f})')
     
     ax.set_title('Price Scenario & H2 Opportunity Cost', fontsize=12)
-    ax.set_xlabel('Time (Minutes)')
+    ax.set_xlabel('Time (hours)')
     ax.set_ylabel('Price (EUR/MWh)')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
@@ -318,18 +328,22 @@ def create_h2_production_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure
     """Create hydrogen production chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
-    minutes = downsample_for_plot(df['minute'])
+    
+    # P2 FIX: Use hours for X-axis
+    hours = get_time_axis_hours(df)
+    hours_ds = downsample_for_plot(pd.Series(hours))
+    
     H2_soec = downsample_for_plot(df['H2_soec'])
     H2_pem = downsample_for_plot(df['H2_pem'])
     H2_total = H2_soec + H2_pem
     
-    ax.fill_between(minutes, 0, H2_soec, label='H2 SOEC', color=COLORS['soec'], alpha=0.5)
-    ax.fill_between(minutes, H2_soec, H2_total, label='H2 PEM', color=COLORS['pem'], alpha=0.5)
-    ax.plot(minutes, H2_total, color=COLORS['h2_total'], linestyle='--', label='Total H2')
+    ax.fill_between(hours_ds, 0, H2_soec, label='H2 SOEC', color=COLORS['soec'], alpha=0.5)
+    ax.fill_between(hours_ds, H2_soec, H2_total, label='H2 PEM', color=COLORS['pem'], alpha=0.5)
+    ax.plot(hours_ds, H2_total, color=COLORS['h2_total'], linestyle='--', label='Total H2')
     
-    ax.set_title('Hydrogen Production Rate (kg/min)', fontsize=12)
-    ax.set_ylabel('Production Rate (kg/min)')
-    ax.set_xlabel('Time (Minutes)')
+    ax.set_title('Hydrogen Production Rate (kg/h)', fontsize=12)
+    ax.set_ylabel('Production Rate (kg/h)')
+    ax.set_xlabel('Time (hours)')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     return fig
@@ -339,43 +353,41 @@ def create_oxygen_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create oxygen production chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
+    
+    # P2 FIX: Use hours for X-axis
+    hours = get_time_axis_hours(df)
+    hours_ds = downsample_for_plot(pd.Series(hours))
+    
     O2_pem_full = df.get('O2_pem_kg', df['H2_pem'] * 8.0)
     O2_soec_full = df['H2_soec'] * 8.0
     O2_total_full = O2_soec_full + O2_pem_full
-    
-    minutes = downsample_for_plot(df['minute'])
     
     # AUDIT FIX: Use actual O2 sensor data if available, fallback to stoichiometry
     o2_cols = [c for c in df.columns if 'o2_production' in c.lower() or ('outlet_mass' in c.lower() and 'o2' in c.lower())]
     
     if o2_cols:
-        # Detected sensor data
-        # Split by source type
         soec_cols = [c for c in o2_cols if 'soec' in c.lower()]
         pem_cols = [c for c in o2_cols if 'pem' in c.lower()]
         
-        O2_soec = downsample_for_plot(df[soec_cols].sum(axis=1) * 60.0) if soec_cols else np.zeros(len(minutes))
-        O2_pem = downsample_for_plot(df[pem_cols].sum(axis=1) * 60.0) if pem_cols else np.zeros(len(minutes))
+        O2_soec = downsample_for_plot(df[soec_cols].sum(axis=1) * 60.0) if soec_cols else np.zeros(len(hours_ds))
+        O2_pem = downsample_for_plot(df[pem_cols].sum(axis=1) * 60.0) if pem_cols else np.zeros(len(hours_ds))
         O2_total = O2_soec + O2_pem
     else:
-        # Fallback to stoichiometry
         O2_pem_full = df.get('O2_pem_kg', df['H2_pem'] * 8.0)
         O2_soec_full = df['H2_soec'] * 8.0
         O2_total_full = O2_soec_full + O2_pem_full
         
         O2_soec = downsample_for_plot(O2_soec_full)
         O2_pem = downsample_for_plot(O2_pem_full)
-        O2_soec = downsample_for_plot(O2_soec_full)
-        O2_pem = downsample_for_plot(O2_pem_full)
         O2_total = downsample_for_plot(O2_total_full)
     
-    ax.fill_between(minutes, 0, O2_soec, label='O2 SOEC', color=COLORS['soec'], alpha=0.5)
-    ax.fill_between(minutes, O2_soec, O2_total, label='O2 PEM', color=COLORS['oxygen'], alpha=0.5)
-    ax.plot(minutes, O2_total, color='black', linestyle='--', label='Total O2')
+    ax.fill_between(hours_ds, 0, O2_soec, label='O2 SOEC', color=COLORS['soec'], alpha=0.5)
+    ax.fill_between(hours_ds, O2_soec, O2_total, label='O2 PEM', color=COLORS['oxygen'], alpha=0.5)
+    ax.plot(hours_ds, O2_total, color='black', linestyle='--', label='Total O2')
     
-    ax.set_title('Oxygen Co-Production (kg/min)', fontsize=12)
-    ax.set_ylabel('Production Rate (kg/min)')
-    ax.set_xlabel('Time (Minutes)')
+    ax.set_title('Oxygen Co-Production (kg/h)', fontsize=12)
+    ax.set_ylabel('Production Rate (kg/h)')
+    ax.set_xlabel('Time (hours)')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     return fig
@@ -385,27 +397,23 @@ def create_water_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     """Create water consumption chart."""
     fig = Figure(figsize=(10, 5), dpi=dpi, constrained_layout=True)
     ax = fig.add_subplot(111)
+    
+    # P2 FIX: Use hours for X-axis
+    hours = get_time_axis_hours(df)
+    hours_ds = downsample_for_plot(pd.Series(hours))
+    
     water_soec_full = df['Steam_soec'] * 1.10
     water_pem_full = df['H2O_pem'] * 1.02
     total_full = water_soec_full + water_pem_full
     
-    minutes = downsample_for_plot(df['minute'])
-    
     # AUDIT FIX: Prioritize actual Water_Source flow data
-    # Topology uses 'Water_Source'
     source_cols = [c for c in df.columns if 'Water_Source' in c and ('mass_flow' in c or 'out_flow' in c)]
     
     if source_cols:
-        # Use actual source data
         total_full = df[source_cols].sum(axis=1)
-        # We might not be able to split PEM/SOEC perfectly from source, 
-        # but we can try provided component consumption if available
-        # logic: Total Source Flow is the truth.
         total = downsample_for_plot(total_full)
-        # Estimate split for visualization using relative capacity or just show total
-        water_soec = total * 0.6  # Rough split if only total known
+        water_soec = total * 0.6
     else:
-        # Fallback to proxy
         water_soec_full = df['Steam_soec'] * 1.10
         water_pem_full = df['H2O_pem'] * 1.02
         total_full = water_soec_full + water_pem_full
@@ -413,13 +421,13 @@ def create_water_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         water_soec = downsample_for_plot(water_soec_full)
         total = downsample_for_plot(total_full)
     
-    ax.fill_between(minutes, 0, water_soec, label='H2O SOEC', color=COLORS['soec'], alpha=0.5)
-    ax.fill_between(minutes, water_soec, total, label='H2O PEM', color='brown', alpha=0.5)
-    ax.plot(minutes, total, color=COLORS['water_total'], linestyle='--', label='Total H2O')
+    ax.fill_between(hours_ds, 0, water_soec, label='H2O SOEC', color=COLORS['soec'], alpha=0.5)
+    ax.fill_between(hours_ds, water_soec, total, label='H2O PEM', color='brown', alpha=0.5)
+    ax.plot(hours_ds, total, color=COLORS['water_total'], linestyle='--', label='Total H2O')
     
     ax.set_title('Water Consumption (Including Losses)', fontsize=12)
-    ax.set_ylabel('Water Flow (kg/min)')
-    ax.set_xlabel('Time (Minutes)')
+    ax.set_ylabel('Water Flow (kg/h)')
+    ax.set_xlabel('Time (hours)')
     ax.legend(fontsize=8)
     ax.grid(True, alpha=0.3)
     return fig
@@ -969,7 +977,7 @@ def create_storage_apc_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
     ax_soc.axhline(y=80, color='orange', linestyle='--', linewidth=1.5, label='Alert (80%)')
     ax_soc.axhline(y=95, color='red', linestyle='--', linewidth=1.5, label='Critical (95%)')
     
-    ax_soc.set_ylabel('State of Charge (%)', fontsize=10)
+    ax_soc.set_ylabel('Hydrogen Storage SOC (%)', fontsize=10)
     ax_soc.set_ylim(0, 105)
     ax_soc.legend(loc='upper left', fontsize=8)
     ax_soc.grid(True, alpha=0.3)
@@ -1505,18 +1513,24 @@ def create_q_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         data[cid] = {'Total': total, 'Sensible': sens, 'Latent': lat}
 
     # Dry Coolers / Intercoolers (heat_rejected_kw from DryCooler.get_state())
+    # FIX: Look up latent_heat_kw column to get proper sensible/latent split
     dc_cols = [c for c in df.columns if '_heat_rejected_kw' in c]
     for col in dc_cols:
         cid = col.replace('_heat_rejected_kw', '')
-        val = df[col].mean()
-        data[cid] = {'Total': val, 'Sensible': val, 'Latent': 0.0}
+        total = df[col].mean()
+        lat = df.get(f"{cid}_latent_heat_kw", pd.Series([0])).mean()
+        sens = max(0.0, total - lat)
+        data[cid] = {'Total': total, 'Sensible': sens, 'Latent': lat}
         
     # Interchangers (q_transferred_kw from Interchanger.get_state())
+    # FIX: Look up latent_heat_kw column if available
     hx_cols = [c for c in df.columns if '_q_transferred_kw' in c]
     for col in hx_cols:
         cid = col.replace('_q_transferred_kw', '')
-        val = df[col].mean()
-        data[cid] = {'Total': val, 'Sensible': val, 'Latent': 0.0}
+        total = df[col].mean()
+        lat = df.get(f"{cid}_latent_heat_kw", pd.Series([0])).mean()
+        sens = max(0.0, total - lat)
+        data[cid] = {'Total': total, 'Sensible': sens, 'Latent': lat}
 
     # Electric Boilers (power_input_kw - heating, shown as negative for balance)
     boiler_cols = [c for c in df.columns if '_power_input_kw' in c and 'Boiler' in c]

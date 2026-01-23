@@ -203,7 +203,8 @@ class GraphGenerator:
         
         try:
             if format == 'html':
-                fig.write_html(str(output_path), **kwargs)
+                # PERFORMANCE: Use CDN for plotly.js (reduces file size)
+                fig.write_html(str(output_path), include_plotlyjs='cdn', **kwargs)
             elif format in ['png', 'pdf', 'svg', 'webp']:
                 # Requires kaleido
                 fig.write_image(str(output_path), format=format, **kwargs)

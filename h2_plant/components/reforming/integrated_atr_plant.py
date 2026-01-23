@@ -22,6 +22,10 @@ from h2_plant.components.reforming.atr_data_manager import (
     C_TO_K, 
     KW_TO_W
 )
+from h2_plant.components.reforming.atr_rate_limiter import (
+    ATRRateLimiter,
+    ATRRateLimiterConfig
+)
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +107,11 @@ class IntegratedATRPlant(ATRBaseComponent):
         
         # Hourly logging tracker
         self._last_log_hour = -1
+        
+        # Rate limiter for input dynamics (QSS model)
+        self.rate_limiter = None
+        self.target_o2_flow_kmol_h = 0.0
+        self.is_ramping = False
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Initialize component, load data manager."""
@@ -112,9 +121,21 @@ class IntegratedATRPlant(ATRBaseComponent):
         if registry and hasattr(registry, 'has') and registry.has('lut_manager'):
             self.lut_manager = registry.get('lut_manager')
         
+        # Initialize rate limiter for input dynamics (QSS model)
+        # Rate limit corresponds to 10-minute ramp from 30% to 100% capacity
+        self.rate_limiter = ATRRateLimiter(
+            initial_o2=self.MIN_O2_RATE,
+            config=ATRRateLimiterConfig(
+                min_o2_kmol_h=self.MIN_O2_RATE,
+                max_o2_kmol_h=self.MAX_O2_RATE,
+                max_ramp_rate_kmol_h_min=1.6625  # (23.75 - 7.125) / 10 min
+            )
+        )
+        
         logger.info(f"IntegratedATRPlant '{self.component_id}' initialized. "
                    f"O₂ range: [{self.MIN_O2_RATE:.2f}, {self.MAX_O2_RATE:.2f}] kmol/h, "
-                   f"ΔP: {self.pressure_drop_bar:.1f} bar")
+                   f"ΔP: {self.pressure_drop_bar:.1f} bar, "
+                   f"Rate limit: 1.6625 kmol/hr/min")
 
     def step(self, t: float) -> None:
         """
@@ -148,10 +169,14 @@ class IntegratedATRPlant(ATRBaseComponent):
             return
         
         # ===================================================================
-        # STEP 2: CLAMP O2 TO REGRESSION DOMAIN
+        # STEP 2: APPLY RATE LIMITER (QSS Model)
         # ===================================================================
-        clamped_o2 = np.clip(o2_rate_kmol_h, self.MIN_O2_RATE, self.MAX_O2_RATE)
+        # Rate limit the O2 input to model physical plant dynamics
+        # This ensures thermodynamic consistency at every timestep
+        self.target_o2_flow_kmol_h = o2_rate_kmol_h
+        clamped_o2 = self.rate_limiter.update(o2_rate_kmol_h, self.dt * 3600)  # dt is in hours, convert to seconds
         self.oxygen_flow_kmol_h = clamped_o2
+        self.is_ramping = self.rate_limiter.is_ramping
         
         # ===================================================================
         # STEP 3: LOOKUP ALL THREE OUTPUT STREAMS FROM REGRESSION
@@ -315,6 +340,8 @@ class IntegratedATRPlant(ATRBaseComponent):
             **super().get_state(),
             'component_id': self.component_id,
             'oxygen_flow_kmol_h': self.oxygen_flow_kmol_h,
+            'target_o2_flow_kmol_h': self.target_o2_flow_kmol_h,
+            'is_ramping': self.is_ramping,
             'h2_production_kmol_h': self.h2_production_kmol_h,
             'syngas_flow_kg_h': self.syngas_flow_kg_h,
             'syngas_flow_kmol_h': self.syngas_flow_kmol_h,
