@@ -660,5 +660,7 @@ class DryCooler(Component):
             'dc_effectiveness': self.dc_effectiveness,
             'latent_heat_kw': self.latent_heat_kw,
             'heating_load_kw': 0.0, # Interface consistency
-            'outlet_o2_ppm_mol': (self.outlet_stream.get_total_mole_frac('O2') * 1e6) if self.outlet_stream else 0.0
+            'outlet_entrained_mass_kg_h': 0.0, # Dry Cooler merges everything to bulk
+            'outlet_o2_ppm_mol': (self.outlet_stream.get_total_mole_frac('O2') * 1e6) if self.outlet_stream else 0.0,
+            'outlet_H2O_molf': self.outlet_stream.get_total_mole_frac('H2O') if self.outlet_stream else 0.0
         }

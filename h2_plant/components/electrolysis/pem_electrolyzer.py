@@ -813,6 +813,10 @@ class DetailedPEMElectrolyzer(Component):
                 (self.m_H2_kg_s * CONST.LHVH2_kWh_kg * 3.6e6) / self.P_consumed_W * 100
                 if self.P_consumed_W > 0 else 0.0
             ),
+            "stack_efficiency_percent": (
+                (self.m_H2_kg_s * CONST.LHVH2_kWh_kg * 3.6e6) / (self.I_total * self.V_cell) * 100
+                if self.I_total * self.V_cell > 0 else 0.0
+            ),
             "cell_voltage_v": self.V_cell,
             "state": self.state,
             "cumulative_h2_kg": self.cumulative_h2_kg,

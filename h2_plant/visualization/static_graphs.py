@@ -1128,7 +1128,9 @@ def _prepare_monthly_data(df: pd.DataFrame) -> Dict[str, Any]:
         if col not in df_indexed.columns:
             df_indexed[col] = 0.0
             
-    start_date = df.attrs.get('start_date', "2024-01-01 00:00")
+    start_date = df.attrs.get('start_date')
+    if start_date is None:
+        start_date = "2024-01-01 00:00"
     try:
         df_indexed.index = pd.date_range(start=start_date, periods=len(df_indexed), freq='min')
     except Exception:
@@ -1645,150 +1647,6 @@ def create_q_breakdown_figure(df: pd.DataFrame, dpi: int = DPI_FAST) -> Figure:
         ax.legend(loc='upper right', fontsize=8)
 
     fig.suptitle('Thermal Load Breakdown by Subsystem (Average kW)', fontsize=14)
-    return fig
-
-@log_graph_errors
-def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST, components: list = None) -> Figure:
-    """
-    Drain Line Properties (T, P, Flow, Dissolved Gas).
-    
-    Compares aggregated 'IN' state (sum/avg of upstream drains) vs 'OUT' state (Mixer).
-    Filters for H2 and O2 lines based on ID naming or explicit configuration.
-    """
-    fig = Figure(figsize=(14, 12), dpi=dpi, constrained_layout=True)
-    
-    # 1. Identify Drain Lines (Mixers)
-    if components:
-        # Use provided components as the Mixers
-        mixers = components
-    else:
-        # Fallback to auto-discovery
-        mixer_cols = [c for c in df.columns if '_outlet_mass_flow_kg_h' in c and 'Drain' in c]
-        mixers = [c.replace('_outlet_mass_flow_kg_h', '') for c in mixer_cols]
-    
-    if not mixers:
-        fig.text(0.5, 0.5, 'No DrainRecorderMixer data found', ha='center')
-        return fig
-
-    # 2. Collect Data for each Line
-    lines_data = {} # {line_name: {'IN': dict, 'OUT': dict}}
-    
-    for mix_id in mixers:
-        # Determine Line Type (H2 or O2)
-        line_type = 'H2' if 'H2' in mix_id else ('O2' if 'O2' in mix_id else 'Unknown')
-        
-        # --- OUT State (Mixer) ---
-        out_flow = df[f"{mix_id}_outlet_mass_flow_kg_h"].mean()
-        out_temp = df[f"{mix_id}_outlet_temperature_c"].mean()
-        # Pressure: stored in kPa, convert to bar
-        out_pres_bar = df[f"{mix_id}_outlet_pressure_kpa"].mean() / 100.0
-        out_gas = df[f"{mix_id}_dissolved_gas_ppm"].mean()
-        
-        # --- IN State (Aggregation) ---
-        # Find upstream components belonging to this line type
-        # Heuristic: Components matching the line_type string
-        upstream_flow = 0.0
-        upstream_enthalpy_product = 0.0 # Flow * T (Approx for mixing T)
-        upstream_gas_product = 0.0 # Flow * Conc
-        upstream_pressures = []
-        
-        # List of potential upstream component types and their flow columns
-        # (CID_Suffix, Flow_Col_Suffix, Temp_K_Suffix, Pres_Bar_Suffix)
-        
-        # We need to scan all columns to find matching components
-        # Helper to scan:
-        def scan_components(comp_marker, flow_suffix, temp_k_suffix='_drain_temp_k', pres_bar_suffix='_drain_pressure_bar'):
-             nonlocal upstream_flow, upstream_enthalpy_product, upstream_gas_product, upstream_pressures
-             cols = [c for c in df.columns if flow_suffix in c and comp_marker in c]
-             for c in cols:
-                 cid = c.replace(flow_suffix, '')
-                 # Filter by line type 
-                 if line_type not in cid: continue
-                 
-                 flow = df[c].mean()
-                 if flow < 0.001: continue
-                 
-                 # Temp (K -> C)
-                 t_k = df.get(f"{cid}{temp_k_suffix}", pd.Series([298.15])).mean()
-                 t_c = t_k - 273.15
-                 
-                 # Pressure
-                 p_bar = df.get(f"{cid}{pres_bar_suffix}", pd.Series([1.0])).mean()
-                 
-                 # Dissolved Gas (ppm)
-                 # Note: Coalescer/KOD track 'dissolved_gas_ppm' or 'outlet_o2_ppm_mol'? 
-                 # 'dissolved_gas_ppm' is tracked for KOD/Coalescer/Mixer
-                 gas_ppm = df.get(f"{cid}_dissolved_gas_ppm", pd.Series([0.0])).mean()
-                 
-                 upstream_flow += flow
-                 upstream_enthalpy_product += flow * t_c
-                 upstream_gas_product += flow * gas_ppm
-                 upstream_pressures.append(p_bar)
-
-        # Scan KODs
-        scan_components('KOD', '_water_removed_kg_h')
-        # Scan Coalescers
-        scan_components('Coalescer', '_drain_flow_kg_h')
-        # Scan Cyclones
-        scan_components('Cyclone', '_water_removed_kg_h') # Using water_removed based on verify
-        
-        # Calculate Aggregated IN
-        if upstream_flow > 0:
-            in_temp = upstream_enthalpy_product / upstream_flow
-            in_gas = upstream_gas_product / upstream_flow
-            in_pres = np.mean(upstream_pressures) if upstream_pressures else 1.0
-        else:
-            # Fallback if no upstream found (e.g. simple test)
-            in_temp, in_gas, in_pres = out_temp, out_gas, out_pres_bar
-
-        lines_data[line_type] = {
-            'IN': {'Flow': upstream_flow, 'Temp': in_temp, 'Pres': in_pres, 'Gas': in_gas},
-            'OUT': {'Flow': out_flow, 'Temp': out_temp, 'Pres': out_pres_bar, 'Gas': out_gas}
-        }
-
-    # 3. Plotting
-    # 4 Rows (Props) x 2 Columns (H2, O2)
-    gs = fig.add_gridspec(4, 2)
-    props = [
-        ('Flow', 'Vazão (kg/h)', 'tab:green'),
-        ('Temp', 'Temperatura (°C)', 'tab:orange'),
-        ('Pres', 'Pressão (bar)', 'tab:purple'),
-        ('Gas', 'Gás Dissolvido (ppm)', 'tab:brown')
-    ]
-    
-    x_indices = [0, 1]
-    x_labels = ['Agregação IN', 'Mixer/Tank OUT']
-    
-    for col_idx, line_key in enumerate(['H2', 'O2']):
-        data = lines_data.get(line_key)
-        
-        for row_idx, (prop_key, prop_label, color) in enumerate(props):
-            ax = fig.add_subplot(gs[row_idx, col_idx])
-            
-            if data:
-                vals = [data['IN'][prop_key], data['OUT'][prop_key]]
-                ax.plot(x_indices, vals, marker='o', linestyle='-', color=color, linewidth=2, markersize=8)
-                
-                # Value labels
-                for i, v in zip(x_indices, vals):
-                     ax.text(i, v, f"{v:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold', color=color)
-                     
-                # Limits padding
-                min_v, max_v = min(vals), max(vals)
-                margin = (max_v - min_v) * 0.2 if max_v != min_v else 1.0
-                ax.set_ylim(min_v - margin, max_v + margin)
-            else:
-                ax.text(0.5, 0.5, 'No Data', ha='center')
-
-            if row_idx == 0:
-                ax.set_title(f"Fluxo {line_key}")
-            
-            ax.set_ylabel(prop_label)
-            ax.set_xticks(x_indices)
-            ax.set_xticklabels(x_labels)
-            ax.grid(True, linestyle='--', alpha=0.5)
-
-    fig.suptitle('Propriedades da Linha de Drenos (Média)', fontsize=14)
     return fig
 
 @log_graph_errors
@@ -3342,7 +3200,10 @@ def create_drain_line_properties_figure(df: pd.DataFrame, dpi: int = DPI_FAST, c
         else:
              out_pres_bar = df.get(f"{mix_id}_outlet_pressure_kpa", pd.Series([100.0])).mean() / 100.0
 
-        out_gas = df[f"{mix_id}_dissolved_gas_ppm"].mean()
+        if f"{mix_id}_dissolved_gas_ppm" in df.columns:
+            out_gas = df[f"{mix_id}_dissolved_gas_ppm"].mean()
+        else:
+            out_gas = 0.0
         
         # --- IN State (Aggregation) ---
         # Find upstream components belonging to this line type

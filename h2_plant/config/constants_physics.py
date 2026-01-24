@@ -231,6 +231,8 @@ class WaterConstants:
     """
     WATER_AMBIENT_T_K: float = 293.15  # 20°C
     WATER_ATM_P_PA: float = 101325.0   # 1 atm
+    H_LIQ_WATER_REF_KJ_KG: float = _get_val('water', 'h_liq_water_ref_kj_kg', 104.9) # Enthalpy at 25°C, 1 atm
+
     
     # Reverse Osmosis / Purification
     WATER_RO_RECOVERY_RATIO: float = _get_val('water', 'ro_recovery_ratio', 0.75)

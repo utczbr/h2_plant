@@ -3653,6 +3653,10 @@ def plot_process_train_profile(df: pd.DataFrame, **kwargs) -> go.Figure:
                 f'{cid}_outlet_mass_flow_kg_h', f'{cid}_mass_flow_kg_h'
             ]), None)
             
+            entrained_col = next((c for c in df.columns if c in [
+                f'{cid}_outlet_entrained_mass_kg_h', f'{cid}_entrained_mass_kg_h'
+            ]), None)
+            
             temp_col = next((c for c in df.columns if c in [
                 f'{cid}_outlet_temp_c', f'{cid}_temperature_c', f'{cid}_temp_c', f'{cid}_T_c'
             ]), None)
@@ -3673,7 +3677,9 @@ def plot_process_train_profile(df: pd.DataFrame, **kwargs) -> go.Figure:
                 df_active = df
             
             # 3. CALCULATE AVERAGES FROM ACTIVE DATA
-            flow_val = df[flow_col].mean() if flow_col else 0.0 # Flow always mean of TOTAL time (production)
+            bulk_flow = df[flow_col].mean() if flow_col else 0.0
+            entrained_flow = df[entrained_col].mean() if entrained_col else 0.0
+            flow_val = bulk_flow + entrained_flow # Total Mass Flow
             
             temp_val = 0.0
             if temp_col:
@@ -3734,36 +3740,71 @@ def plot_process_train_profile(df: pd.DataFrame, **kwargs) -> go.Figure:
                 elif molf_col:
                     impurity_val = df_active[molf_col].mean() * 1e6
 
-            # --- H2O PPM (Issue 2 Fix) ---
+            # --- H2O PPM (Calculate from Total Moles: Bulk + Entrained) ---
             h2o_ppm = 0.0
             
-            # Priority: Direct Mole Fraction Column (New Standard)
+            # 1. Try Specific Total Mole Fraction Column (First Priority - Rigorous)
             h2o_molf_col = next((c for c in df.columns if c in [
-                f'{cid}_outlet_H2O_molf', f'{cid}_outlet_h2o_molf', f'{cid}_y_H2O'
+                f'{cid}_outlet_H2O_molf', f'{cid}_outlet_h2o_molf'
             ]), None)
             
             if h2o_molf_col:
-                # FIX: Filter strictly positive values to represent "Wet" intervals
-                # This prevents zero-flow periods (where mole_frac=0) from dragging average down
-                valid_vals = df_active[h2o_molf_col][df_active[h2o_molf_col] > 1e-9]
-                if not valid_vals.empty:
-                    h2o_ppm = valid_vals.mean() * 1e6
-                else:
-                    h2o_ppm = df_active[h2o_molf_col].mean() * 1e6
+                 h2o_ppm = df_active[h2o_molf_col].mean() * 1e6
+                 
+            # 2. Fallback: Reconstruct from Mass Fractions (Bulk) + Entrained Mass
             else:
-                # Fallback: Estimate from mass fraction (Simplified)
-                h2o_mass_col = next((c for c in df.columns if c in [
-                    f'{cid}_outlet_h2o_frac', f'{cid}_mass_fraction_h2o'
+                # Vapor Mole Fraction Column
+                vap_molf_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_H2O_molf', f'{cid}_outlet_h2o_molf', f'{cid}_y_H2O'
+                ]), None)
+    
+                # Liquid Mole Fraction Column
+                liq_molf_col = next((c for c in df.columns if c in [
+                    f'{cid}_outlet_H2O_liq_molf', f'{cid}_outlet_h2o_liq_molf', f'{cid}_x_H2O'
                 ]), None)
                 
-                if h2o_mass_col:
-                     w_h2o = df_active[h2o_mass_col].mean()
-                     # If very small, use ppm approx
-                     if w_h2o < 1.0:
-                         MW_c = MW_H2 if stream_type == 'H2' else MW_O2
-                         h2o_ppm = (w_h2o / MW_H2O) / ((1-w_h2o)/MW_c + w_h2o/MW_H2O) * 1e6
-                     else:
-                         h2o_ppm = 1e6
+                if vap_molf_col or liq_molf_col:
+                    s_vap = df_active[vap_molf_col] if vap_molf_col else pd.Series(0.0, index=df_active.index)
+                    s_liq = df_active[liq_molf_col] if liq_molf_col else pd.Series(0.0, index=df_active.index)
+                    
+                    # If we have explicit liquid fraction column, assume it captures the entrained part OR 
+                    # if entrained_col exists, we might need to add it?
+                    # Component fix 1 (Total Molf) avoids this ambiguity. 
+                    # If we are here, we lack the Total Molf column.
+                    
+                    s_total = s_vap + s_liq
+                    # ... [existing logic] ...
+                    valid_vals = s_total[s_total > 1e-9]
+                    if not valid_vals.empty:
+                        h2o_ppm = valid_vals.mean() * 1e6
+                    else:
+                        h2o_ppm = s_total.mean() * 1e6
+    
+                else:
+                    # Mass Fraction Fallback
+                    h2o_mass_col = next((c for c in df.columns if c in [
+                        f'{cid}_outlet_h2o_frac', f'{cid}_mass_fraction_h2o'
+                    ]), None)
+                    
+                    if h2o_mass_col:
+                         w_h2o_bulk = df_active[h2o_mass_col].mean()
+                         m_bulk = bulk_flow
+                         m_entrained = entrained_flow
+                         
+                         m_h2o_total = (m_bulk * w_h2o_bulk) + m_entrained
+                         m_total = m_bulk + m_entrained
+                         
+                         # Simplified PPM calc (assume MW_bulk approx MW_target_gas for small impurities)
+                         if m_total > 0:
+                             w_h2o_total = m_h2o_total / m_total
+                             if w_h2o_total < 1.0:
+                                 MW_c = MW_H2 if stream_type == 'H2' else MW_O2
+                                 h2o_ppm = (w_h2o_total / MW_H2O) / ((1-w_h2o_total)/MW_c + w_h2o_total/MW_H2O) * 1e6
+                             else:
+                                 h2o_ppm = 1e6
+            
+            # Legacy/Redundant block removal (lines 3738-3784 replaced by above logic)
+
 
             # If values exist (even if flow is 0, we might have config data, but usually we skip)
             # Logic: If we have a valid column for T or Flow, we include point.

@@ -46,6 +46,7 @@ from typing import Dict, Any, Tuple, List, Optional
 
 from h2_plant.core.component import Component
 from h2_plant.core.component_registry import ComponentRegistry
+from h2_plant.core.component_ids import ComponentID
 from h2_plant.core.stream import Stream
 
 # ============================================================================
@@ -189,6 +190,9 @@ class SOECOperator(Component):
         # Water input accumulation for mass balance limiting
         self._input_water_buffer_kg_h: List[float] = []
         self._last_step_time: float = 0.0
+        
+        # LUT Manager for thermodynamic properties
+        self.lut = None
 
     @property
     def max_power_kw(self) -> float:
@@ -207,6 +211,9 @@ class SOECOperator(Component):
             registry (ComponentRegistry): Central registry for component access.
         """
         super().initialize(dt, registry)
+        
+        if registry.has(ComponentID.LUT_MANAGER.value):
+            self.lut = registry.get(ComponentID.LUT_MANAGER)
 
     def _interpolate(self, x: float, xp: np.ndarray, fp: np.ndarray) -> float:
         """
@@ -644,7 +651,7 @@ class SOECOperator(Component):
                 mass_flow_kg_h=total_mass_flow,
                 temperature_k=425.15,  # 152 °C (exit temp per legacy design)
                 pressure_pa=self.out_pressure_pa,
-                composition={'H2': w_h2, 'H2O': w_h2o, 'O2': w_o2},
+                composition={'H2': w_h2, 'H2O': w_h2o, 'O2': w_o2, 'H2O_liq': 0.0},
                 phase='gas',
                 extra=extra_attributes
             )
@@ -762,24 +769,9 @@ class SOECOperator(Component):
         # This reflects the TRUE molar concentration in the stream (diluted by steam)
         o2_ppm_wet = 0.0
         if h2_out_stream.mass_flow_kg_h > 0:
-            # Get mass fractions from stream
-            w_h2 = h2_out_stream.composition.get('H2', 0.0)
-            w_o2 = h2_out_stream.composition.get('O2', 0.0)
-            w_h2o = h2_out_stream.composition.get('H2O', 0.0)
-            
-            # Calculate moles per unit mass (ni = wi / MWi)
-            MW_H2 = 2.016
-            MW_O2 = 32.0
-            MW_H2O = 18.015
-            
-            n_h2 = w_h2 / MW_H2 if w_h2 > 0 else 0.0
-            n_o2 = w_o2 / MW_O2 if w_o2 > 0 else 0.0
-            n_h2o = w_h2o / MW_H2O if w_h2o > 0 else 0.0
-            
-            total_moles = n_h2 + n_o2 + n_h2o
-            if total_moles > 1e-12:
-                y_o2 = n_o2 / total_moles
-                o2_ppm_wet = y_o2 * 1e6
+            # Calculate O2 PPM using total moles (Gas + Entrained Liquid)
+            # This ensures consistency with Total Mass Flow reporting
+            o2_ppm_wet = h2_out_stream.get_total_mole_frac('O2') * 1e6
         
         return {
             **super().get_state(),
@@ -792,7 +784,126 @@ class SOECOperator(Component):
             # EXPORT OUTLET PROPERTIES FOR GRAPHING
             'outlet_temp_c': h2_out_stream.temperature_k - 273.15,
             'outlet_pressure_bar': h2_out_stream.pressure_pa / 1e5,
-            'outlet_mass_flow_kg_h': h2_out_stream.mass_flow_kg_h,
+            'outlet_mass_flow_kg_h': h2_out_stream.mass_flow_kg_h, # Bulk Mass Only (Graph will sum Entrained)
+            'outlet_entrained_mass_kg_h': h2_out_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0,
             'outlet_o2_ppm_mol': o2_ppm_wet,
-            'outlet_h2o_frac': h2_out_stream.composition.get('H2O', 0.0)
+            'outlet_h2o_frac': h2_out_stream.composition.get('H2O', 0.0),
+            'outlet_H2O_molf': h2_out_stream.get_total_mole_frac('H2O'), # Total Mole Fraction (Vap+Liq+Extra)
+            
+            # === EFFICIENCY METRICS (Eq 5.37 - 5.39) ===
+            'stack_efficiency_percent': self._calculate_stack_efficiency(),
+            'system_efficiency_percent': self._calculate_system_efficiency(),
+            'energetic_efficiency_percent': self._calculate_energetic_efficiency()
         }
+
+    def _calculate_stack_efficiency(self) -> float:
+        """
+        Calculate Stack Efficiency (Eq 5.37).
+        
+        eta_stack = (m_dot_H2 * LHV) / P_stack
+        """
+        P_stack_kW = self.previous_total_power * 1000.0
+        if P_stack_kW <= 1e-6:
+            return 0.0
+            
+        # H2 production rate in kg/h -> Energy flow in kW
+        # LHV H2 = 33.33 kWh/kg = 120 MJ/kg
+        h2_flow_kg_h = self.total_h2_produced / self.dt if self.dt > 0 else 0.0
+        # Use instantaneous production if possible, but total_h2_produced is cumulative.
+        # Use last_step_h2_kg for instantaneous rate
+        h2_inst_kg_h = getattr(self, 'last_step_h2_kg', 0.0) / self.dt if self.dt > 0 else 0.0
+        
+        h2_energy_flow_kW = h2_inst_kg_h * 33.33 
+        
+        return (h2_energy_flow_kW / P_stack_kW) * 100.0
+
+    def _get_auxiliary_power_kw(self) -> float:
+        """
+        Calculate total P_aux including discrete components or fallback estimation.
+        """
+        P_aux_total = 0.0
+        
+        # 1. Sum discrete components if connected/registered
+        # (Placeholder for future: query registry for 'soec_blower', 'soec_heater')
+        # connected_aux = self.registry.get_group('soec_auxiliaries')
+        # for aux in connected_aux: P_aux_total += aux.power_kw
+        
+        # 2. Fallback Estimation (if no discrete components found)
+        # Typical: Control (0.5%) + Blowers (4%) + Heaters (2%) = ~6.5%
+        if P_aux_total == 0.0:
+            P_stack_kW = self.previous_total_power * 1000.0
+            P_aux_total = P_stack_kW * 0.065
+            
+        return P_aux_total
+
+    def _calculate_system_efficiency(self) -> float:
+        """
+        Calculate System Efficiency (Eq 5.38).
+        
+        eta_system = (m_dot_H2 * LHV) / (P_stack + P_aux)
+        """
+        P_stack_kW = self.previous_total_power * 1000.0
+        P_aux_kW = self._get_auxiliary_power_kw()
+        P_total_kW = P_stack_kW + P_aux_kW
+        
+        if P_total_kW <= 1e-6:
+            return 0.0
+            
+        h2_inst_kg_h = getattr(self, 'last_step_h2_kg', 0.0) / self.dt if self.dt > 0 else 0.0
+        h2_energy_flow_kW = h2_inst_kg_h * 33.33
+        
+        return (h2_energy_flow_kW / P_total_kW) * 100.0
+
+    def _calculate_energetic_efficiency(self) -> float:
+        """
+        Calculate Energetic Efficiency (Eq 5.39) accounting for thermal input.
+        
+        eta_energetic = (m_dot_H2 * LHV) / (P_el_total + Q_thermal_ext)
+        
+        Q_thermal_ext: Net heat supplied to bring water from reference liquid state
+        to inlet steam conditions.
+        Q = m_dot * (h_steam_in - h_liq_ref)
+        """
+        if not self.lut:
+            return self._calculate_system_efficiency()
+            
+        from h2_plant.config.constants_physics import WaterConstants
+        
+        # Electrical Input
+        P_stack_kW = self.previous_total_power * 1000.0
+        P_aux_kW = self._get_auxiliary_power_kw()
+        P_el_total_kW = P_stack_kW + P_aux_kW
+        
+        # Thermal Input
+        # Get inlet conditions (assuming single inlet 'steam_in')
+        # We need specific enthalpy of inlet steam.
+        # Fallback to standard 150C steam if no stream object stored (current limitation)
+        # Ideally we'd store self.last_inlet_stream properties.
+        # Approximation: h_steam_150C_4bar ~ 2750 kJ/kg
+        # h_liq_ref (25C) ~ 105 kJ/kg
+        # Delta h ~ 2645 kJ/kg
+        
+        # Precise calculation using LUT if available
+        # Need to capture inlet state in step() or receive_input().
+        # For now, assumes design point steam if flux is present.
+        
+        steam_flow_kg_h = self.last_step_steam_input_kg / self.dt if self.dt > 0 else 0.0
+        if steam_flow_kg_h <= 1e-6:
+            return 0.0
+            
+        # Try to get real enthalpy from LUT (T=150C, P=4bar default for SOEC)
+        # h_steam = self.lut.lookup('H2O', 'H', P=4e5, T=423.15) # Example
+        # Using constant approximation for robustness until inlet stream is fully persisted
+        DELTA_H_SPECIFIC_KJ_KG = 2645.0 
+        
+        Q_thermal_kW = (steam_flow_kg_h * DELTA_H_SPECIFIC_KJ_KG) / 3600.0
+        
+        total_energy_input_kW = P_el_total_kW + Q_thermal_kW
+        
+        if total_energy_input_kW <= 1e-6:
+            return 0.0
+            
+        h2_inst_kg_h = getattr(self, 'last_step_h2_kg', 0.0) / self.dt if self.dt > 0 else 0.0
+        h2_energy_flow_kW = h2_inst_kg_h * 33.33
+        
+        return (h2_energy_flow_kW / total_energy_input_kW) * 100.0

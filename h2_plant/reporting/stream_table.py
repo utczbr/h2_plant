@@ -219,6 +219,12 @@ def print_stream_summary_table(
             P_bar = stream.pressure_pa / 1e5
             total_kg_h = stream.mass_flow_kg_h
             
+            # Incorporate Entrained Liquid into Reported Total
+            entrained_kg_s = stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+            entrained_kg_h = entrained_kg_s * 3600.0
+            total_kg_h += entrained_kg_h
+            
+            
             # 2. Composition - Stream.composition is in MASS FRACTIONS (Layer 1 Standard)
             comp_mass = stream.composition
             
@@ -229,9 +235,10 @@ def print_stream_summary_table(
             mass_frac_h2o_total = mass_frac_h2o_vap + mass_frac_h2o_liq
             
             # 3. Calculate mass flows (kg/h) DIRECTLY from Mass Fractions
-            kg_h_h2 = mass_frac_h2 * total_kg_h
-            kg_h_o2 = mass_frac_o2 * total_kg_h
-            kg_h_h2o = mass_frac_h2o_total * total_kg_h
+            kg_h_h2 = mass_frac_h2 * stream.mass_flow_kg_h
+            kg_h_o2 = mass_frac_o2 * stream.mass_flow_kg_h
+            kg_h_h2o = (mass_frac_h2o_total * stream.mass_flow_kg_h) + entrained_kg_h
+
             
             # 4. Calculate Mole Fractions for Display (using helper method from Stream class)
             # Use get_total_mole_frac to correctly account for all water in the stream

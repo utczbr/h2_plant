@@ -78,6 +78,43 @@ class StreamRecorder:
     
     # Specific component metric arrays (optional)
     extra_metric_arrs: List[Tuple[str, np.ndarray]] = field(default_factory=list)
+    
+    # Optimization: Pre-bound accessor for stream retrieval
+    stream_getter: Any = None  # Callable[[], Optional[Stream]]
+
+    def bind_accessor(self):
+        """
+        Determine the optimal way to access the stream and bind a callable.
+        This removes dynamic checks from the hot loop.
+        """
+        # 1. Known Port Method (e.g. get_output('h2_out'))
+        if hasattr(self.component, 'get_output') and self.stream_attr in ('outlet', 'purified_gas_out', 'h2_out'):
+            # Bind directly to the method call with fixed argument
+            # Lambda captures self.component and self.stream_attr
+            self.stream_getter = lambda: self.component.get_output(self.stream_attr)
+            return
+
+        # 2. Direct Attribute (e.g. comp.outlet_stream)
+        if hasattr(self.component, self.stream_attr):
+            # Check if it's really an attribute or a method
+            val = getattr(self.component, self.stream_attr)
+            if not callable(val):
+                self.stream_getter = lambda: getattr(self.component, self.stream_attr)
+                return
+        
+        # 3. Fallback: Try get_output for any attribute name if direct access fails
+        if hasattr(self.component, 'get_output'):
+             self.stream_getter = lambda: self._safe_get_output()
+             return
+
+        # 4. Dead End: Always return None
+        self.stream_getter = lambda: None
+
+    def _safe_get_output(self):
+        try:
+            return self.component.get_output(self.stream_attr)
+        except (ValueError, KeyError, AttributeError):
+            return None
 
 
 
@@ -359,6 +396,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                  ),
                  extra_metric_arrs=[('outlet_o2_ppm_mol', self._history[f"{cid}_outlet_o2_ppm_mol"])]
              )
+
+             soec_recorder.bind_accessor()
              self._recorders.append(soec_recorder)
         
         # Separate dict for 2D matrix arrays (not compatible with HistoryDictProxy)
@@ -427,6 +466,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     ),
                     extra_metric_arrs=metric_recorders
                 )
+
+                recorder.bind_accessor()
                 self._recorders.append(recorder)
 
     def _alloc_stream_history(self, cid: str, total_steps: int) -> None:
@@ -1063,23 +1104,12 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # 2. Optimized Component Recording Loop
         # Iterate over pre-bound recorders (O(N) where N is component count, no string hashing)
         for rec in self._recorders:
-            # 2a. Get Stream
-            # Handle method calls vs attributes
-            # 2a. Get Stream
-            # Handle method calls vs attributes
-            if rec.stream_attr in ('outlet', 'purified_gas_out', 'h2_out'): # Explicit ports
-                stream = rec.component.get_output(rec.stream_attr)
-            else:
-                stream = getattr(rec.component, rec.stream_attr, None)
-                if stream is None and hasattr(rec.component, 'get_output'):
-                    # Fallback: Try get_output just in case
-                    try:
-                        stream = rec.component.get_output(rec.stream_attr)
-                    except Exception:
-                        pass
+            # 2a. Get Stream (Optimized Access)
+            # Use pre-bound accessor (lambda) to avoid dynamic getattr/if checks in hot loop
+            stream = rec.stream_getter()
 
-            # 2b. Zero-Flow Optimization
-            if stream is not None and stream.mass_flow_kg_h > 1e-6:
+            # 2b. Zero-Flow Optimization (REMOVED: Need to record T/P even at zero flow)
+            if stream is not None:
                 # Direct Array Write
                 rec.temp_arr[step_idx] = stream.temperature_k - 273.15
                 rec.press_arr[step_idx] = stream.pressure_pa / 1e5

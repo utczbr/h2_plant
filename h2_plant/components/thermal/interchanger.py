@@ -477,9 +477,23 @@ class Interchanger(Component):
         Returns:
             Dict[str, Any]: Q_transferred (kW) and outlet temperatures.
         """
+        # Calculate robust reported mass flow (Bulk + Entrained) for Consistency
+        hot_mass = 0.0
+        if self.hot_out:
+            hot_mass = self.hot_out.mass_flow_kg_h
+            # Add entrained liquid if present (Reporting ONLY, does not affect physics stream)
+            if self.hot_out.extra:
+                entrained_kg_s = self.hot_out.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+                hot_mass += entrained_kg_s * 3600.0
+
         return {
             **super().get_state(),
             'q_transferred_kw': self.q_transferred_kw,
             'hot_out_temp_k': self.hot_out.temperature_k if self.hot_out else 0,
-            'cold_out_temp_k': self.cold_out.temperature_k if self.cold_out else 0
+            'cold_out_temp_k': self.cold_out.temperature_k if self.cold_out else 0,
+            'outlet_mass_flow_kg_h': self.hot_out.mass_flow_kg_h if self.hot_out else 0.0, # Bulk
+            'outlet_entrained_mass_kg_h': (self.hot_out.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0) * 3600.0) if self.hot_out and self.hot_out.extra else 0.0,
+            'hot_outlet_mass_flow_kg_h': self.hot_out.mass_flow_kg_h if self.hot_out else 0.0,
+            'cold_outlet_mass_flow_kg_h': self.cold_out.mass_flow_kg_h if self.cold_out else 0,
+            'outlet_H2O_molf': self.hot_out.get_total_mole_frac('H2O') if self.hot_out else 0.0 # Total H2O
         }
