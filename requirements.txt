@@ -4,9 +4,9 @@ h5py>=3.1.0
 jsonschema>=4.0.0
 matplotlib>=3.5.0
 NodeGraphQt>=0.6.1
-numba>=0.57.0
-# IMPORTANT: Constrain numpy to <2.0.0 to prevent breakage with Numba/Scipy
-numpy>=1.24.0,<2.0.0
+numba>=0.60.0
+# Updated to allow NumPy 2.0+ (required for reading recent cache files)
+numpy>=1.24.0
 pandas>=2.0.0
 plotly>=5.0.0
 pydantic>=2.0.0
