@@ -38,7 +38,8 @@ def run_with_dispatch_strategy(
     hours: Optional[int] = None,
     output_dir: Optional[Path] = None,
     strategy: Optional[str] = None,
-    resume_from_hour: Optional[int] = None
+    resume_from_hour: Optional[int] = None,
+    resume_checkpoint_path: Optional[Path] = None
 ) -> Dict[str, np.ndarray]:
     """
     Run simulation using SimulationEngine with integrated DispatchStrategy.
@@ -170,12 +171,19 @@ def run_with_dispatch_strategy(
     engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history)
 
     # Run simulation
+    # If we have a checkpoint path, the engine will load it and update current_hour.
+    # We still pass start_hour as a hint or fallback.
     start_hour = resume_from_hour if resume_from_hour else 0
     if resume_from_hour:
         logger.info(f"Resuming simulation from hour {resume_from_hour}, running to hour {hours}")
     else:
         logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
-    results = engine.run(start_hour=start_hour, end_hour=hours)
+    
+    results = engine.run(
+        start_hour=start_hour,
+        end_hour=hours,
+        resume_from_checkpoint=str(resume_checkpoint_path) if resume_checkpoint_path else None
+    )
 
     # Get history from dispatch strategy (MOVED to later to allow for streaming export)
     # history = engine.get_dispatch_history() 
@@ -652,7 +660,8 @@ def main():
                 hours=args.hours,
                 output_dir=output_dir,
                 strategy=args.strategy,
-                resume_from_hour=resume_hour
+                resume_from_hour=resume_hour,
+                resume_checkpoint_path=checkpoint_path if resume_hour is not None else None
             )
         finally:
             profiler.disable()
@@ -674,7 +683,8 @@ def main():
             hours=args.hours,
             output_dir=output_dir,
             strategy=args.strategy,
-            resume_from_hour=resume_hour
+            resume_from_hour=resume_hour,
+            resume_checkpoint_path=checkpoint_path if resume_hour is not None else None
         )
     
     # Memory profiling report
