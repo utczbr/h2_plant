@@ -68,6 +68,7 @@ visualization:
     effective_ppa_plotly: true
     process_train_profile_plotly: true
     integrated_global_efficiency_plotly: true
+    combined_efficiency_plotly: true
 
   # ========================================================================
   # PLANT METADATA (Used for Graph Calculations)
@@ -120,7 +121,7 @@ visualization:
       enabled: true
       script: "scripts/plot_daily_h2_production.py"
       # Nominal production at 100% capacity for capacity factor calculation
-      # 8500 kg/day: SOEC (2.4 MW) + PEM (5 MW) only
+      # 8500 kg/day: SOEC (11.4 MW) + PEM (5 MW) only
       # 13313 kg/day: With ATR included
       nominal_daily_production_kg: 13313.0
       plots:

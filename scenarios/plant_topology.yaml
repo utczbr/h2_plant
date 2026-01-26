@@ -1816,7 +1816,7 @@ nodes:
     type: "DetailedTank"
     params:
       n_tanks: 30
-      volume_per_tank_m3: 507.37 # From HP spec, assumed consistent
+      volume_per_tank_m3: 107.37 # From HP spec, assumed consistent
       max_pressure_bar: 70.0
       initial_pressure_bar: 1.0
       min_discharge_pressure_bar: 40.0

@@ -253,7 +253,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'cumulative_h2_non_rfnbo_kg', 'spot_purchased_mw', 'spot_threshold_eur_mwh',
                 'bop_grid_import_mw', 'bop_price_eur_mwh', 'bop_cost_eur',
                 'cumulative_bop_cost_eur', 'ppa_price_effective_eur_mwh',
-                'integrated_global_efficiency'
+                'integrated_global_efficiency',
+                # Efficiency / Grid Side Power (Includes Transformer Losses)
+                'P_soec_grid_mw', 'P_pem_grid_mw', 'P_bop_grid_usage_mw'
             ]
             for col in base_columns:
                 self._history_manager.register_column(col)
@@ -327,7 +329,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'cooling_manager_cw_duty_kw': np.zeros(total_steps, dtype=np.float64),
                 
                 # --- INTEGRATED PLANT EFFICIENCY (Eq 5.42) ---
-                'integrated_global_efficiency': np.zeros(total_steps, dtype=np.float64)
+                # --- INTEGRATED PLANT EFFICIENCY (Eq 5.42) ---
+                'integrated_global_efficiency': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- GRID SIDE POWER (AC = DC / Eff) ---
+                'P_soec_grid_mw': np.zeros(total_steps, dtype=np.float64),
+                'P_pem_grid_mw': np.zeros(total_steps, dtype=np.float64),
+                'P_bop_grid_usage_mw': np.zeros(total_steps, dtype=np.float64)
             }
 
         # 2. Identify Components & Pre-Bind Arrays
@@ -1042,7 +1050,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # BOP Calculation (iterate all components)
         for _, comp in self._registry.list_components():
              if hasattr(comp, 'power_kw'): P_bop_kw += comp.power_kw
-             if hasattr(comp, 'electrical_power_kw'): P_bop_kw += comp.electrical_power_kw
+             elif hasattr(comp, 'electrical_power_kw'): P_bop_kw += comp.electrical_power_kw
+             elif hasattr(comp, 'fan_power_kw'): P_bop_kw += comp.fan_power_kw
+             elif hasattr(comp, 'current_power_w'): P_bop_kw += (comp.current_power_w / 1000.0)
 
         P_bop_mw = P_bop_kw / 1000.0
         
@@ -1062,7 +1072,18 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         else:
             bop_price = getattr(self._context.economics, 'bop_fixed_price_eur_mwh', 80.0)
         
-        bop_cost_eur = P_bop_mw * dt * bop_price
+        # Calculate Grid Side Power (AC)
+        # =====================================================================
+        # Apply transformer losses to get actual Grid Draw
+        # P_grid = P_dc / efficiency
+        
+        P_soec_grid_mw = P_soec_actual / self._η_soec_trafo if self._η_soec_trafo > 0 else P_soec_actual
+        P_pem_grid_mw = P_pem_actual / self._η_pem_trafo if self._η_pem_trafo > 0 else P_pem_actual
+        # For BoP, P_bop_mw is the Load. Grid Draw = Load / Eff
+        P_bop_grid_mw = P_bop_mw / self._η_bop_trafo if self._η_bop_trafo > 0 else P_bop_mw
+        
+        # BOP Cost should use the GRID SIDE power (AC), not load
+        bop_cost_eur = P_bop_grid_mw * dt * bop_price
         
         total_h2 = h2_soec + h2_pem + h2_atr
         self._state.cumulative_h2_kg += total_h2
@@ -1071,6 +1092,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['P_soec_actual'][step_idx] = P_soec_actual
         self._history['P_pem'][step_idx] = P_pem_actual
         self._history['P_sold'][step_idx] = P_sold_corrected
+        
+        # Record Grid Side Power
+        self._history['P_soec_grid_mw'][step_idx] = P_soec_grid_mw
+        self._history['P_pem_grid_mw'][step_idx] = P_pem_grid_mw
+        self._history['P_bop_grid_usage_mw'][step_idx] = P_bop_grid_mw
         self._history['h2_kg'][step_idx] = total_h2
         self._history['H2_soec_kg'][step_idx] = h2_soec
         self._history['H2_pem_kg'][step_idx] = h2_pem
@@ -1092,7 +1118,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history['sell_decision'][step_idx] = 1 if P_sold_corrected > 0 else 0
         
         # BOP Grid Import Recording
-        self._history['bop_grid_import_mw'][step_idx] = P_bop_mw
+        # BOP Grid Import Recording
+        # Note: 'bop_grid_import_mw' tracks the commercial import (if distinct from P_bop_mw logic)
+        # But for consistency, let's record the physical grid usage here too?
+        # The original code just recorded P_bop_mw. Now we record P_bop_grid_mw (AC).
+        self._history['bop_grid_import_mw'][step_idx] = P_bop_grid_mw
         self._history['bop_price_eur_mwh'][step_idx] = bop_price
         self._history['bop_cost_eur'][step_idx] = bop_cost_eur
         if step_idx > 0:
@@ -1208,9 +1238,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # 2. Total Electrical Consumption (P_el_total)
         p_el_total_kw = 0.0
         
-        # A. Electrolyzers (Already tracked in P_soec_actual, P_pem)
-        p_el_total_kw += (self._history['P_soec_actual'][step_idx] * 1000.0)
-        p_el_total_kw += (self._history['P_pem'][step_idx] * 1000.0)
+        # A. Electrolyzers (Use Grid Side AC Power)
+        p_el_total_kw += (self._history['P_soec_grid_mw'][step_idx] * 1000.0)
+        p_el_total_kw += (self._history['P_pem_grid_mw'][step_idx] * 1000.0)
         
         # B. Auxiliaries (Registry Scan)
         # Robust aggregation of all known power consumers
@@ -1244,8 +1274,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                  if p_comp > 0:
                      p_el_total_kw += p_comp
 
-        # C. Add centralized BoP (if calculated separately in history)
-        p_el_total_kw += (self._history['P_bop_mw'][step_idx] * 1000.0)
+        # C. Add centralized BoP (Use Grid Side AC Power)
+        p_el_total_kw += (self._history['P_bop_grid_usage_mw'][step_idx] * 1000.0)
 
         # 3. Biogas Energy Input
         energy_biogas_kw = 0.0

@@ -39,7 +39,13 @@ COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
     'dispatch_strategy_stacked': CORE_COLUMNS + ['P_bop_mw'],
     'arbitrage': CORE_COLUMNS,
     'arbitrage_scatter': CORE_COLUMNS,
-    'effective_ppa': CORE_COLUMNS + ['ppa_price_effective_eur_mwh'],
+    
+    # REQUIRED UPDATES FOR REFACTORED GRAPHS:
+    'effective_ppa': CORE_COLUMNS + ['ppa_price_effective_eur_mwh', 'H2_pem_kg', 'H2_soec_kg', 'H2_atr_kg'],
+    'temporal_averages': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
+    'process_train_profile': ['minute', '*_outlet_temp*', '*_outlet_pressure*', '*_outlet_mass_flow*', '*_outlet_H2O_ppm*'],
+    'mixer_comparison': ['minute', '*Mixer*', '*Drain*', '*Combiner*'],
+    'power_vs_ppa_thesis': CORE_COLUMNS + ['ppa_price_effective_eur_mwh'],
     
     # =========================================================================
     # H2 PRODUCTION
@@ -494,6 +500,20 @@ class GraphCatalog:
             enabled=True
         ))
 
+        # Combined Efficiency Graph
+        self.register(GraphMetadata(
+            graph_id='combined_efficiency_plotly',
+            title='Combined Efficiency Overview (Interactive)',
+            description='Comparative view of PEM, SOEC, ATR, and Global Plant efficiencies',
+            function=pg.plot_all_efficiencies,
+            library=GraphLibrary.PLOTLY,
+            # Requires efficiency columns, wilcards used to catch variations
+            data_required=['*efficiency*', 'P_pem', 'H2_pem*', 'P_soec', 'H2_soec*'],
+            priority=GraphPriority.CRITICAL,
+            category='performance',
+            enabled=True
+        ))
+
 
         # 6. Wind Duration (New/Twin)
         self.register(GraphMetadata(
@@ -785,11 +805,26 @@ class GraphCatalog:
             description='V-j curve comparison: BOL vs EOL vs Current',
             function=pg.plot_physics_polarization,
             library=GraphLibrary.PLOTLY,
-            data_required=['minute'], # Only relies on simulation time
+            data_required=['pem.current_density', 'pem.voltage', 'minute'],
             priority=GraphPriority.MEDIUM,
             category='physics',
             enabled=True
         ))
+
+        # New: Power vs PPA Thesis Graph
+        self.register(GraphMetadata(
+            graph_id='power_vs_ppa_thesis',
+            title='Power Offer vs PPA Analysis',
+            description='Interactive: Correlation between Wind Power and PPA Prices',
+            function=pg.plot_power_vs_ppa,
+            library=GraphLibrary.PLOTLY,
+            data_required=['P_offer', 'ppa_price_effective_eur_mwh', 'minute'],
+            priority=GraphPriority.HIGH,
+            category='economics',
+            enabled=True
+        ))
+
+
 
         self.register(GraphMetadata(
             graph_id='physics_efficiency',

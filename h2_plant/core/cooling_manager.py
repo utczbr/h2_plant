@@ -107,8 +107,8 @@ class CoolingManager(Component):
             return_temp_c (float, optional): Glycol return temperature from user.
             source_id (str): ID of the component registering the load.
         """
-        if duty_kw > 0.1:
-             print(f"DEBUG_LOAD: Manager received {duty_kw:.2f} kW from {source_id}", flush=True)
+        #if duty_kw > 0.1:
+        #     print(f"DEBUG_LOAD: Manager received {duty_kw:.2f} kW from {source_id}", flush=True)
         self._current_step_glycol_load_kw += duty_kw
         self._current_step_glycol_flow_kg_s += flow_kg_s
 

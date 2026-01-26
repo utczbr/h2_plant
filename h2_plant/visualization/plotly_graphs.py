@@ -4,6 +4,7 @@ Plotly graph implementations for H2 Plant visualization.
 
 from typing import Dict, Any, List, Optional
 import logging
+import math
 import pandas as pd
 
 try:
@@ -853,80 +854,186 @@ def plot_dispatch_strategy(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     return fig
 
-
 @log_graph_errors
 def plot_power_breakdown_pie(df: pd.DataFrame, **kwargs) -> go.Figure:
     """
-    Plot power consumption breakdown as pie chart.
+    Donut chart showing Total Energy Consumption breakdown.
+    Designed to be compact for academic thesis use.
     
-    FIX: Uses FULL dataframe for energy calculation (no downsampling distortion).
-    Also includes BOP, Auxiliary, and Cooling categories.
+    Calculates Total Energy (MWh) for each subsystem over the simulation period.
     """
     _check_dependencies()
     
-    # CRITICAL FIX: Get dt from attrs or calculate from minute column
-    # DO NOT downsample for energy calculations!
-    dt_seconds = df.attrs.get('dt_seconds', 60.0)
-    dt_h = dt_seconds / 3600.0  # Convert to hours
-    
-    # Helper to calculate energy in MWh from power columns
-    def calc_energy_mwh(col_name, df):
-        if col_name and col_name in df.columns:
-            power = df[col_name].sum()
-            # Detect unit: if column contains 'kw' or mean > 100, assume kW
-            if 'kw' in col_name.lower() or power / len(df) > 100:
-                return power * dt_h / 1000.0  # kW*h -> MWh
-            else:
-                return power * dt_h  # MW*h -> MWh
-        return 0.0
-    
-    # Find power columns
-    pem_col = next((c for c in ['P_pem', 'pem_power_kw', 'pem_power_mw'] if c in df.columns), None)
-    soec_col = next((c for c in ['P_soec_actual', 'P_soec', 'soec_power_kw'] if c in df.columns), None)
-    comp_col = next((c for c in ['compressor_power_kw', 'total_compressor_power_kw'] if c in df.columns), None)
-    bop_col = next((c for c in ['P_bop_mw', 'bop_power_kw', 'auxiliary_power_kw'] if c in df.columns), None)
-    cooling_col = next((c for c in ['cooling_power_kw', 'chiller_power_kw'] if c in df.columns), None)
-    
-    # Calculate energies
-    pem_energy = calc_energy_mwh(pem_col, df)
-    soec_energy = calc_energy_mwh(soec_col, df)
-    comp_energy = calc_energy_mwh(comp_col, df)
-    bop_energy = calc_energy_mwh(bop_col, df)
-    cooling_energy = calc_energy_mwh(cooling_col, df)
-    
-    # Build chart data
-    categories = [
-        ('PEM Electrolysis', pem_energy, '#1f77b4'),
-        ('SOEC Electrolysis', soec_energy, '#ff7f0e'),
-        ('Compression', comp_energy, '#9467bd'),
-        ('BOP/Auxiliary', bop_energy, '#2ca02c'),
-        ('Cooling', cooling_energy, '#17becf'),
+    # -------------------------
+    # 1) Category definitions
+    # -------------------------
+    storage_compression_comps = [
+        'LP_Compressor_S1', 'LP_Intercooler_1',
+        'HP_Compressor_S2', 'HP_Intercooler_2',
+        'HP_Compressor_S3', 'HP_Intercooler_3',
+        'HP_Compressor_S4', 'HP_Intercooler_4',
+        'HP_Compressor_S5', 'Truck_Station'
     ]
+    pem_comps = [
+        'PEM_Electrolyzer', 'PEM_H2_KOD_1', 'PEM_H2_KOD_2', 'PEM_H2_Coalescer_1',
+        'PEM_H2_ElectricBoiler_1', 'PEM_H2_Deoxo_1', 'PEM_H2_KOD_3',
+        'PEM_H2_ElectricBoiler_2', 'PEM_H2_PSA_1', 'PEM_O2_KOD_1', 
+        'PEM_O2_KOD_2', 'PEM_O2_Coalescer_1', 'PEM_O2_ElectricBoiler'
+    ]
+    soec_comps = [
+        'SOEC_Cluster', 'SOEC_H2_Interchanger_1', 'SOEC_H2_KOD_1', 'SOEC_H2_Cyclone_1',
+        'SOEC_H2_Compressor_S1', 'SOEC_H2_Compressor_S2', 'SOEC_H2_Cyclone_2',
+        'SOEC_H2_Compressor_S3', 'SOEC_H2_Cyclone_3', 'SOEC_H2_Compressor_S4',
+        'SOEC_H2_Cyclone_4', 'SOEC_H2_Compressor_S5', 'SOEC_H2_Cyclone_5',
+        'SOEC_H2_Compressor_S6', 'SOEC_H2_Deoxo_1', 'SOEC_H2_Coalescer_2',
+        'SOEC_H2_ElectricBoiler_PSA', 'SOEC_H2_PSA_1',
+        'SOEC_O2_Interchanger_1', 'SOEC_O2_compressor_1', 'SOEC_O2_compressor_2',
+        'SOEC_O2_compressor_3', 'SOEC_O2_compressor_4',
+        'SOEC_Steam_Boiler', 'SOEC_Steam_Compressor_1', 'SOEC_Steam_Drycooler',
+        'SOEC_Steam_Compressor_2', 'SOEC_Feed_Pump', 'SOEC_H2_Boiler'
+    ]
+    atr_comps = [
+        'ATR_Plant', 'ATR_H01_Boiler', 'ATR_H02_Boiler', 'ATR_H04_Boiler',
+        'ATR_O2_Compressor', 'ATR_PSA_1', 'ATR_H2_Compressor_1', 'ATR_H2_Compressor_2',
+        'Biogas_Source', 'Biogas_Compressor_1', 'Biogas_Compressor_2', 'Biogas_Compressor_3'
+    ]
+    water_comps = [
+        'Water_Source', 'Water_Purifier', 'UltraPure_Tank',
+        'ATR_Feed_Pump', 'PEM_Water_Pump', 'SOEC_Drain_Pump',
+        'SOEC_DRAIN_PUMP_1', 'SOEC_DRAIN_PUMP_2',
+        'ATR_Drain_Pump_1', 'ATR_Drain_Pump_2'
+    ]
+
+    # Categories initialization (MWh)
+    categories = {
+        'Storage & Compression': 0.0,
+        'PEM': 0.0,
+        'SOEC': 0.0,
+        'ATR': 0.0,
+        'Water Treatment': 0.0,
+        'Cooling': 0.0
+    }
+
+    # -------------------------
+    # 2) Calculate Energy
+    # -------------------------
+    # Determine simulation duration in hours
+    dt_seconds = df.attrs.get('dt_seconds', 60.0)
+    total_duration_hours = len(df) * dt_seconds / 3600.0
     
-    # Filter out zero values
-    plot_data = [(l, v, c) for l, v, c in categories if v > 0.01]  # Ignore negligible values
-    if plot_data:
-        plot_labels, plot_values, plot_colors = zip(*plot_data)
-    else:
-        return _empty_figure("No power consumption data available")
+    # If minute column exists, try to be more precise
+    if 'minute' in df.columns and len(df) > 1:
+        total_duration_hours = (df['minute'].max() - df['minute'].min() + (dt_seconds/60.0)) / 60.0
+
+    def is_cooling(col_name: str) -> bool:
+        lower = col_name.lower()
+        keywords = ['drycooler', 'chiller', 'intercooler', 'coolingmanager']
+        is_cooling_comp = any(k in lower for k in keywords)
+        is_power = ('fan_power' in lower or 'electrical_power' in lower or
+                    'power_kw' in lower or '_kw' in lower or lower.endswith('kw') or lower.endswith('mw'))
+        return is_cooling_comp and is_power and 'duty' not in lower
+
+    # Gather power columns
+    cols = df.columns.tolist()
+    power_cols = [c for c in cols if (c.lower().endswith('kw') or c.lower().endswith('mw') or c.startswith('P_'))
+                  and 'price' not in c.lower()]
+
+    for col in power_cols:
+        # Get Mean Power in kW
+        mean_kw = df[col].mean()
+        if pd.isna(mean_kw): continue
+        
+        # Convert MW columns to kW
+        if 'mw' in col.lower() or col in ['P_pem', 'P_soec_actual', 'P_offer', 'P_sold', 'P_bop_mw']:
+            mean_kw *= 1000.0
+
+        if abs(mean_kw) < 0.001: continue
+
+        # Calculate Energy for this component (kWh) -> convert to MWh later
+        energy_kwh = mean_kw * total_duration_hours
+
+        col_lower = col.lower()
+        if is_cooling(col):
+            categories['Cooling'] += energy_kwh
+        elif any(col.startswith(comp) for comp in storage_compression_comps):
+            categories['Storage & Compression'] += energy_kwh
+        elif any(col.startswith(comp) for comp in pem_comps) or col == 'P_pem':
+            categories['PEM'] += energy_kwh
+        elif any(col.startswith(comp) for comp in soec_comps) or col in ['P_soec_actual', 'P_soec']:
+            categories['SOEC'] += energy_kwh
+        elif any(col.startswith(comp) for comp in atr_comps):
+            categories['ATR'] += energy_kwh
+        elif any(col.startswith(comp) for comp in water_comps) or 'pump' in col_lower:
+            categories['Water Treatment'] += energy_kwh
+
+    # Convert kWh to MWh
+    for k in categories:
+        categories[k] /= 1000.0
+
+    # -------------------------
+    # 3) Plotting
+    # -------------------------
+    # Filter zeros
+    labels = [k for k, v in categories.items() if v > 0.01]
+    values = [categories[k] for k in labels]
+    total_mwh = sum(values)
     
+    if total_mwh == 0:
+        return _empty_figure("No energy consumption data found")
+
+    # Sort slices descending
+    sorted_indices = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+    labels = [labels[i] for i in sorted_indices]
+    values = [values[i] for i in sorted_indices]
+
+    # Colors
+    color_map = {
+        'Storage & Compression': '#1f77b4', # Blue
+        'PEM': '#d62728',    # Red
+        'SOEC': '#ff7f0e',   # Orange
+        'ATR': '#2ca02c',    # Green
+        'Water Treatment': '#17becf', # Cyan
+        'Cooling': '#9467bd' # Purple
+    }
+    colors = [color_map.get(l, '#7f7f7f') for l in labels]
+
     fig = go.Figure(data=[go.Pie(
-        labels=plot_labels,
-        values=plot_values,
-        marker=dict(colors=plot_colors),
+        labels=labels,
+        values=values,
+        hole=0.6, # Donut style
         textinfo='label+percent',
-        textposition='inside',
-        hovertemplate='%{label}: %{value:.2f} MWh<extra></extra>'
+        textposition='outside', # cleaner for thesis
+        marker=dict(colors=colors, line=dict(color='#FFFFFF', width=2)),
+        hovertemplate='<b>%{label}</b><br>Energy: %{value:,.2f} MWh<br>Share: %{percent}<extra></extra>'
     )])
-    
-    total_energy_mwh = sum(plot_values)
-    
+
+    # Center text
+    fig.add_annotation(
+        text=f"<b>Total<br>{total_mwh:,.0f} MWh</b>",
+        x=0.5, y=0.5,
+        font=dict(size=14, family="Arial Black"),
+        showarrow=False
+    )
+
     fig.update_layout(
-        title=kwargs.get('title', f'Total Energy Consumption Breakdown ({total_energy_mwh:.1f} MWh)'),
-        legend=dict(title=f"Total: {total_energy_mwh:.2f} MWh"),
+        title=dict(
+            text=kwargs.get('title', "Plant Energy Consumption Breakdown"),
+            x=0.5,
+            xanchor='center'
+        ),
+        showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2, # Below chart
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(l=20, r=20, t=50, b=20),
+        height=400, # Compact height
         template='plotly_white'
     )
-    
+
     return fig
 
 
@@ -4213,6 +4320,22 @@ def plot_physics_polarization(df: pd.DataFrame, **kwargs) -> go.Figure:
     _, _, _, _, _, V_eol, _, _ = _calculate_pem_physics_curves(t_op_h=87600) # 10 years
     _, _, _, _, _, V_curr, _, _ = _calculate_pem_physics_curves(t_op_h=t_op_current)
     
+    # Calculate Reference Curve (Piecewise)
+    # User formula provided:
+    # if x <= 0.346: 0.266142 * (x ** 0.390646) + 1.453864
+    # else: 0.194938 * (x ** 0.849221) + 1.553147
+    # Proceeding with assumption that unit is A/cm^2 based on coefficients.
+    
+    x_ref = np.asarray(j)
+    V_ref = np.empty_like(x_ref, dtype=float)
+    mask = x_ref <= 0.346
+    V_ref[mask] = 0.266142 * (x_ref[mask] ** 0.390646) + 1.453864
+    V_ref[~mask] = 0.194938 * (x_ref[~mask] ** 0.849221) + 1.553147
+    
+    # Calculate Difference (Current - Reference)
+    # Positive means simulated is higher voltage (less efficient) than reference
+    V_diff = V_curr - V_ref
+    
     fig = go.Figure()
     
     # Reversible Voltage Area
@@ -4254,6 +4377,25 @@ def plot_physics_polarization(df: pd.DataFrame, **kwargs) -> go.Figure:
         hovertemplate='Current: %{y:.2f} V<extra></extra>'
     ))
     
+    # Reference (Theoretical)
+    fig.add_trace(go.Scatter(
+        x=j, y=V_ref,
+        mode='lines',
+        name='Reference (Theoretical)',
+        line=dict(color='gray', width=2, dash='dot'),
+        hovertemplate='Ref: %{y:.2f} V<extra></extra>'
+    ))
+    
+    # Difference (Secondary Y)
+    fig.add_trace(go.Scatter(
+        x=j, y=V_diff,
+        mode='lines',
+        name='Δ Voltage (Sim - Ref)',
+        yaxis='y2',
+        line=dict(color='purple', width=1),
+        hovertemplate='ΔV: %{y:.3f} V<extra></extra>'
+    ))
+
     # Nominal Point
     fig.add_vline(x=CONST.j_nom, line_dash="solid", line_color="black", annotation_text=f"Nominal ({CONST.j_nom} A/cm²)")
     
@@ -4261,6 +4403,15 @@ def plot_physics_polarization(df: pd.DataFrame, **kwargs) -> go.Figure:
         title=kwargs.get('title', 'PEM Physics: Polarization Curve Evolution'),
         xaxis_title='Current Density (A/cm²)',
         yaxis_title='Voltage (V)',
+        yaxis2=dict(
+            title='Δ Voltage (V)',
+            overlaying='y',
+            side='right',
+            showgrid=False,
+            zeroline=True,
+            zerolinecolor='gray',
+            zerolinewidth=1
+        ),
         template='plotly_white',
         hovermode='x unified',
         legend=dict(x=0.02, y=0.98)
@@ -4400,6 +4551,720 @@ def plot_physics_power_balance(df: pd.DataFrame, **kwargs) -> go.Figure:
         template='plotly_white',
         hovermode='x unified',
          legend=dict(x=0.02, y=0.98)
+    )
+    
+    return fig
+
+@log_graph_errors
+def plot_all_efficiencies(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot all individual subsystem efficiencies (PEM, SOEC, ATR) and 
+    the integrated global plant efficiency on a single timeline.
+    """
+    _check_dependencies()
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    fig = go.Figure()
+    
+    # Helper to standardize percentage (detect if 0-1 or 0-100)
+    def to_percent(arr):
+        if arr is None: return None
+        # If mean is small (< 1.2), assume it's a fraction and convert to %
+        if np.nanmean(arr) <= 1.2 and np.nanmax(arr) <= 1.5:
+            return arr * 100.0
+        return arr
+
+    # --- 1. PEM Efficiency ---
+    # Try explicit column, then calculation fallback
+    pem_eff = next((df_plot[c].values for c in ['pem_efficiency', 'efficiency_pct', 'PEM_efficiency'] if c in df_plot.columns), None)
+    
+    if pem_eff is None:
+        # Fallback calc: (H2_kg * 33.33) / P_pem_kWh
+        h2 = next((df_plot[c].values for c in ['H2_pem_kg', 'H2_pem'] if c in df_plot.columns), None)
+        p_pem = next((df_plot[c].values for c in ['P_pem', 'pem_power_mw'] if c in df_plot.columns), None)
+        dt_h = df.attrs.get('dt_seconds', 60.0) / 3600.0
+        
+        if h2 is not None and p_pem is not None:
+             # Normalize units: P needs to be kW
+             p_kw = p_pem * 1000 if np.nanmean(p_pem) < 1000 else p_pem
+             # Efficiency = (kg/h * 33.33 kWh/kg) / kW_in
+             h2_rate = h2 / dt_h
+             with np.errstate(divide='ignore', invalid='ignore'):
+                pem_eff = np.where(p_kw > 1, (h2_rate * 33.33) / p_kw * 100, 0)
+
+    if pem_eff is not None:
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours, y=to_percent(pem_eff), mode='lines', name='PEM System',
+            line=dict(color='#1f77b4', width=2), # Blue
+            hovertemplate='PEM: %{y:.1f}%<extra></extra>'
+        ))
+
+    # --- 2. SOEC Efficiency ---
+    soec_eff = next((df_plot[c].values for c in ['soec_efficiency', 'efficiency_soec', 'SOEC_Cluster_system_efficiency_percent'] if c in df_plot.columns), None)
+    
+    if soec_eff is None:
+         # Fallback calc: (H2_kg * 33.33) / P_soec_kWh
+        h2_soec = next((df_plot[c].values for c in ['H2_soec_kg', 'H2_soec'] if c in df_plot.columns), None)
+        p_soec = next((df_plot[c].values for c in ['P_soec', 'P_soec_actual', 'soec_power_mw'] if c in df_plot.columns), None)
+        dt_h = df.attrs.get('dt_seconds', 60.0) / 3600.0
+        
+        if h2_soec is not None and p_soec is not None:
+             # Normalize units: P needs to be kW
+             p_kw_soec = p_soec * 1000 if np.nanmean(p_soec) < 1000 else p_soec
+             
+             # Efficiency = (kg/h * 33.33 kWh/kg) / kW_in
+             h2_rate_soec = h2_soec / dt_h
+             with np.errstate(divide='ignore', invalid='ignore'):
+                soec_eff = np.where(p_kw_soec > 1, (h2_rate_soec * 33.33) / p_kw_soec * 100, 0)
+                
+    if soec_eff is not None:
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours, y=to_percent(soec_eff), mode='lines', name='SOEC System',
+            line=dict(color='#ff7f0e', width=2), # Orange
+            hovertemplate='SOEC: %{y:.1f}%<extra></extra>'
+        ))
+
+    # --- 3. ATR Efficiency ---
+    atr_chem = next((df_plot[c].values for c in df_plot.columns if 'atr_efficiency_chemical' in c), None)
+    atr_glob = next((df_plot[c].values for c in df_plot.columns if 'atr_efficiency_global' in c), None)
+    
+    if atr_chem is not None:
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours, y=to_percent(atr_chem), mode='lines', name='ATR Chemical',
+            line=dict(color='#2ca02c', width=2), # Green
+            hovertemplate='ATR Chem: %{y:.1f}%<extra></extra>'
+        ))
+    if atr_glob is not None:
+         fig.add_trace(get_scatter_type(len(hours))(
+            x=hours, y=to_percent(atr_glob), mode='lines', name='ATR Global (CHP)',
+            line=dict(color='#2ca02c', width=2, dash='dot'),
+            hovertemplate='ATR Glob: %{y:.1f}%<extra></extra>'
+        ))
+
+    # --- 4. Integrated Global Efficiency ---
+    global_eff = next((df_plot[c].values for c in ['integrated_global_efficiency', 'global_efficiency'] if c in df_plot.columns), None)
+    
+    if global_eff is not None:
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours, y=to_percent(global_eff), mode='lines', name='TOTAL PLANT',
+            line=dict(color='black', width=3.5), # Black/Bold
+            hovertemplate='<b>Plant: %{y:.1f}%</b><extra></extra>'
+        ))
+        
+        # Add average annotation for Plant Efficiency
+        avg_glob = np.nanmean(to_percent(global_eff))
+        fig.add_hline(y=avg_glob, line_dash="dash", line_color="gray", annotation_text=f"Plant Avg: {avg_glob:.1f}%")
+
+    fig.update_layout(
+        title=kwargs.get('title', 'Combined Plant Efficiency Overview'),
+        xaxis_title='Time (hours)',
+        yaxis_title='Efficiency (% LHV)',
+        template='plotly_white',
+        hovermode='x unified',
+        yaxis=dict(range=[0, 105]), # Cap at 105% to show ATR CHP effects if present, but keep clean
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    return fig
+
+
+@log_graph_errors
+def plot_mixer_comparison(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot comparison of drain and mixer streams.
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    # Find relevant columns
+    mixer_cols = [col for col in df_plot.columns if 'Mixer' in col or 'Drain' in col or 'Combiner' in col]
+    
+    if not mixer_cols:
+        return _empty_figure("No mixer/drain data found")
+    
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                        subplot_titles=('Temperature (C)', 'Pressure (bar)', 'Mass Flow (kg/h)'))
+    
+    for col in mixer_cols:
+        # Extract component ID and clean name
+        parts = col.split('_outlet_') if '_outlet_' in col else [col]
+        comp_id = parts[0].replace('_', ' ')  # Clean: 'PEM_H2_Mixer' -> 'PEM H2 Mixer'
+        
+        if '_temp_' in col:
+            fig.add_trace(go.Scatter(x=hours, y=df_plot[col], mode='lines', name=comp_id), row=1, col=1)
+        elif '_pressure_' in col:
+            fig.add_trace(go.Scatter(x=hours, y=df_plot[col], mode='lines', name=comp_id), row=2, col=1)
+        elif '_mass_flow_' in col:
+            fig.add_trace(go.Scatter(x=hours, y=df_plot[col], mode='lines', name=comp_id), row=3, col=1)
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'Drain & Mixer Streams Comparison'),
+        height=800,
+        template='plotly_white',
+        hovermode='x unified',
+        showlegend=True
+    )
+    
+    fig.update_yaxes(title_text="Temperature (C)", row=1, col=1)
+    fig.update_yaxes(title_text="Pressure (bar)", row=2, col=1)
+    fig.update_yaxes(title_text="Mass Flow (kg/h)", row=3, col=1)
+    fig.update_xaxes(title_text="Time (hours)", row=3, col=1)
+    
+    return fig
+
+
+@log_graph_errors
+def plot_effective_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot effective PPA price vs spot price over time + H2 Production Breakdown.
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    ppa_col = next((c for c in ['ppa_price_effective_eur_mwh', 'ppa_effective'] if c in df_plot.columns), None)
+    spot_col = 'spot_price'
+    
+    if not ppa_col or spot_col not in df_plot.columns:
+        return _empty_figure("No PPA or spot price data found")
+    
+    # Extract H2 production columns
+    pem_col = next((c for c in ['H2_pem_kg', 'H2_pem'] if c in df_plot.columns), None)
+    soec_col = next((c for c in ['H2_soec_kg', 'H2_soec'] if c in df_plot.columns), None)
+    atr_col = next((c for c in ['H2_atr_kg', 'H2_atr'] if c in df_plot.columns), None)
+    
+    # Use fillna(0) to ensure bars plot correctly even with missing data
+    pem_prod = df_plot[pem_col].fillna(0).values if pem_col else np.zeros(len(hours))
+    soec_prod = df_plot[soec_col].fillna(0).values if soec_col else np.zeros(len(hours))
+    atr_prod = df_plot[atr_col].fillna(0).values if atr_col else np.zeros(len(hours))
+    
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                        subplot_titles=('PPA vs Spot Price', 'H2 Production Breakdown'))
+    
+    # Row 1: PPA and Spot Lines
+    ScatterType = get_scatter_type(len(hours))
+    
+    fig.add_trace(ScatterType(
+        x=hours, y=df_plot[ppa_col], mode='lines', name='Effective PPA',
+        line=dict(color='blue', width=2)
+    ), row=1, col=1)
+    
+    fig.add_trace(ScatterType(
+        x=hours, y=df_plot[spot_col], mode='lines', name='Spot Price',
+        line=dict(color='red', width=2, dash='dot')
+    ), row=1, col=1)
+    
+    # Row 2: Stacked Bar for H2 Production
+    # Using marker colors consistent with plant topology
+    fig.add_trace(go.Bar(x=hours, y=pem_prod, name='PEM', marker_color='#1f77b4'), row=2, col=1)
+    fig.add_trace(go.Bar(x=hours, y=soec_prod, name='SOEC', marker_color='#ff7f0e'), row=2, col=1)
+    
+    if atr_col:
+        fig.add_trace(go.Bar(x=hours, y=atr_prod, name='ATR', marker_color='#2ca02c'), row=2, col=1)
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'Effective PPA Price Analysis'),
+        height=800,
+        template='plotly_white',
+        hovermode='x unified',
+        barmode='stack'  # Critical for Row 2
+    )
+    
+    fig.update_yaxes(title_text="Price (EUR/MWh)", row=1, col=1)
+    fig.update_yaxes(title_text="H2 Production (kg)", row=2, col=1)
+    fig.update_xaxes(title_text="Time (hours)", row=2, col=1)
+    
+    return fig
+
+
+@log_graph_errors
+def plot_process_train_profile(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot process train profile: Temperature, Pressure, Mass Flow, and Impurities.
+    """
+    _check_dependencies()
+    
+    # Find train components
+    train_components = sorted(set(
+        col.split('_outlet_')[0] for col in df.columns if '_outlet_' in col
+    ))
+    
+    if not train_components:
+        return _empty_figure("No process train data found")
+    
+    fig = make_subplots(
+        rows=3, cols=1, shared_xaxes=True,
+        specs=[[{}], [{}], [{"secondary_y": True}]],
+        subplot_titles=('Temperature (C)', 'Pressure (bar)', 'Mass Flow (kg/h) & Impurity (ppm)')
+    )
+    
+    # Selector for different trains
+    train_buttons = []
+    # Helper to determine visibility based on component name
+    for train_type in ['H2', 'O2', 'Syngas', 'All']:
+        # Logic: if 'H2' button, show traces containing 'H2'. If 'All', show everything.
+        # Each component has 3 traces (Temp, Press, Flow/Impurity), so we multiply the boolean list
+        visible_flags = []
+        for comp in train_components:
+            is_visible = (train_type in comp) or (train_type == 'All')
+            # Assuming 3 traces per component (Temp, Press, Flow) + optional Impurity
+            # To correspond exactly to the order traces are added below, we must be careful.
+            # Simplified approach: We will rely on Plotly's trace grouping or update the logic later.
+            # For now, let's assume 'All' is default and users can click legend to isolate.
+            pass 
+
+    # Note: Implementing complex buttons dynamically requires tracking trace indices. 
+    # To keep it robust, we will rely on Legend Groups.
+    
+    for comp_id in train_components:
+        # Determine color (mock function or hash based)
+        # Using a consistent hash-to-color or cycling would be ideal.
+        name = comp_id.replace('_', ' ')
+        
+        # Temperature
+        if f"{comp_id}_outlet_temp_C" in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['minute'], y=df[f"{comp_id}_outlet_temp_C"],
+                mode='lines', name=f"{name} (T)", legendgroup=name
+            ), row=1, col=1)
+        
+        # Pressure
+        if f"{comp_id}_outlet_pressure_bar" in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['minute'], y=df[f"{comp_id}_outlet_pressure_bar"],
+                mode='lines', name=f"{name} (P)", legendgroup=name, showlegend=False
+            ), row=2, col=1)
+        
+        # Mass Flow
+        if f"{comp_id}_outlet_mass_flow_kg_h" in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['minute'], y=df[f"{comp_id}_outlet_mass_flow_kg_h"],
+                mode='lines', name=f"{name} (Flow)", legendgroup=name, showlegend=False
+            ), row=3, col=1)
+            
+        # Impurity (example: H2O ppm)
+        if f"{comp_id}_outlet_H2O_ppm" in df.columns:
+            fig.add_trace(go.Scatter(
+                x=df['minute'], y=df[f"{comp_id}_outlet_H2O_ppm"],
+                mode='lines', name=f"{name} Impurity",
+                line=dict(dash='dot'), legendgroup=name, showlegend=False
+            ), row=3, col=1, secondary_y=True)
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'Processes Properties Profile'),
+        height=900,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    
+    fig.update_yaxes(title_text="Temperature (deg C)", row=1, col=1)
+    fig.update_yaxes(title_text="Pressure (bar)", row=2, col=1)
+    fig.update_yaxes(title_text="Mass Flow (kg/h)", row=3, col=1)
+    fig.update_yaxes(title_text="Impurity / H2O (ppm)", type="log", row=3, col=1, secondary_y=True)
+    fig.update_xaxes(tickangle=45, title_text="Time / Component Step", row=3, col=1)
+    
+    return fig
+
+@log_graph_errors
+def plot_temporal_averages(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot Temporal Averages (Hourly aggregated price, power, H2) - Interactive twin.
+    
+    Features:
+    - Interactive Tabs (Hourly, Daily, Monthly, Yearly).
+    - Capacity Factor (CF) legends for SOEC/PEM.
+    - Dynamic Efficiency Calculation.
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import get_viz_config
+    from plotly.subplots import make_subplots
+    import pandas as pd
+    import numpy as np
+    
+    # --- 1. DATA PREPARATION ---
+    df_calc = df.copy()
+    
+    # Ensure 'minute' column exists for grouping
+    if 'minute' not in df_calc.columns:
+        if 'time' in df_calc.columns: 
+             df_calc['minute'] = df_calc.index 
+        else:
+             df_calc['minute'] = df_calc.index * 60 
+
+    # Identify Columns
+    p_wind_col = next((c for c in ['P_offer'] if c in df_calc.columns), None)
+    p_grid_col = next((c for c in ['P_sold', 'sell_power_mw'] if c in df_calc.columns), None)
+    p_pem_col = next((c for c in ['P_pem'] if c in df_calc.columns), None)
+    p_soec_col = next((c for c in ['P_soec'] if c in df_calc.columns), None)
+    
+    h2_cols = [c for c in ['H2_pem', 'H2_soec', 'H2_pem_kg', 'H2_soec_kg', 'H2_atr', 'H2_atr_kg'] if c in df_calc.columns]
+    
+    h2_soec_col = next((c for c in ['H2_soec', 'H2_soec_kg'] if c in df_calc.columns), None)
+    h2_pem_col = next((c for c in ['H2_pem', 'H2_pem_kg'] if c in df_calc.columns), None)
+    
+    # --- 2. CALCULATE CAPACITY FACTOR ---
+    pem_cf_str = ""
+    if p_pem_col:
+        # Get capacity from config or max observed
+        cap_pem = get_viz_config('plant_parameters.pem_capacity_mw', df_calc[p_pem_col].max())
+        if cap_pem > 0:
+            cf = (df_calc[p_pem_col].mean() / cap_pem) * 100
+            pem_cf_str = f" (CF: {cf:.1f}%)"
+
+    soec_cf_str = ""
+    if p_soec_col:
+        cap_soec = get_viz_config('plant_parameters.soec_capacity_mw', df_calc[p_soec_col].max())
+        if cap_soec > 0:
+            cf = (df_calc[p_soec_col].mean() / cap_soec) * 100
+            soec_cf_str = f" (CF: {cf:.1f}%)"
+
+    # --- 3. AGGREGATION FUNCTION ---
+    def get_aggregated_df(resolution_minutes):
+        """Aggregate dataframe by resolution (min) and recalculate metrics."""
+        df_res = df_calc.copy()
+        df_res['group'] = df_res['minute'] // resolution_minutes
+        
+        # Define aggregation rules
+        agg_rules = {}
+        # Price (mean)
+        price_col = next((c for c in ['spot_price', 'Spot'] if c in df_calc.columns), None)
+        if price_col: agg_rules[price_col] = 'mean'
+        
+        # Power (mean)
+        if p_pem_col: agg_rules[p_pem_col] = 'mean'
+        if p_soec_col: agg_rules[p_soec_col] = 'mean'
+        if p_wind_col: agg_rules[p_wind_col] = 'mean'
+        if p_grid_col: agg_rules[p_grid_col] = 'mean'
+        
+        # H2 (mean rate kg/h)
+        for c in h2_cols: agg_rules[c] = 'mean'
+        
+        # Add authoritative total columns to aggregation rules
+        mixer_mass_col = 'h2_kg'
+        mixer_rate_col = 'H2_Production_Mixer_outlet_mass_flow_kg_h'
+        
+        psa_cols = [
+            'SOEC_H2_PSA_1_outlet_mass_flow_kg_h',
+            'PEM_H2_PSA_1_outlet_mass_flow_kg_h', 
+            'ATR_PSA_1_outlet_mass_flow_kg_h'
+        ]
+        
+        if mixer_mass_col in df_calc.columns: agg_rules[mixer_mass_col] = 'mean'
+        if mixer_rate_col in df_calc.columns: agg_rules[mixer_rate_col] = 'mean'
+        
+        for p_col in psa_cols:
+             if p_col in df_calc.columns: agg_rules[p_col] = 'mean'
+        
+        if not agg_rules: return pd.DataFrame()
+        
+        df_grouped = df_res.groupby('group').agg(agg_rules).reset_index()
+        
+        # Recalculate Totals
+        
+        # Priority 1: Sum of PSA Outputs (True Purified Production)
+        # Matches logic in scripts/plot_daily_h2_production.py
+        psa_cols = [
+            'SOEC_H2_PSA_1_outlet_mass_flow_kg_h',
+            'PEM_H2_PSA_1_outlet_mass_flow_kg_h', 
+            'ATR_PSA_1_outlet_mass_flow_kg_h'
+        ]
+        available_psa_cols = [c for c in psa_cols if c in df_grouped.columns]
+        
+        if available_psa_cols:
+            df_grouped['Total_H2'] = df_grouped[available_psa_cols].sum(axis=1)
+            
+        # Priority 2: Mixer Outlet Rate (kg/h) - Direct reading (if PSA cols missing)
+        elif mixer_rate_col in df_grouped.columns:
+            df_grouped['Total_H2'] = df_grouped[mixer_rate_col]
+            
+        # Priority 3: Integrated Mass (kg/min) - Convert to Rate
+        elif mixer_mass_col in df_grouped.columns:
+            df_grouped['Total_H2'] = df_grouped[mixer_mass_col] * 60.0
+            
+        # Priority 4: Component Summation (Gross)
+        else:
+            df_grouped['Total_H2'] = 0.0
+            current_h2_cols = [c for c in h2_cols if c in df_grouped.columns]
+            for c in current_h2_cols:
+                # Heuristic: If column name implies mass (ends in _kg), convert to rate
+                if c.endswith('_kg'):
+                    df_grouped['Total_H2'] += df_grouped[c] * 60.0
+                else:
+                    df_grouped['Total_H2'] += df_grouped[c]
+            
+        # Recalculate Efficiencies (Dynamic)
+        LHV_MWh_kg = 0.03333
+
+        # SOEC Eff calc
+        if p_soec_col and h2_soec_col and h2_soec_col in df_grouped.columns:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                # Spec Prod = (kg/h) / MW
+                # Assume h2_col is kg/min, so * 60 to get kg/h
+                df_grouped['Spec_Prod_SOEC'] = np.where(df_grouped[p_soec_col] > 0.01, (df_grouped[h2_soec_col] * 60) / df_grouped[p_soec_col], 0)
+                df_grouped['Eff_soec'] = df_grouped['Spec_Prod_SOEC'] * LHV_MWh_kg * 100
+                df_grouped['Eff_soec'] = df_grouped['Eff_soec'].clip(0, 100)
+                # SEC = 1000 / Spec Prod
+                df_grouped['SEC_soec'] = np.where(df_grouped['Spec_Prod_SOEC'] > 0.01, 1000.0 / df_grouped['Spec_Prod_SOEC'], 0)
+
+        # PEM Eff calc
+        if p_pem_col and h2_pem_col and h2_pem_col in df_grouped.columns:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                df_grouped['Spec_Prod_PEM'] = np.where(df_grouped[p_pem_col] > 0.01, (df_grouped[h2_pem_col] * 60) / df_grouped[p_pem_col], 0)
+                df_grouped['Eff_pem'] = df_grouped['Spec_Prod_PEM'] * LHV_MWh_kg * 100
+                df_grouped['Eff_pem'] = df_grouped['Eff_pem'].clip(0, 100)
+        
+        return df_grouped
+
+    # Pre-calculate Aggregations
+    df_h = get_aggregated_df(60)       # Hourly
+    df_d = get_aggregated_df(1440)     # Daily
+    df_m = get_aggregated_df(43800)    # Monthly (~30.4 days)
+    df_y = get_aggregated_df(525600)   # Yearly
+
+    # --- 4. PLOT CONFIGURATION ---
+    fig = make_subplots(
+        rows=4, cols=1, 
+        shared_xaxes=True,
+        subplot_titles=('Average Wind & Grid Power', 'Average Consumption', 
+                        'Total H2 Production', 'System Efficiency (Dynamic SEC)'),
+        vertical_spacing=0.08
+    )
+    
+    def get_col(df_in, col): return df_in[col] if col in df_in.columns else np.array([])
+    
+    # Store trace configuration to map buttons later
+    # Format: (column_name, is_custom_data_needed, custom_data_type)
+    traces_config = [] 
+    
+    x_axis = df_h['group'].values
+    
+    # -- Row 1 --
+    if p_wind_col:
+        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_wind_col), name='Wind Power', marker_color='#3498db'), row=1, col=1)
+        traces_config.append((p_wind_col, False, None))
+        
+    if p_grid_col:
+        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_grid_col), name='Grid Export', marker_color='#f1c40f'), row=1, col=1)
+        traces_config.append((p_grid_col, False, None))
+    
+    # -- Row 2 --
+    if p_soec_col:
+        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_soec_col), name=f'SOEC Power{soec_cf_str}', marker_color='#2ecc71'), row=2, col=1)
+        traces_config.append((p_soec_col, False, None))
+        
+    if p_pem_col:
+        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_pem_col), name=f'PEM Power{pem_cf_str}', marker_color='#e74c3c'), row=2, col=1)
+        traces_config.append((p_pem_col, False, None))
+    
+    # -- Row 3 --
+    if 'Total_H2' in df_h.columns:
+        fig.add_trace(go.Bar(x=x_axis, y=df_h['Total_H2'], name='Total H2 Production', marker_color='#9b59b6'), row=3, col=1)
+        traces_config.append(('Total_H2', False, None))
+    
+    # -- Row 4 --
+    if 'Eff_soec' in df_h.columns:
+        custom = np.column_stack([df_h['SEC_soec'], df_h['Spec_Prod_SOEC']]) if 'SEC_soec' in df_h else None
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis, y=df_h['Eff_soec'], name='SOEC Efficiency', 
+                mode='lines+markers', line=dict(color='#2ecc71', width=2),
+                customdata=custom,
+                hovertemplate='Time: %{x}<br>Eff: %{y:.1f}%<br>SEC: %{customdata[0]:.1f} kWh/kg<br>Yield: %{customdata[1]:.1f} kg/MWh<extra></extra>'
+            ), row=4, col=1
+        )
+        traces_config.append(('Eff_soec', True, 'soec'))
+        
+        # Reference Line (Static, not part of traces_config for updates)
+        bol_eff_100pct = (1000.0 / 37.54) * 0.03333 * 100
+        fig.add_hline(y=bol_eff_100pct, line_dash="dash", line_color="rgba(46, 204, 113, 0.5)",
+                      annotation_text=f"BOL @100% ({bol_eff_100pct:.0f}%)", annotation_position="bottom right", row=4, col=1)
+        
+    if 'Eff_pem' in df_h.columns:
+        custom_pem = df_h['Spec_Prod_PEM'] if 'Spec_Prod_PEM' in df_h else None
+        fig.add_trace(
+            go.Scatter(
+                x=x_axis, y=df_h['Eff_pem'], name='PEM Efficiency', 
+                mode='lines+markers', line=dict(color='#e74c3c', width=2),
+                customdata=custom_pem,
+                hovertemplate='Time: %{x}<br>Eff: %{y:.1f}%<br>Yield: %{customdata:.2f} kg/MWh<extra></extra>'
+            ), row=4, col=1
+        )
+        traces_config.append(('Eff_pem', True, 'pem'))
+
+    # --- 5. BUILD INTERACTIVE BUTTONS (CORRECTED STRUCTURE) ---
+    def build_button_args(df_target):
+        """Generates the properly structured args for Plotly RESTYLE method."""
+        new_x = df_target['group'].values
+        
+        # 1. Create Dictionary of updates
+        # Keys are properties to update ('x', 'y', 'customdata')
+        # Values are LISTS containing the new data for EACH trace index passed in arg[1]
+        updates = {
+            'x': [],
+            'y': [],
+            'customdata': []
+        }
+        
+        for col_name, needs_custom, custom_type in traces_config:
+            # Append X data (same for all, but needed per trace)
+            updates['x'].append(new_x)
+            
+            # Append Y data
+            updates['y'].append(get_col(df_target, col_name))
+            
+            # Append CustomData
+            if needs_custom:
+                if custom_type == 'soec' and 'SEC_soec' in df_target:
+                    updates['customdata'].append(np.column_stack([df_target['SEC_soec'], df_target['Spec_Prod_SOEC']]))
+                elif custom_type == 'pem' and 'Spec_Prod_PEM' in df_target:
+                    updates['customdata'].append(df_target['Spec_Prod_PEM'])
+                else:
+                    updates['customdata'].append(None)
+            else:
+                updates['customdata'].append(None)
+                
+        # 2. Define Trace Indices to apply these updates to
+        # We assume traces are added in the exact order of traces_config
+        # Note: We must skip the static HLine traces, but since they are added via add_hline (shapes) 
+        # or separate traces not tracked in config, we use range(len(traces_config))
+        # Be careful if static traces were added via add_trace before the config loop finished.
+        # In this code, add_hline does NOT add a trace to the .data array in the same way.
+        trace_indices = list(range(len(traces_config)))
+        
+        # RESTYLE signature: [changes_dict, trace_indices]
+        return [updates, trace_indices]
+
+    buttons = [
+        dict(label="Hourly", method="restyle", args=build_button_args(df_h)),
+        dict(label="Daily", method="restyle", args=build_button_args(df_d)),
+        dict(label="Monthly", method="restyle", args=build_button_args(df_m)),
+        dict(label="Yearly", method="restyle", args=build_button_args(df_y)),
+    ]
+
+    # --- 6. FINAL LAYOUT UPDATE ---
+    fig.update_layout(
+        title=dict(text=kwargs.get('title', 'Temporal Averages Overview'), y=0.98),
+        template='plotly_white',
+        height=900,
+        showlegend=True,
+        barmode='group',
+        # Margin adjusted to accommodate buttons
+        margin=dict(t=120, b=50, l=60, r=60), 
+        updatemenus=[dict(
+            type="buttons",
+            direction="right",
+            # Position: Centered horizontally, slightly above the chart area
+            x=0.5, y=1.06,
+            xanchor='center', yanchor='bottom',
+            buttons=buttons,
+            pad={"r": 5, "t": 10},
+            showactive=True,
+            bgcolor="#f8f9fa",
+            bordercolor="#dee2e6",
+            borderwidth=1
+        )]
+    )
+    
+    fig.update_yaxes(title_text="Power (MW)", row=1, col=1)
+    fig.update_yaxes(title_text="Power (MW)", row=2, col=1)
+    fig.update_yaxes(title_text="H2 Rate (kg/h)", row=3, col=1)
+    fig.update_yaxes(title_text="Efficiency (% LHV)", range=[0, 100], row=4, col=1)
+    fig.update_xaxes(title_text='Time Group', row=4, col=1)
+    
+    return fig
+
+
+@log_graph_errors
+def plot_power_vs_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot Power Offer vs Effective PPA Price with view switching (Scatter vs Time Series).
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    p_offer_col = 'P_offer'
+    ppa_col = 'ppa_price_effective_eur_mwh'
+    
+    if p_offer_col not in df_plot.columns or ppa_col not in df_plot.columns:
+        return _empty_figure("No power offer or PPA data found")
+    
+    fig = go.Figure()
+    
+    # View A: Scatter Plot (P_offer vs PPA) - Default Visible
+    fig.add_trace(go.Scatter(
+        x=df_plot[p_offer_col],
+        y=df_plot[ppa_col],
+        mode='markers',
+        name='Correlation',
+        marker=dict(opacity=0.6, size=5),
+        visible=True 
+    ))
+    
+    # View B: Time Series (Dual Axis) - Default Hidden
+    fig.add_trace(go.Scatter(
+        x=hours, y=df_plot[p_offer_col],
+        mode='lines', name='Power Offer',
+        line=dict(color='blue'),
+        visible=False
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=hours, y=df_plot[ppa_col],
+        mode='lines', name='PPA Price',
+        line=dict(color='red'),
+        yaxis='y2',
+        visible=False
+    ))
+    
+    # Dropdown for switching views
+    fig.update_layout(
+        updatemenus=[
+            dict(
+                buttons=[
+                    dict(label='Scatter View (Correlation)',
+                         method='update',
+                         args=[{'visible': [True, False, False]},
+                               {'title': 'Power Offer vs PPA Price (Scatter)',
+                                'xaxis': {'title': 'Power Offer (MW)'},
+                                'yaxis': {'title': 'PPA Price (EUR/MWh)'},
+                                'yaxis2': {'visible': False}}]),
+                    dict(label='Time Series View',
+                         method='update',
+                         args=[{'visible': [False, True, True]},
+                               {'title': 'Power Offer and PPA Price Over Time',
+                                'xaxis': {'title': 'Time (hours)'},
+                                'yaxis': {'title': 'Power Offer (MW)'},
+                                'yaxis2': {'title': 'PPA Price (EUR/MWh)', 'overlaying': 'y', 'side': 'right', 'visible': True}}])
+                ],
+                direction="down",
+                showactive=True,
+                x=0.0, xanchor="left", y=1.1, yanchor="top"
+            )
+        ],
+        title='Power Offer vs PPA Price (Scatter)',
+        xaxis_title='Power Offer (MW)',
+        yaxis_title='PPA Price (EUR/MWh)',
+        yaxis2=dict(title='PPA Price (EUR/MWh)', overlaying='y', side='right', visible=False),
+        template='plotly_white'
     )
     
     return fig

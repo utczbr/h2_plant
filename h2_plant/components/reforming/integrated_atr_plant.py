@@ -363,12 +363,12 @@ class IntegratedATRPlant(ATRBaseComponent):
         W_in_kw = dm.lookup('W_in_func', clamped_o2)
         
         # Total Electrical Input = Internal Work (W_in) + External Auxiliaries (if any)
-        p_el_kw = W_in_kw + self.aux_power_kw
+        self.p_el_kw = W_in_kw + self.aux_power_kw
 
         # 5. Calculate Metrics
         if energy_input_kw > 1.0:
             self.atr_efficiency_chemical = energy_output_kw / energy_input_kw
-            self.atr_efficiency_global = (energy_output_kw + self.q_useful_kw) / (energy_input_kw + p_el_kw)
+            self.atr_efficiency_global = (energy_output_kw + self.q_useful_kw) / (energy_input_kw + self.p_el_kw)
             
             # Update inferred LHV_Biogas for reporting (Energy / Total Mass)
             # This requires total biogas mass. If we don't have it explicitly separate from steam/O2 in feed mixer,
@@ -397,6 +397,7 @@ class IntegratedATRPlant(ATRBaseComponent):
             logger.debug(f"  H₂ in Mix: {moles_H2:.2f} kmol/h (Pure:{F_H2:.2f} + Slip:{F_offgas * x_H2_tail:.2f})")
             logger.debug(f"  Total Comp: H2={y_H2*100:.1f}%, CO2={y_CO2*100:.1f}%, H2O={y_H2O*100:.1f}%, CH4={y_CH4*100:.2f}%")
             logger.debug(f"  Heat Duty: {self.heat_duty_kw:.1f} kW")
+            logger.debug(f"  Power Input: {self.p_el_kw:.1f} kW")
 
     def _clear_buffers(self) -> None:
         """Clear all input buffers after processing."""
@@ -422,7 +423,8 @@ class IntegratedATRPlant(ATRBaseComponent):
             'atr_efficiency_chemical': self.atr_efficiency_chemical,
             'atr_efficiency_global': self.atr_efficiency_global,
             'biogas_energy_input_kw': self.biogas_energy_input_kw,
-            'syngas_composition': self.current_syngas_comp.copy()
+            'syngas_composition': self.current_syngas_comp.copy(),
+            'power_kw': getattr(self, 'p_el_kw', 0.0) # Expose electrical power for dispatch/logging
         }
 
     def get_output(self, port_name: str) -> Any:
