@@ -345,6 +345,52 @@ class DetailedTankArray(Component):
             'total_discharged_kg': self.total_discharged_kg,
             'tank_details': tank_states
         }
+
+    def restore_state(self, state: Dict[str, Any]) -> None:
+        """
+        Restore component state from checkpoint.
+
+        Args:
+            state (Dict[str, Any]): Checkpoint state dictionary.
+        """
+        # Restore simple statistics
+        if 'total_filled_kg' in state:
+            self.total_filled_kg = state['total_filled_kg']
+        if 'total_discharged_kg' in state:
+            self.total_discharged_kg = state['total_discharged_kg']
+
+        # Restore individual tank states
+        tank_states = state.get('tank_details', [])
+        if not tank_states:
+            logger.warning(f"DetailedTankArray({self.component_id}) restore_state: No tank details found in checkpoint.")
+            return
+
+        # Map tank IDs for safety
+        tank_map = {t.id: t for t in self.tanks}
+
+        for t_state in tank_states:
+            tid = t_state.get('id')
+            if tid in tank_map:
+                tank = tank_map[tid]
+                tank.mass_kg = t_state.get('mass_kg', 0.0)
+                
+                # Restore pressure (primary truth is mass, but pressure is helpful context)
+                if 'pressure_bar' in t_state:
+                    tank.pressure_pa = t_state['pressure_bar'] * 1e5
+                
+                # Restore state enum
+                state_str = t_state.get('state', 'IDLE')
+                try:
+                    # Handle both integer (legacy) and string names
+                    if isinstance(state_str, int):
+                        tank.state = TankState(state_str)
+                    else:
+                        tank.state = getattr(TankState, state_str)
+                except (AttributeError, ValueError):
+                    logger.warning(f"Unknown tank state '{state_str}', defaulting to IDLE")
+                    tank.state = TankState.IDLE
+        
+        logger.info(f"DetailedTankArray({self.component_id}) restored state from checkpoint (Inventory: {self.total_mass_kg:.1f} kg)")
     
     # -------------------------------------------------------------------------
     # Internal Methods
