@@ -630,6 +630,128 @@ def plot_energy_price_timeline(df: pd.DataFrame, **kwargs) -> go.Figure:
         template='plotly_white',
         hovermode='x unified'
     )
+
+    return fig
+
+
+@log_graph_errors
+def plot_atr_efficiency_timeline(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot ATR efficiency over time (Chemical and Global).
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    # Find ATR efficiency columns
+    chem_col = next((c for c in df_plot.columns if 'atr_efficiency_chemical' in c or 'atr_eff_chem' in c), None)
+    glob_col = next((c for c in df_plot.columns if 'atr_efficiency_global' in c or 'atr_eff_global' in c), None)
+    
+    if not chem_col:
+        return _empty_figure("No ATR efficiency data available")
+        
+    eff_chem = df_plot[chem_col].values * 100.0
+    eff_glob = df_plot[glob_col].values * 100.0 if glob_col else np.zeros(len(hours))
+    
+    # Filter out potential crazy noise or zero-start artifacts if needed
+    # But usually raw data is preferred for engineering debug.
+    
+    fig = go.Figure()
+    
+    # Chemical Efficiency
+    fig.add_trace(get_scatter_type(len(hours))(
+        x=hours,
+        y=eff_chem,
+        mode='lines',
+        name='Chemical Efficiency (LHV)',
+        line=dict(color='#2ca02c', width=2), # Green
+        hovertemplate='Time: %{x:.1f}h<br>Chemical Eff: %{y:.1f}%<extra></extra>'
+    ))
+    
+    # Global Efficiency (CHP)
+    if glob_col and np.max(eff_glob) > 0.1:
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours,
+            y=eff_glob,
+            mode='lines',
+            name='Global Efficiency (CHP)',
+            line=dict(color='#ff7f0e', width=2, dash='dash'), # Orange
+            hovertemplate='Time: %{x:.1f}h<br>Global Eff: %{y:.1f}%<extra></extra>'
+        ))
+
+    # Add reference line (Mock target ~80% usually?)
+    # Just grid is fine.
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'ATR Plant Efficiency'),
+        xaxis_title='Time (hours)',
+        yaxis_title='Efficiency (%)',
+        template='plotly_white',
+        hovermode='x unified',
+        yaxis=dict(range=[0, 105])
+    )
+    
+    return fig
+
+
+
+@log_graph_errors
+def plot_global_efficiency_timeline(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot Integrated Plant Efficiency (Eq 5.42) over time.
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    # Find Efficiency Column
+    eff_col = next((c for c in ['integrated_global_efficiency', 'global_efficiency'] if c in df_plot.columns), None)
+    
+    if not eff_col:
+        return _empty_figure("No Global Efficiency data available")
+        
+    eff = df_plot[eff_col].values * 100.0
+    
+    # Filter out noise/zeros if needed (e.g. idle states)
+    # eff = np.where(eff > 0.01, eff, np.nan) 
+    
+    fig = go.Figure()
+    
+    fig.add_trace(get_scatter_type(len(hours))(
+        x=hours,
+        y=eff,
+        mode='lines',
+        name='Integrated Plant Efficiency',
+        line=dict(color='darkgreen', width=2),
+        hovertemplate='Time: %{x:.1f}h<br>Eff: %{y:.1f}%<extra></extra>'
+    ))
+    
+    # Add mean line for operating periods
+    if np.any(eff > 0.1):
+        mean_eff = np.mean(eff[eff > 0.1])
+        fig.add_hline(
+            y=mean_eff, 
+            line_dash="dash", 
+            line_color="green",
+            annotation_text=f"Mean: {mean_eff:.1f}%"
+        )
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'Integrated Plant Efficiency'),
+        xaxis_title='Time (hours)',
+        yaxis_title='Efficiency (% LHV)',
+        template='plotly_white',
+        hovermode='x unified',
+        yaxis=dict(range=[0, 100])
+    )
     
     return fig
 
@@ -4008,5 +4130,276 @@ def plot_process_train_profile(df: pd.DataFrame, **kwargs) -> go.Figure:
     fig.update_xaxes(tickangle=45, row=1, col=1)
     fig.update_xaxes(tickangle=45, row=2, col=1)
     fig.update_xaxes(tickangle=45, title_text="Component", row=3, col=1)
+    
+    return fig
+
+# =============================================================================
+# PHYSICS-BASED ANALYSIS GRAPHS (PEM)
+# =============================================================================
+
+def _calculate_pem_physics_curves(t_op_h: float = 0.0):
+    """
+    Internal helper to generate V-j curves based on physics model.
+    Matches logic from pem_operator.py using shared constants.
+    """
+    from h2_plant.config.constants_physics import PEMConstants
+    from h2_plant.models import pem_physics as phys
+    
+    CONST = PEMConstants()
+    
+    # Range: 0.01 to 95% of limit
+    j_lim = CONST.j_lim
+    j_range = np.linspace(0.01, j_lim * 0.95, 200)
+    T = CONST.T_default
+    P = CONST.P_op_default
+    
+    # 1. Reversible Voltage (Nernst)
+    U_rev_val = phys.calculate_Urev(T, P)
+    U_rev = np.full_like(j_range, U_rev_val)
+    
+    # 2. Activation Overpotential
+    # eta_act = (R * T) / (alpha * z * F) * np.log(j / j0)
+    eta_act = (CONST.R * T) / (CONST.alpha * CONST.z * CONST.F) * np.log(np.maximum(j_range, 1e-10) / CONST.j0)
+    
+    # 3. Ohmic Overpotential
+    # eta_ohm = j * (delta_mem / sigma)
+    eta_ohm = j_range * (CONST.delta_mem / CONST.sigma_base)
+    
+    # 4. Concentration Overpotential
+    limit_term = np.maximum(1e-6, j_lim - j_range)
+    eta_conc = (CONST.R * T) / (CONST.z * CONST.F) * np.log(j_lim / limit_term)
+    
+    # 5. Degradation
+    # Mirroring DetailedPEMElectrolyzer._calculate_U_deg logic:
+    t_table = np.array(CONST.DEGRADATION_YEARS) * 8760.0
+    v_stack_table = np.array(CONST.DEGRADATION_V_STACK)
+    v_cell_table = v_stack_table / CONST.N_cell_per_stack
+    
+    # BOL Reference (at nominal j)
+    # Ensure BOL reference uses same consistent calculation
+    V_BOL_NOM = phys.calculate_Vcell_base(CONST.j_nom, T, P)
+    
+    # Interpolate for current t_op_h
+    # Apply reasonable cap for interpolation (10 years)
+    t_interp = min(t_op_h, t_table[-1])
+    V_cell_degraded = np.interp(t_interp, t_table, v_cell_table)
+    
+    U_deg_val = np.maximum(0.0, V_cell_degraded - V_BOL_NOM)
+    
+    U_deg = np.full_like(j_range, U_deg_val)
+    
+    # Total
+    V_total = U_rev + eta_act + eta_ohm + eta_conc + U_deg
+    
+    return j_range, U_rev, eta_act, eta_ohm, eta_conc, V_total, U_deg, CONST
+
+
+@log_graph_errors
+def plot_physics_polarization(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Generates polarization curve comparing BOL, EOL, and Current State.
+    Uses physics model directly, creating operational context from dataframe time.
+    """
+    _check_dependencies()
+    from h2_plant.visualization.utils import get_viz_config
+    
+    # Determine current operating hours from dataframe
+    t_op_current = 0.0
+    if 'minute' in df.columns:
+        t_op_current = df['minute'].max() / 60.0
+    
+    # Calculate curves
+    j, U_rev, _, _, _, V_bol, _, CONST = _calculate_pem_physics_curves(t_op_h=0)
+    _, _, _, _, _, V_eol, _, _ = _calculate_pem_physics_curves(t_op_h=87600) # 10 years
+    _, _, _, _, _, V_curr, _, _ = _calculate_pem_physics_curves(t_op_h=t_op_current)
+    
+    fig = go.Figure()
+    
+    # Reversible Voltage Area
+    fig.add_trace(go.Scatter(
+        x=j, y=U_rev,
+        mode='lines',
+        name='Reversible Voltage',
+        line=dict(color='blue', width=0),
+        fill='tozeroy',
+        fillcolor='rgba(0, 0, 255, 0.05)',
+        hoverinfo='skip'
+    ))
+    
+    # BOL
+    fig.add_trace(go.Scatter(
+        x=j, y=V_bol,
+        mode='lines',
+        name='BOL (Beginning of Life)',
+        line=dict(color='green', width=2, dash='dash'),
+        hovertemplate='BOL: %{y:.2f} V<extra></extra>'
+    ))
+    
+    # EOL
+    fig.add_trace(go.Scatter(
+        x=j, y=V_eol,
+        mode='lines',
+        name='EOL (10 Years)',
+        line=dict(color='red', width=2, dash='dash'),
+        hovertemplate='EOL: %{y:.2f} V<extra></extra>'
+    ))
+    
+    # Current
+    label_curr = f'Current State ({t_op_current/8760:.1f} years)'
+    fig.add_trace(go.Scatter(
+        x=j, y=V_curr,
+        mode='lines',
+        name=label_curr,
+        line=dict(color='blue', width=3),
+        hovertemplate='Current: %{y:.2f} V<extra></extra>'
+    ))
+    
+    # Nominal Point
+    fig.add_vline(x=CONST.j_nom, line_dash="solid", line_color="black", annotation_text=f"Nominal ({CONST.j_nom} A/cm²)")
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'PEM Physics: Polarization Curve Evolution'),
+        xaxis_title='Current Density (A/cm²)',
+        yaxis_title='Voltage (V)',
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(x=0.02, y=0.98)
+    )
+    
+    return fig
+
+
+@log_graph_errors
+def plot_physics_efficiency(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """Generates SYSTEM efficiency curve vs Current Density."""
+    _check_dependencies()
+    
+    # Calculate base curves
+    j, _, _, _, _, V_total, _, CONST = _calculate_pem_physics_curves(t_op_h=0) # Use BOL for generalized curve
+    
+    # Power Calculations
+    # I = j * Area
+    Area = CONST.Area_Total # cm2
+    I_total = j * Area # Amps
+    P_stack_W = I_total * V_total
+    
+    # System Power
+    # P_bop_fixo is absolute Watts. k_bop_var is fraction.
+    P_sys_W = P_stack_W + CONST.P_bop_fixo + (CONST.k_bop_var * P_stack_W)
+    
+    # Hydrogen Energy Output (LHV)
+    from h2_plant.models.pem_physics import calculate_eta_F
+    eta_F = calculate_eta_F(j)
+    
+    # Molar flow mol/s = (I / z F) * eta_F
+    mol_s = (I_total * eta_F) / (CONST.z * CONST.F)
+    mass_s = mol_s * CONST.MH2
+    energy_out_W = mass_s * (CONST.LHVH2_kWh_kg * 3.6e6) # kWh/kg -> J/kg -> W
+    
+    # Efficiency
+    sys_eff = np.divide(energy_out_W, P_sys_W, out=np.zeros_like(P_sys_W), where=P_sys_W!=0) * 100.0
+    
+    # Stack-only Efficiency
+    # Calculate roughly for comparison (using Voltage Efficiency concept)
+    # Or rigorously: P_h2 / P_stack
+    stack_eff = np.divide(energy_out_W, P_stack_W, out=np.zeros_like(P_stack_W), where=P_stack_W!=0) * 100.0
+    
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=j, y=sys_eff,
+        mode='lines',
+        name='System Efficiency (Stack + BoP)',
+        line=dict(color='green', width=3),
+        hovertemplate='System: %{y:.1f}%<extra></extra>'
+    ))
+    
+    fig.add_trace(go.Scatter(
+        x=j, y=stack_eff,
+        mode='lines',
+        name='Stack Only Efficiency',
+        line=dict(color='gray', width=2, dash='dot'),
+        hovertemplate='Stack: %{y:.1f}%<extra></extra>'
+    ))
+    
+    fig.add_vline(x=CONST.j_nom, line_dash="solid", line_color="black", annotation_text="Nominal")
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'PEM System Efficiency vs Current Density'),
+        xaxis_title='Current Density (A/cm²)',
+        yaxis_title='Efficiency (% LHV)',
+        template='plotly_white',
+        hovermode='x unified',
+        yaxis=dict(range=[0, 90])
+    )
+    
+    return fig
+
+
+@log_graph_errors
+def plot_physics_power_balance(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """Generates Power Balance: Stack vs BoP vs Total."""
+    _check_dependencies()
+    
+    j, _, _, _, _, V_total, _, CONST = _calculate_pem_physics_curves(t_op_h=0)
+    
+    Area = CONST.Area_Total
+    I_total = j * Area
+    P_stack_W = I_total * V_total
+    
+    # BoP
+    P_bop_var_W = CONST.k_bop_var * P_stack_W
+    P_bop_fix_W = np.full_like(P_stack_W, CONST.P_bop_fixo)
+    
+    P_total_W = P_stack_W + P_bop_fix_W + P_bop_var_W
+    
+    # Convert to kW
+    P_stack_kW = P_stack_W / 1000.0
+    P_total_kW = P_total_W / 1000.0
+    
+    fig = go.Figure()
+    
+    # Stack Power (Filled Area)
+    fig.add_trace(go.Scatter(
+        x=j, y=P_stack_kW,
+        mode='lines',
+        name='Stack Power',
+        stackgroup='one',
+        line=dict(color='#1f77b4', width=0),
+        fillcolor='rgba(31, 119, 180, 0.6)'
+    ))
+    
+    # BoP Power (Stacked)
+    # Calculated as remainder for visual stacking
+    BoP_kW = (P_total_kW - P_stack_kW)
+    
+    fig.add_trace(go.Scatter(
+        x=j, y=BoP_kW,
+        mode='lines',
+        name='BoP Losses',
+        stackgroup='one',
+        line=dict(color='gray', width=0),
+        fillcolor='rgba(128, 128, 128, 0.4)'
+    ))
+    
+    # Total Line Overlay
+    fig.add_trace(go.Scatter(
+        x=j, y=P_total_kW,
+        mode='lines',
+        name='Total System Power',
+        line=dict(color='darkred', width=2),
+        hovertemplate='Total: %{y:.0f} kW<extra></extra>'
+    ))
+    
+    fig.add_vline(x=CONST.j_nom, line_dash="solid", line_color="black", annotation_text="Nominal")
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'PEM Power Balance: Stack vs BoP'),
+        xaxis_title='Current Density (A/cm²)',
+        yaxis_title='Power (kW)',
+        template='plotly_white',
+        hovermode='x unified',
+         legend=dict(x=0.02, y=0.98)
+    )
     
     return fig

@@ -74,7 +74,9 @@ COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
     'price_histogram': ['spot_price', 'minute'],
     'dispatch_curve': CORE_COLUMNS,
     'dispatch_curve_scatter': CORE_COLUMNS,
+    'dispatch_curve_scatter': CORE_COLUMNS,
     'efficiency_curve': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
+    'integrated_efficiency': CORE_COLUMNS + ['integrated_global_efficiency'],
     'revenue_analysis': CORE_COLUMNS + ['cumulative_h2_kg'],
     'temporal_averages': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
     'cumulative_energy': CORE_COLUMNS,
@@ -465,6 +467,34 @@ class GraphCatalog:
             enabled=True  # P2 FIX: Enabled for dual-mode
         ))
 
+        # 5b. ATR Efficiency (New)
+        self.register(GraphMetadata(
+            graph_id='atr_efficiency_plotly',
+            title='ATR Efficiency (Interactive)',
+            description='ATR Chemical and Global Efficiency over time',
+            function=pg.plot_atr_efficiency_timeline,
+            library=GraphLibrary.PLOTLY,
+            # Pattern matching for dynamic component IDs
+            data_required=['*_atr_efficiency_chemical', '*_atr_efficiency_global'], 
+            priority=GraphPriority.HIGH,
+            category='performance',
+            enabled=True
+        ))
+
+        # 5c. Global Efficiency (New)
+        self.register(GraphMetadata(
+            graph_id='integrated_global_efficiency_plotly',
+            title='Integrated Plant Efficiency (Interactive)',
+            description='Global Plant Efficiency (Eq 5.42) over time',
+            function=pg.plot_global_efficiency_timeline,
+            library=GraphLibrary.PLOTLY,
+            data_required=['integrated_global_efficiency'],
+            priority=GraphPriority.HIGH,
+            category='performance',
+            enabled=True
+        ))
+
+
         # 6. Wind Duration (New/Twin)
         self.register(GraphMetadata(
             graph_id='wind_duration_plotly',
@@ -742,6 +772,46 @@ class GraphCatalog:
             data_required=['minute', '*Spot*', '*price*', 'H2_soec*', 'H2_pem*'],
             priority=GraphPriority.HIGH,
             category='economics',
+            enabled=True
+        ))
+        
+        # =====================================================================
+        # PHYSICS-BASED ANALYSIS GRAPHS (PEM)
+        # =====================================================================
+        
+        self.register(GraphMetadata(
+            graph_id='physics_polarization',
+            title='PEM Physics: Polarization Curve',
+            description='V-j curve comparison: BOL vs EOL vs Current',
+            function=pg.plot_physics_polarization,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute'], # Only relies on simulation time
+            priority=GraphPriority.MEDIUM,
+            category='physics',
+            enabled=True
+        ))
+
+        self.register(GraphMetadata(
+            graph_id='physics_efficiency',
+            title='PEM Physics: Efficiency Curve',
+            description='System Efficiency vs Current Density',
+            function=pg.plot_physics_efficiency,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute'],
+            priority=GraphPriority.MEDIUM,
+            category='physics',
+            enabled=True
+        ))
+
+        self.register(GraphMetadata(
+            graph_id='physics_power_balance',
+            title='PEM Physics: Power Balance',
+            description='Stack vs BoP Power breakdown',
+            function=pg.plot_physics_power_balance,
+            library=GraphLibrary.PLOTLY,
+            data_required=['minute'],
+            priority=GraphPriority.MEDIUM,
+            category='physics',
             enabled=True
         ))
 

@@ -40,7 +40,9 @@ from h2_plant.components.thermal.interchanger import Interchanger
 from h2_plant.components.compression.compressor_single import CompressorSingle
 from h2_plant.components.cooling.dry_cooler import DryCooler
 from h2_plant.components.thermal.heat_exchanger import HeatExchanger
+from h2_plant.components.thermal.heat_exchanger import HeatExchanger
 from h2_plant.components.thermal.electric_boiler import ElectricBoiler
+from h2_plant.components.reforming.integrated_atr_plant import IntegratedATRPlant
 from h2_plant.components.water.drain_recorder_mixer import DrainRecorderMixer
 from h2_plant.components.water.water_pump import WaterPumpThermodynamic
 from h2_plant.components.storage.h2_tank import TankArray
@@ -250,7 +252,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'h2_rfnbo_kg', 'h2_non_rfnbo_kg', 'cumulative_h2_rfnbo_kg',
                 'cumulative_h2_non_rfnbo_kg', 'spot_purchased_mw', 'spot_threshold_eur_mwh',
                 'bop_grid_import_mw', 'bop_price_eur_mwh', 'bop_cost_eur',
-                'cumulative_bop_cost_eur', 'ppa_price_effective_eur_mwh'
+                'cumulative_bop_cost_eur', 'ppa_price_effective_eur_mwh',
+                'integrated_global_efficiency'
             ]
             for col in base_columns:
                 self._history_manager.register_column(col)
@@ -320,7 +323,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'cooling_manager_glycol_supply_temp_c': np.zeros(total_steps, dtype=np.float64),
                 'cooling_manager_glycol_duty_kw': np.zeros(total_steps, dtype=np.float64),
                 'cooling_manager_cw_supply_temp_c': np.zeros(total_steps, dtype=np.float64),
-                'cooling_manager_cw_duty_kw': np.zeros(total_steps, dtype=np.float64)
+                'cooling_manager_cw_supply_temp_c': np.zeros(total_steps, dtype=np.float64),
+                'cooling_manager_cw_duty_kw': np.zeros(total_steps, dtype=np.float64),
+                
+                # --- INTEGRATED PLANT EFFICIENCY (Eq 5.42) ---
+                'integrated_global_efficiency': np.zeros(total_steps, dtype=np.float64)
             }
 
         # 2. Identify Components & Pre-Bind Arrays
@@ -364,7 +371,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             DetailedTankArray: ('h2_out', [('inventory_kg', 'total_mass_kg'), ('avg_pressure_bar', 'avg_pressure_bar')]),
             UltraPureWaterTank: ('consumer_out', [('mass_kg', 'mass_kg'), ('control_zone_int', 'control_zone_int')]),
             DrainRecorderMixer: ('outlet_stream', [('outlet_mass_flow_kg_h', 'outlet_mass_flow_kg_h'), ('dissolved_gas_ppm', 'dissolved_gas_ppm')]),
-            WaterPumpThermodynamic: ('water_out', [('power_kw', 'power_kw')])
+            WaterPumpThermodynamic: ('water_out', [('power_kw', 'power_kw')]),
+            IntegratedATRPlant: ('syngas_out', [
+                ('atr_efficiency_chemical', 'atr_efficiency_chemical'), 
+                ('atr_efficiency_global', 'atr_efficiency_global'), 
+                ('atr_q_useful_kw', 'q_useful_kw'),
+                ('atr_heat_duty_kw', 'heat_duty_kw')
+            ])
         }
 
         # Also add SOEC Cluster if it has a stream
@@ -687,16 +700,20 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         minute = int(round(t * 60))
         
         # Grid Firming: Ensure minimum guaranteed power
-        # If wind < guaranteed, grid supplements up to guaranteed amount
+        # MODIFIED: Variable power is ADDED to guaranteed power (Base Load + Variable Peaking)
         guaranteed_mw = getattr(self._context.economics, 'guaranteed_power_mw', 0.0)
         wind_mw = wind[step_idx]
-        P_offer = max(wind_mw, guaranteed_mw)
+        
+        # Old Logic: P_offer = max(wind_mw, guaranteed_mw)
+        # New Logic: Guaranteed is constant base load, Wind is added on top
+        P_offer = guaranteed_mw + wind_mw
         
         current_price = prices[step_idx]
         
-        # Future offer also respects firming
+        # Future offer also respects firming (Base + Forecasted Wind)
         wind_fut = wind[min(step_idx + 60, len(wind) - 1)]
-        P_future = max(wind_fut, guaranteed_mw)
+        # Old Logic: P_future = max(wind_fut, guaranteed_mw)
+        P_future = guaranteed_mw + wind_fut
 
         # =====================================================================
         # DUAL PPA PRICING: Weighted Average Calculation
@@ -714,6 +731,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         else:
             # Power exceeds guaranteed block: Blend the prices
             # Effective = (Contract_MW × Contract_Price + Excess_MW × Variable_Price) / Total_MW
+            # With New Logic: Excess_MW is exactly equal to the Wind_MW component
             excess_mw = P_offer - guaranteed_mw
             total_cost_per_hour = (guaranteed_mw * price_contract) + (excess_mw * price_variable)
             current_ppa_price = total_cost_per_hour / P_offer
@@ -1144,12 +1162,109 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             # Efficiently grab data from tanks
             p_matrix[step_idx, :] = [t.pressure_pa / 1e5 for t in comp.tanks]
             m_matrix[step_idx, :] = [t.mass_kg for t in comp.tanks]
+            
+        # 4. Integrated Plant Efficiency
+        self._calculate_integrated_efficiency(step_idx)
 
         self._state.step_idx += 1
         
-        # 4. Chunked Storage: Trigger chunk flush if needed
+        # 5. Chunked Storage: Trigger chunk flush if needed
         if self._use_chunked_history and self._history_manager:
             self._history_manager.step_complete(step_idx)
+
+    def _calculate_integrated_efficiency(self, step_idx: int) -> None:
+        """
+        Calculate Integrated Plant Efficiency (Eq 5.42).
+        
+        Formula:
+            eta_global = (m_H2_total * LHV_H2) / (P_el_total + Energy_Biogas)
+            
+        Where:
+            m_H2_total = H2_PEM + H2_SOEC + H2_ATR (kg/s)
+            P_el_total = Sum of all auxiliary loads (kW)
+            Energy_Biogas = Biogas flow * LHV (kW)
+        """
+        # 1. H2 Production (Total)
+        dt_hours = self._context.simulation.timestep_hours
+        if dt_hours <= 0: return
+
+        # Load H2 LHV (kWh/kg -> kW via mass flow)
+        # Using LHV_H2 = 33.33 kWh/kg = 120 MJ/kg
+        LHV_H2_KWH_KG = 33.33 
+
+        # Sum H2 produced in this timestep (kg)
+        try:
+            h2_soec_kg = self._history['H2_soec_kg'][step_idx]
+            h2_pem_kg = self._history['H2_pem_kg'][step_idx]
+            h2_atr_kg = self._history['H2_atr_kg'][step_idx]
+        except (KeyError, TypeError):
+             h2_soec_kg = h2_pem_kg = h2_atr_kg = 0.0
+
+        total_h2_kg = h2_soec_kg + h2_pem_kg + h2_atr_kg
+        
+        # Energy Output (kW) = (kg / h) * kWh/kg = kW
+        energy_h2_kw = (total_h2_kg / dt_hours) * LHV_H2_KWH_KG
+
+        # 2. Total Electrical Consumption (P_el_total)
+        p_el_total_kw = 0.0
+        
+        # A. Electrolyzers (Already tracked in P_soec_actual, P_pem)
+        p_el_total_kw += (self._history['P_soec_actual'][step_idx] * 1000.0)
+        p_el_total_kw += (self._history['P_pem'][step_idx] * 1000.0)
+        
+        # B. Auxiliaries (Registry Scan)
+        # Robust aggregation of all known power consumers
+        if self._registry:
+            for cid, comp in self._registry.list_components():
+                 # Skip if it's the main electrolyzer stacks (already added from history)
+                 # Note: Checking identity for safety
+                 if (self._soec and comp == self._soec) or (self._pem and comp == self._pem):
+                     continue
+                     
+                 # Also skip if it's a known non-consuming component class to speed up?
+                 # No, better to check for power attributes generically.
+
+                 state = comp.get_state()
+                 
+                 # Try common power metrics
+                 p_comp = 0.0
+                 
+                 # Check various keys used across codebase
+                 # Prioritize specific ones to avoid double counting if multiple keys exist for same value
+                 if 'electrical_power_kw' in state:
+                      p_comp = state['electrical_power_kw']
+                 elif 'power_consumed_kw' in state:
+                      p_comp = state['power_consumed_kw']
+                 elif 'fan_power_kw' in state:
+                      p_comp = state['fan_power_kw'] # Dry Cooler
+                 elif 'power_kw' in state:
+                      p_comp = state['power_kw'] # Compressors, Pumps
+                 
+                 # Accumulate positive power consumption only
+                 if p_comp > 0:
+                     p_el_total_kw += p_comp
+
+        # C. Add centralized BoP (if calculated separately in history)
+        p_el_total_kw += (self._history['P_bop_mw'][step_idx] * 1000.0)
+
+        # 3. Biogas Energy Input
+        energy_biogas_kw = 0.0
+        if self._atr:
+             state = self._atr.get_state()
+             energy_biogas_kw = state.get('biogas_energy_input_kw', 0.0)
+        
+        # 4. Calculation
+        numerator = energy_h2_kw
+        denominator = p_el_total_kw + energy_biogas_kw
+        
+        if denominator > 1.0:
+            eff = numerator / denominator
+        else:
+            eff = 0.0
+            
+        # 5. Store in History
+        if 'integrated_global_efficiency' in self._history:
+             self._history['integrated_global_efficiency'][step_idx] = eff
 
     def get_history(self) -> Dict[str, np.ndarray]:
         """

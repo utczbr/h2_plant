@@ -22,7 +22,8 @@ class ReportGenerator:
         'water_total': 'navy',
         'oxygen': 'purple',
         'tank': '#795548',    # Brown
-        'compressor': '#607D8B' # Blue Grey
+        'compressor': '#607D8B', # Blue Grey
+        'atr': '#2ca02c'      # Green (distinct from SOEC)
     }
 
     def __init__(self, output_dir: str = "reports", config: Dict[str, Any] = None):
@@ -59,6 +60,10 @@ class ReportGenerator:
             self.plot_pem_efficiency(history)
         if graphs_config.get('dispatch_curve_scatter', True): # NEW
             self.plot_dispatch_curve(history)
+        if graphs_config.get('atr_efficiency_over_time', True): # NEW
+            self.plot_atr_efficiency(history)
+        if graphs_config.get('integrated_global_efficiency_over_time', True):
+            self.plot_global_efficiency(history)
             
         # --- Economics ---
         if graphs_config.get('energy_price_over_time', True):
@@ -232,6 +237,61 @@ class ReportGenerator:
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         self._save('dispatch_curve_scatter.png')
+
+    def plot_atr_efficiency(self, history):
+        """Generates ATR Efficiency Timeline (Chemical vs Global)."""
+        minutes = history['minute']
+        
+        # Check for ATR keys (handling dynamic component IDs)
+        # We look for keys ending in _atr_efficiency_chemical
+        chem_key = next((k for k in history.keys() if k.endswith('_atr_efficiency_chemical')), None)
+        glob_key = next((k for k in history.keys() if k.endswith('_atr_efficiency_global')), None)
+        
+        if not chem_key or not glob_key:
+            return
+
+        eff_chem = np.array(history[chem_key]) * 100.0
+        eff_glob = np.array(history[glob_key]) * 100.0
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(minutes, eff_chem, label='Chemical Efficiency (LHV)', color=self.COLORS['atr'])
+        plt.plot(minutes, eff_glob, label='Global Efficiency (CHP)', color='orange', linestyle='--')
+        
+        plt.title('ATR Plant Efficiency Over Time', fontsize=14)
+        plt.ylabel('Efficiency (%)')
+        plt.xlabel('Time (Minutes)')
+        plt.ylim(0, 100)  # Efficiency is percentage
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        self._save('atr_efficiency_over_time.png')
+
+    def plot_global_efficiency(self, history):
+        """Generates Integrated Plant Efficiency Timeline (Eq 5.42)."""
+        minutes = history['minute']
+        key = 'integrated_global_efficiency'
+        
+        if key not in history: return
+        
+        eff = np.array(history[key]) * 100.0
+        
+        # Filter out NaN or Infinite values
+        eff = np.nan_to_num(eff, nan=0.0, posinf=0.0, neginf=0.0)
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(minutes, eff, color='darkgreen', linewidth=1.5, label='Global Plant Efficiency (LHV)')
+        
+        mean_eff = np.mean(eff[eff > 0.01]) if np.any(eff > 0.01) else 0.0
+        plt.axhline(mean_eff, color='green', linestyle=':', label=f'Mean (Operating): {mean_eff:.1f}%')
+        
+        plt.title('Integrated Plant Efficiency (Eq 5.42)', fontsize=14)
+        plt.ylabel('Efficiency (%)')
+        plt.xlabel('Time (Minutes)')
+        plt.ylim(0, 100)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        self._save('global_efficiency_over_time.png')
 
     # --- Economics Graphs ---
 

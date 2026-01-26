@@ -165,12 +165,14 @@ class DryCooler(Component):
         """
         super().initialize(dt, registry)
         
-        # Look up CoolingManager if using centralized cooling
         if self.use_central_utility:
             self.cooling_manager = registry.get("cooling_manager") if registry else None
-            if not self.cooling_manager:
+            if self.cooling_manager:
+                print(f"DEBUG: {self.component_id} FOUND CoolingManager", flush=True)
+            else:
                 logger.warning(f"{self.component_id}: CoolingManager not found. Using local loop.")
-
+                print(f"DEBUG: {self.component_id} FAILED to find CoolingManager", flush=True)
+    
     def _configure_geometry(self, stream: Stream) -> None:
         """
         Configure heat exchanger geometry based on detected gas species.
@@ -346,45 +348,52 @@ class DryCooler(Component):
             T_glycol_out_k = T_glycol_in_k
             
         self.t_glycol_hot_c = T_glycol_out_k - 273.15
-
-        # Register load with CoolingManager (centralized utility mode)
-        if self.cooling_manager:
-            self.cooling_manager.register_glycol_load(
-                duty_kw=self.tqc_duty_kw,
-                flow_kg_s=self.glycol_flow_kg_s,
-                return_temp_c=self.t_glycol_hot_c
-            )
-
         # ================================================================
         # Stage 2: DC (Cross-Flow Air Cooler)
         # ================================================================
         # Cross-flow geometry is standard for forced-air coolers due to
         # fan and duct arrangement, though less effective than counter-flow.
         T_air_in_k = DCC.T_AIR_DESIGN_C + 273.15
-        C_air = self.dc_air_flow_kg_s * DCC.CP_AIR_J_KG_K
-
-        C_min_dc = min(C_coolant, C_air)
-        C_max_dc = max(C_coolant, C_air)
         
-        if C_min_dc > 1e-9:
-            R_dc = C_min_dc / C_max_dc if C_max_dc > 1e-9 else 0.0
-            NTU_dc = (self.dc_u_value * self.dc_area_m2) / C_min_dc
-            eff_dc = numba_ops.dry_cooler_ntu_effectiveness(NTU_dc, R_dc)
-        else:
-            NTU_dc = 0.0
-            eff_dc = 0.0
-
-        self.dc_effectiveness = eff_dc
-
-        Q_max_dc = C_min_dc * (T_glycol_out_k - T_air_in_k)
-        Q_dc = eff_dc * Q_max_dc
-        self.dc_duty_kw = Q_dc / 1000.0
-
-        # Glycol return temperature (quasi-dynamic state update)
-        if C_coolant > 1e-9:
-            T_glycol_return_k = T_glycol_out_k - Q_dc / C_coolant
-        else:
+        # If connected to Central Utility, the local air cooler is BYPASSED.
+        # The glycol carries heat to the central cooling tower.
+        if self.cooling_manager:
+            self.dc_duty_kw = 0.0
+            self.fan_power_kw = 0.0 # No local fan
+            self.dc_effectiveness = 0.0
+            # Glycol returns "hot" to the manager (Loop logic handled by Manager)
+            # For local state tracking, we assume T_return = T_out (no local cooling)
             T_glycol_return_k = T_glycol_out_k
+        else:
+            # Local Dry Cooler Mode
+            # Cross-flow geometry is standard for forced-air coolers due to
+            # fan and duct arrangement, though less effective than counter-flow.
+            T_air_in_k = DCC.T_AIR_DESIGN_C + 273.15
+            C_air = self.dc_air_flow_kg_s * DCC.CP_AIR_J_KG_K
+
+            C_min_dc = min(C_coolant, C_air)
+            C_max_dc = max(C_coolant, C_air)
+            
+            if C_min_dc > 1e-9:
+                R_dc = C_min_dc / C_max_dc if C_max_dc > 1e-9 else 0.0
+                NTU_dc = (self.dc_u_value * self.dc_area_m2) / C_min_dc
+                eff_dc = numba_ops.dry_cooler_ntu_effectiveness(NTU_dc, R_dc)
+            else:
+                NTU_dc = 0.0
+                eff_dc = 0.0
+
+            self.dc_effectiveness = eff_dc
+
+            Q_max_dc = C_min_dc * (T_glycol_out_k - T_air_in_k)
+            Q_dc = eff_dc * Q_max_dc
+            self.dc_duty_kw = Q_dc / 1000.0
+
+            # Glycol return temperature (quasi-dynamic state update)
+            if C_coolant > 1e-9:
+                T_glycol_return_k = T_glycol_out_k - Q_dc / C_coolant
+            else:
+                T_glycol_return_k = T_glycol_out_k
+                
         self.t_glycol_cold_c = T_glycol_return_k - 273.15
 
         # Gas-side pressure drop through TQC internals
@@ -534,8 +543,6 @@ class DryCooler(Component):
         m_total_out = self.inlet_stream.mass_flow_kg_h
         m_H2O_liq_total_out = m_H2O_liq_out
         
-
-
         # New total mass - We MUST add extra liquid if we are merging it into composition
         # This ensures species mass conservation (e.g. H2 kg/h) when Stream normalizes.
         m_total_new = m_total_out + m_H2O_liq_extra_in
@@ -550,14 +557,11 @@ class DryCooler(Component):
                  if s not in ('H2O', 'H2O_liq'):
                      m_s = inlet_comp[s] * m_total_out
                      outlet_comp[s] = m_s / m_total_new
-        
         # Prepare output stream using new total mass
         # Remove the 'extra' liquid key since it's now merged into composition
         out_extra = self.inlet_stream.extra.copy() if self.inlet_stream.extra else {}
         if 'm_dot_H2O_liq_accomp_kg_s' in out_extra:
             del out_extra['m_dot_H2O_liq_accomp_kg_s']
-
-
 
         self.outlet_stream = Stream(
             mass_flow_kg_h=m_total_new,
@@ -569,9 +573,22 @@ class DryCooler(Component):
         )
 
         # Fan power consumption: P = V̇ × ΔP / η_fan
-        vol_air = self.dc_air_flow_kg_s / DCC.RHO_AIR_KG_M3
-        power_j_s = (vol_air * DCC.DP_AIR_DESIGN_PA) / DCC.ETA_FAN
-        self.fan_power_kw = power_j_s / 1000.0
+        if not self.cooling_manager:
+            vol_air = self.dc_air_flow_kg_s / DCC.RHO_AIR_KG_M3
+            power_j_s = (vol_air * DCC.DP_AIR_DESIGN_PA) / DCC.ETA_FAN
+            self.fan_power_kw = power_j_s / 1000.0
+        else:
+            self.fan_power_kw = 0.0
+
+        # Register load with CoolingManager (centralized utility mode)
+        # MOVED to end to include latent heat in tqc_duty_kw
+        if self.cooling_manager:
+            self.cooling_manager.register_glycol_load(
+                duty_kw=self.tqc_duty_kw,
+                flow_kg_s=self.glycol_flow_kg_s,
+                return_temp_c=self.t_glycol_hot_c,
+                source_id=self.component_id
+            )
 
     def receive_input(self, port_name: str, value: Any, resource_type: str = None) -> float:
         """

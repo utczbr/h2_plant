@@ -41,6 +41,18 @@ def _get_val(section: str, key: str, default: Any) -> Any:
     except (AttributeError, TypeError):
         return default
 
+# Heating Values (LHV) in kJ/kg
+# Sources: Engineering Toolbox or Standard Thermodynamics Texts
+LHV_CONSTANTS = {
+    'CH4': 50000.0,  # Methane: ~50 MJ/kg
+    'CO': 10100.0,   # Carbon Monoxide: ~10.1 MJ/kg
+    'H2': 120000.0,  # Hydrogen: ~120 MJ/kg (33.33 kWh/kg)
+    'H2O': 0.0,      # Water
+    'CO2': 0.0,      # Carbon Dioxide
+    'N2': 0.0,       # Nitrogen
+    'O2': 0.0        # Oxygen
+}
+
 @dataclass(frozen=True)
 class PEMConstants:
     """
@@ -60,7 +72,7 @@ class PEMConstants:
     LHVH2_kWh_kg: float = _get_val('physical_constants', 'LHVH2_kWh_kg', 33.33) # Lower Heating Value
     
     # Geometry
-    N_stacks: int = _get_val('pem', 'N_stacks', 35)               # Total number of stacks
+    N_stacks: int = _get_val('pem', 'N_stacks', 36)               # Total number of stacks
     # Updated to 85 cells per stack per user specification
     N_cell_per_stack: int = _get_val('pem', 'N_cell_per_stack', 85)
     A_cell_cm2: float = _get_val('pem', 'A_cell_cm2', 300.0)      # Active area per cell
@@ -91,6 +103,7 @@ class PEMConstants:
     # Balance of Plant (BoP) and System Power
     floss: float = _get_val('pem_system', 'floss', 0.02)                          # Fluid loss factor
     k_bop_var: float = _get_val('pem_system', 'k_bop_var', 0.04)                  # Variable BoP power fraction
+    fixed_bop_fraction: float = _get_val('pem_system', 'fixed_bop_fraction', 0.025) # Fixed BoP power fraction
     water_excess_factor: float = _get_val('pem_system', 'water_excess_factor', 0.02)
     P_nominal_sistema_kW: float = _get_val('pem_system', 'P_nominal_sistema_kW', 5000.0)
     
@@ -156,9 +169,9 @@ class PEMConstants:
         Fixed BoP power consumption.
         
         Assumed constant overhead (e.g., control systems, lighting).
-        Currently estimated as 2.5% of nominal system power.
+        Calculated as fixed_bop_fraction * nominal system power.
         """
-        return 0.025 * self.P_nominal_sistema_W
+        return self.fixed_bop_fraction * self.P_nominal_sistema_W
     
     # Degradation Tables (Reference Data)
     # Maps operational years to expected stack voltage rise due to degradation.

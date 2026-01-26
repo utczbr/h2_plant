@@ -67,6 +67,7 @@ class CoolingManager(Component):
         self.dc_total_area_m2 = kwargs.get('dc_total_area_m2', 2000.0)
         self.dc_u_value = kwargs.get('dc_u_value', 35.0)  # W/m2K
         self.dc_air_flow_kg_s = kwargs.get('dc_air_flow_kg_s', 500.0)
+        self.glycol_fan_power_kw = 0.0
 
         # --- System 2: Cooling Water Loop (Cooling Tower) ---
         self.cw_supply_temp_c = kwargs.get('initial_cw_temp_c', 20.0)
@@ -96,7 +97,7 @@ class CoolingManager(Component):
         """Prepare component for simulation."""
         super().initialize(dt, registry)
 
-    def register_glycol_load(self, duty_kw: float, flow_kg_s: float, return_temp_c: float = None) -> None:
+    def register_glycol_load(self, duty_kw: float, flow_kg_s: float, return_temp_c: float = None, source_id: str = "unknown") -> None:
         """
         Called by DryCoolers to register their demand.
 
@@ -104,7 +105,10 @@ class CoolingManager(Component):
             duty_kw (float): Heat load added to glycol loop (kW).
             flow_kg_s (float): Glycol flow rate through the user (kg/s).
             return_temp_c (float, optional): Glycol return temperature from user.
+            source_id (str): ID of the component registering the load.
         """
+        if duty_kw > 0.1:
+             print(f"DEBUG_LOAD: Manager received {duty_kw:.2f} kW from {source_id}", flush=True)
         self._current_step_glycol_load_kw += duty_kw
         self._current_step_glycol_flow_kg_s += flow_kg_s
 
@@ -172,6 +176,11 @@ class CoolingManager(Component):
         else:
             t_glycol_out_k = t_glycol_in_k
 
+        # Calculate Fan Power for Central Dry Cooler Bank
+        vol_air = self.dc_air_flow_kg_s / DCC.RHO_AIR_KG_M3
+        power_j_s = (vol_air * DCC.DP_AIR_DESIGN_PA) / DCC.ETA_FAN
+        self.glycol_fan_power_kw = power_j_s / 1000.0
+
         # Simple Thermal Inertia (Blending old supply with new result)
         new_supply_c = t_glycol_out_k - 273.15
         self.glycol_supply_temp_c = (1 - alpha) * self.glycol_supply_temp_c + alpha * new_supply_c
@@ -215,7 +224,10 @@ class CoolingManager(Component):
             'cw_duty_total_kw': self.cw_duty_kw,
             't_dry_bulb_c': self.t_dry_bulb_c,
             't_wet_bulb_c': self.t_wet_bulb_c,
+            't_wet_bulb_c': self.t_wet_bulb_c,
             'tower_fan_power_kw': self.tower_fan_power_kw,
+            'glycol_fan_power_kw': self.glycol_fan_power_kw,
+            'power_kw': self.tower_fan_power_kw + self.glycol_fan_power_kw 
         }
 
     def get_ports(self) -> Dict[str, Dict[str, str]]:

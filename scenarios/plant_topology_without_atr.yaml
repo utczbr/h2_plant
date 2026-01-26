@@ -959,7 +959,7 @@ nodes:
   - id: "PEM_Electrolyzer"
     type: "PEM"
     params:
-      max_power_mw: 5.0
+      max_power_mw: 5.35
       use_polynomials: True
       water_excess_factor: 0.02 
       out_pressure_pa: 4000000.0 # 40 bar

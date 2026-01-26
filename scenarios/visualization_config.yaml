@@ -61,11 +61,13 @@ visualization:
     energy_pie_plotly: true
     arbitrage_plotly: true
     efficiency_curve_plotly: true
+    atr_efficiency_plotly: true
     wind_duration_plotly: true
     storage_apc_plotly: true
     temporal_averages_plotly: true
     effective_ppa_plotly: true
     process_train_profile_plotly: true
+    integrated_global_efficiency_plotly: true
 
   # ========================================================================
   # PLANT METADATA (Used for Graph Calculations)

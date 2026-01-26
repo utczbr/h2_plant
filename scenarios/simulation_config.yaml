@@ -3,7 +3,7 @@ duration_hours: 24
 start_hour: 0
 checkpoint_interval_hours: 120
 energy_price_file: "../h2_plant/data/NL_Prices_2024_15min.csv"
-wind_data_file: "../h2_plant/data/producao_horaria_2_turbinas.csv"
+wind_data_file: "../h2_plant/data/producao_horaria_turbina.csv"
 
 # Dispatch Strategy Selection
 # Options: REFERENCE_HYBRID (default), SOEC_ONLY, ECONOMIC_SPOT

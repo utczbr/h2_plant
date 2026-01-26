@@ -105,6 +105,10 @@ class DualPathCoordinator(Component):
             self._soec_cluster = registry.get('soec_cluster')
         if registry.has('pem_electrolyzer_detailed'):
             self._pem_electrolyzer = registry.get('pem_electrolyzer_detailed')
+            # Update MAX_PEM_POWER from component capacity if available
+            if hasattr(self._pem_electrolyzer, 'max_power_mw'):
+                self.MAX_PEM_POWER = float(self._pem_electrolyzer.max_power_mw)
+                logger.info(f"Updated MAX_PEM_POWER from component: {self.MAX_PEM_POWER} MW")
 
         # Load config values if available
         # (Read from config.arbitration section)

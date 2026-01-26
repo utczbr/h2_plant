@@ -26,6 +26,7 @@ from h2_plant.components.reforming.atr_rate_limiter import (
     ATRRateLimiter,
     ATRRateLimiterConfig
 )
+from h2_plant.config.constants_physics import LHV_CONSTANTS
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +108,21 @@ class IntegratedATRPlant(ATRBaseComponent):
         
         # Hourly logging tracker
         self._last_log_hour = -1
+
+        # Dynamic Energy Input Calculation
+        self.biogas_energy_input_kw = 0.0
         
         # Rate limiter for input dynamics (QSS model)
         self.rate_limiter = None
         self.target_o2_flow_kmol_h = 0.0
         self.is_ramping = False
+        
+        # Efficiency Metrics (Equations 5.40 and 5.41)
+        self.atr_efficiency_chemical = 0.0
+        self.atr_efficiency_global = 0.0
+        self.q_useful_kw = 0.0
+        self.aux_power_kw = 0.0  # Placeholder till full auxiliary model linked
+        self.lhv_biogas_kj_kg = 17500.0  # Default fallback
 
     def initialize(self, dt: float, registry: ComponentRegistry) -> None:
         """Initialize component, load data manager."""
@@ -308,6 +319,66 @@ class IntegratedATRPlant(ATRBaseComponent):
         self.heat_duty_kw = H01 + H02 + H04 + H05 + H08 + H09
         
         # ===================================================================
+        # STEP 7b: CALCULATE EFFICIENCIES (Eq 5.40 & 5.41)
+        # ===================================================================
+        # 1. Useful Heat (Q_useful): Only exported heat substitutes external energy.
+        #    We count Syngas Cooler (H05), HTWGS (H08), and LTWGS (H09) if they are cooling (negative).
+        #    H08 is high-grade heat from HTWGS, previously excluded, now counted as potentially useful.
+        q_h05 = abs(H05) if H05 < 0 else 0.0
+        q_h08 = abs(H08) if H08 < 0 else 0.0
+        q_h09 = abs(H09) if H09 < 0 else 0.0
+        self.q_useful_kw = q_h05 + q_h08 + q_h09
+        
+        # 2. Biogas Input Energy
+        # Calculate mass flow from kmol buffer (using avg CH4/CO2 mix if needed, or tracked mass)
+        # For transparency, we recreate mass from molar buffer assuming simplified biogas MW if needed,
+        # but we tracked inputs in receive_input.
+        # Fallback LHV calc based on composition would go here if we tracked separate CH4/CO2 flows completely.
+        # Current implementation tracks pure CH4 moles explicitly in _buffer_biogas_kmol.
+        # Biogas is typically CH4 + CO2. The CO2 adds mass but 0 energy.
+        # LHV_Biogas ~ (Mass_CH4 * LHV_CH4) / Total_Biogas_Mass
+        
+        # 338: biogas_moles_h = self._buffer_biogas_kmol / self.dt if self.dt > 0 else 0.0
+        # RETROFIT: Use dynamic LHV based on actual combustible species in inlet
+        # This assumes _buffer_biogas_kmol tracks CH4, and we assume simplified biogas energy 
+        # is dominated by Methane content.
+        
+        # Calculate dynamic energy input from tracked CH4 moles
+        # Energy = moles_CH4 * MW_CH4 * LHV_CH4
+        if self.dt > 0 and self._buffer_biogas_kmol > 0:
+             moles_ch4_h = self._buffer_biogas_kmol / self.dt
+             self.biogas_energy_input_kw = (moles_ch4_h * MW['CH4'] * LHV_CONSTANTS['CH4']) / 3600.0
+        else:
+             self.biogas_energy_input_kw = 0.0
+
+        energy_input_kw = self.biogas_energy_input_kw
+        
+        # 3. H2 Output Energy
+        # Energy_Out = m_dot_H2 * LHV_H2
+        # m_dot_H2 is self.h2_production_kmol_h * 2.016
+        energy_output_kw = (self.h2_production_kmol_h * MW['H2'] * LHV_CONSTANTS['H2']) / 3600.0
+        
+        # 4. Auxiliaries (P_el)
+        # Retrieve Total Work Input (W_in) from regression model (Compressors/Pumps internal to block)
+        W_in_kw = dm.lookup('W_in_func', clamped_o2)
+        
+        # Total Electrical Input = Internal Work (W_in) + External Auxiliaries (if any)
+        p_el_kw = W_in_kw + self.aux_power_kw
+
+        # 5. Calculate Metrics
+        if energy_input_kw > 1.0:
+            self.atr_efficiency_chemical = energy_output_kw / energy_input_kw
+            self.atr_efficiency_global = (energy_output_kw + self.q_useful_kw) / (energy_input_kw + p_el_kw)
+            
+            # Update inferred LHV_Biogas for reporting (Energy / Total Mass)
+            # This requires total biogas mass. If we don't have it explicitly separate from steam/O2 in feed mixer,
+            # we can't report specific LHV_biogas easily without upstream info.
+            # However, we can report Energy Density of Input Methane which is sufficient.
+        else:
+            self.atr_efficiency_chemical = 0.0
+            self.atr_efficiency_global = 0.0
+        
+        # ===================================================================
         # STEP 8: CLEAR INPUT BUFFERS
         # ===================================================================
         self._clear_buffers()
@@ -347,6 +418,10 @@ class IntegratedATRPlant(ATRBaseComponent):
             'syngas_flow_kmol_h': self.syngas_flow_kmol_h,
             'liquid_water_flow_kg_h': getattr(self, 'liquid_water_flow_kg_h', 0.0),
             'heat_duty_kw': self.heat_duty_kw,
+            'q_useful_kw': self.q_useful_kw,
+            'atr_efficiency_chemical': self.atr_efficiency_chemical,
+            'atr_efficiency_global': self.atr_efficiency_global,
+            'biogas_energy_input_kw': self.biogas_energy_input_kw,
             'syngas_composition': self.current_syngas_comp.copy()
         }
 

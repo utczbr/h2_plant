@@ -129,7 +129,9 @@ class DetailedPEMElectrolyzer(Component):
             self.out_pressure_pa = getattr(config, 'out_pressure_pa', CONST.output_pressure_pa)
         else:
             self.config = config
-            self.max_power_mw = config.get('max_power_mw', 5.0)
+            # Use constant from physics_parameters.yaml as default if not in topology
+            default_mw = CONST.P_nominal_sistema_kW / 1000.0
+            self.max_power_mw = config.get('max_power_mw', default_mw)
             self.base_efficiency = config.get('base_efficiency', 0.65)
             self.use_polynomials = config.get('use_polynomials', False)
             self.water_excess_factor = config.get('water_excess_factor', 0.02)
@@ -171,7 +173,7 @@ class DetailedPEMElectrolyzer(Component):
         # Stack Configuration
         # ====================================================================
         # Geometry sized for ~5 MW nominal operation
-        self.N_stacks = 35
+        self.N_stacks = 36
         self.N_cell_per_stack = 85
         self.A_cell = 300  # Active area per cell (cm²)
         self.Area_Total = self.N_stacks * self.N_cell_per_stack * self.A_cell
@@ -201,10 +203,17 @@ class DetailedPEMElectrolyzer(Component):
         # Balance of Plant (BoP)
         # ====================================================================
         # BoP includes pumps, control systems, and power electronics
-        self.floss = 0.02  # Fractional parasitic losses
+        # BoP includes pumps, control systems, and power electronics
+        # Normalized to use configurable physics constants
+        self.floss = CONST.floss  # Fractional parasitic losses
         self.P_nominal_sistema_W = self.max_power_mw * 1e6
-        self.P_bop_fixo = 0.025 * self.P_nominal_sistema_W  # Fixed BoP (W)
-        self.k_bop_var = 0.04  # Variable BoP as fraction of stack power
+        
+        # Fixed BoP: scale from configured fraction (default 2.5%)
+        self.fixed_bop_fraction = CONST.fixed_bop_fraction
+        self.P_bop_fixo = self.fixed_bop_fraction * self.P_nominal_sistema_W  # Fixed BoP (W)
+        
+        # Variable BoP: read from config (default 4%)
+        self.k_bop_var = CONST.k_bop_var
 
         # ====================================================================
         # Degradation Model

@@ -23,7 +23,7 @@ ppa_variable_price_eur_mwh: 55.0
 # Grid Firming: Minimum guaranteed power availability from utility (MW)
 # When wind power falls below this value, grid imports the difference.
 # Also defines the "contract block" size for dual PPA pricing.
-guaranteed_power_mw: 10.0
+guaranteed_power_mw: 30.0
 
 # Optional: Set explicit threshold (EUR/MWh). If set, overrides calculated threshold.
 # Calculated default: PPA + (1000/η) × H2_price ≈ 306 EUR/MWh for SOEC
@@ -55,4 +55,4 @@ p_grid_max_mw: 30.0
 bop_pricing_mode: "fixed"
 
 # Fixed contract price for BOP (EUR/MWh) - used when bop_pricing_mode = "fixed"
-bop_fixed_price_eur_mwh: 80.0
+bop_fixed_price_eur_mwh: 60.0
