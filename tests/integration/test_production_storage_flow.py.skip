@@ -1,0 +1,456 @@
+"""
+Integration tests for complete production → storage → compression flow.
+
+Validates that all system components work together properly
+and that mass and energy flows are correctly tracked.
+"""
+
+import pytest
+from typing import Dict, Any
+import numpy as np
+
+from h2_plant.core.component_registry import ComponentRegistry
+from h2_plant.components.production.pem_electrolyzer_detailed import (
+    DetailedPEMElectrolyzer, FeedwaterInlet, RecirculationPump,
+    PEMStackArray, RectifierTransformer, HeatExchanger, 
+    SeparationTank, PSAUnit
+)
+from h2_plant.components.storage.tank_array import TankArray
+from h2_plant.components.compression.filling_compressor import FillingCompressor
+from h2_plant.components.compression.outgoing_compressor import OutgoingCompressor
+from h2_plant.components.utility.demand_scheduler import DemandScheduler
+from h2_plant.simulation.monitoring import MonitoringSystem
+
+
+class TestProductionToStorageIntegration:
+    """Integration test for production to storage pathway."""
+
+    @pytest.fixture
+    def production_storage_system(self):
+        """Create integrated production and storage system."""
+        registry = ComponentRegistry()
+
+        # Create components
+        electrolyzer = DetailedPEMElectrolyzer(
+            max_power_kw=2500.0,
+            num_stacks=10
+        )
+        
+        lp_tanks = TankArray(
+            n_tanks=4,
+            capacity_kg=50.0,
+            pressure_bar=30.0
+        )
+        
+        hp_tanks = TankArray(
+            n_tanks=8,
+            capacity_kg=200.0,
+            pressure_bar=350.0
+        )
+
+        # Register components
+        registry.register('electrolyzer', electrolyzer, component_type='production')
+        registry.register('lp_tanks', lp_tanks, component_type='storage')
+        registry.register('hp_tanks', hp_tanks, component_type='storage')
+
+        # Initialize system
+        registry.initialize_all(dt=1.0)
+
+        return registry, electrolyzer, lp_tanks, hp_tanks
+
+    def test_production_fills_storage_integration(self, production_storage_system):
+        """Test hydrogen production successfully fills storage tanks."""
+        registry, electrolyzer, lp_tanks, hp_tanks = production_storage_system
+
+        # Run 10 hours of production and storage
+        for hour in range(10):
+            # Set electrolyzer power
+            electrolyzer.power_demand_kw = 2000.0  # 80% capacity
+            electrolyzer.target_h2_output_kg_h = 50.0  # Target 50 kg/h
+            
+            # Execute timestep
+            electrolyzer.step(hour)
+            
+            # Transfer production to storage
+            h2_produced = electrolyzer.h2_product_kg_h
+            if h2_produced > 0:
+                # Store in LP tanks first
+                lp_stored, lp_overflow = lp_tanks.fill(h2_produced)
+                
+                # Verify no immediate overflow
+                assert lp_overflow == 0.0, f"LP tank overflow at hour {hour}"
+                
+                # Store remaining in HP if available capacity
+                if lp_overflow > 0:
+                    hp_stored, hp_overflow = hp_tanks.fill(lp_overflow)
+                    
+            # Step tanks
+            lp_tanks.step(hour)
+            hp_tanks.step(hour)
+
+        # Verify storage increased
+        final_lp_storage = lp_tanks.get_total_mass()
+        final_hp_storage = hp_tanks.get_total_mass()
+        
+        assert final_lp_storage > 0.0, "LP tanks should have accumulated hydrogen"
+        assert final_hp_storage >= 0.0, "HP tanks should exist (might be empty)"
+
+        # Verify production occurred
+        assert electrolyzer.cumulative_h2_kg > 0.0, "Electrolyzer should have produced hydrogen"
+
+    def test_mass_flow_tracking(self, production_storage_system):
+        """Test mass flows are correctly tracked throughout system."""
+        registry, electrolyzer, lp_tanks, hp_tanks = production_storage_system
+
+        # Run short simulation
+        for hour in range(5):
+            electrolyzer.power_demand_kw = 1500.0  # 60% capacity
+            electrolyzer.target_h2_output_kg_h = 30.0
+            
+            electrolyzer.step(hour)
+            
+            # Transfer to storage
+            h2_produced = electrolyzer.h2_product_kg_h
+            if h2_produced > 0:
+                lp_tanks.fill(h2_produced)
+            
+            lp_tanks.step(hour)
+            hp_tanks.step(hour)
+
+        # Verify mass balance
+        total_produced = electrolyzer.cumulative_h2_kg
+        total_stored = lp_tanks.get_total_mass() + hp_tanks.get_total_mass()
+        
+        # Allow for small numerical differences
+        assert abs(total_produced - total_stored) < 1.0, (
+            f"Mass balance violated: produced={total_produced:.2f}, "
+            f"stored={total_stored:.2f}"
+        )
+
+
+class TestCompressionIntegration:
+    """Integration test for compression systems."""
+
+    @pytest.fixture
+    def compression_system(self):
+        """Create compression system with LP and HP tanks."""
+        registry = ComponentRegistry()
+
+        # Create components
+        lp_tanks = TankArray(n_tanks=2, capacity_kg=100.0, pressure_bar=30.0)
+        compressor = FillingCompressor(
+            max_flow_kg_h=100.0,
+            inlet_pressure_bar=30.0,
+            outlet_pressure_bar=350.0
+        )
+        hp_tanks = TankArray(n_tanks=4, capacity_kg=200.0, pressure_bar=350.0)
+
+        # Register
+        registry.register('lp_tanks', lp_tanks, component_type='storage')
+        registry.register('compressor', compressor, component_type='compression')
+        registry.register('hp_tanks', hp_tanks, component_type='storage')
+
+        # Initialize
+        registry.initialize_all(dt=1.0)
+
+        return registry, lp_tanks, compressor, hp_tanks
+
+    def test_lp_to_hp_transfer_integration(self, compression_system):
+        """Test successful transfer from LP to HP with compression."""
+        registry, lp_tanks, compressor, hp_tanks = compression_system
+
+        # Fill LP tanks to enable transfer
+        lp_tanks.fill(150.0)  # Half capacity
+
+        # Run transfer simulation
+        for hour in range(5):
+            # Determine transfer amount
+            lp_mass_before = lp_tanks.get_total_mass()
+            if lp_mass_before > 50.0:  # Enough to transfer
+                transfer_amount = min(lp_mass_before, compressor.max_flow_kg_h * 1.0)  # 1 hour of max flow
+                
+                # Execute transfer: LP → Compressor → HP
+                discharged_from_lp = lp_tanks.discharge(transfer_amount)
+                
+                # Update compressor demand
+                compressor.flow_demand_kg_h = discharged_from_lp
+                compressor.step(hour)
+                
+                # Store compressed hydrogen in HP
+                hp_stored, hp_overflow = hp_tanks.fill(discharged_from_lp)
+                
+                # Step tanks
+                lp_tanks.step(hour)
+                hp_tanks.step(hour)
+
+        # Verify transfer occurred
+        final_lp_mass = lp_tanks.get_total_mass()
+        final_hp_mass = hp_tanks.get_total_mass()
+        
+        assert final_lp_mass < 150.0, "LP tanks should have reduced mass after transfers"
+        assert final_hp_mass > 0.0, "HP tanks should have gained mass from transfers"
+        
+        # Verify mass conservation
+        initial_total = 150.0  # Initial LP fill
+        final_total = final_lp_mass + final_hp_mass
+        assert abs(initial_total - final_total) < 0.1, "Mass should be conserved in transfer"
+
+
+class TestCompletePathwayIntegration:
+    """Integration test for complete dual-path system."""
+
+    @pytest.fixture
+    def complete_system(self):
+        """Create complete dual-path system with both production sources."""
+        registry = ComponentRegistry()
+
+        # Create electrolyzer pathway
+        electrolyzer = DetailedPEMElectrolyzer(
+            max_power_kw=2500.0,
+            num_stacks=10
+        )
+
+        # Create ATR pathway (simplified for integration test)
+        from h2_plant.components.production.atr_source import ATRProductionSource
+        atr = ATRProductionSource(
+            max_ng_flow_kg_h=100.0,
+            efficiency=0.75
+        )
+
+        # Storage systems
+        lp_tanks = TankArray(n_tanks=4, capacity_kg=75.0, pressure_bar=30.0)
+        hp_tanks = TankArray(n_tanks=8, capacity_kg=200.0, pressure_bar=350.0)
+
+        # Compression
+        filling_compressor = FillingCompressor(
+            max_flow_kg_h=150.0,
+            inlet_pressure_bar=30.0,
+            outlet_pressure_bar=350.0
+        )
+        outgoing_compressor = OutgoingCompressor(
+            max_flow_kg_h=200.0,
+            inlet_pressure_bar=350.0,
+            outlet_pressure_bar=900.0
+        )
+
+        # Utility
+        demand_scheduler = DemandScheduler(
+            pattern='day_night',
+            day_demand_kg_h=80.0,
+            night_demand_kg_h=20.0
+        )
+
+        # Monitoring
+        monitoring = MonitoringSystem(output_dir=Path("test_outputs"))
+
+        # Register all components
+        registry.register('electrolyzer', electrolyzer, component_type='production')
+        registry.register('atr', atr, component_type='production')
+        registry.register('lp_tanks', lp_tanks, component_type='storage')
+        registry.register('hp_tanks', hp_tanks, component_type='storage')
+        registry.register('filling_compressor', filling_compressor, component_type='compression')
+        registry.register('outgoing_compressor', outgoing_compressor, component_type='compression')
+        registry.register('demand_scheduler', demand_scheduler, component_type='utility')
+
+        # Initialize
+        registry.initialize_all(dt=1.0)
+        monitoring.initialize(registry)
+
+        return (
+            registry, monitoring, 
+            electrolyzer, atr, 
+            lp_tanks, hp_tanks,
+            filling_compressor, outgoing_compressor,
+            demand_scheduler
+        )
+
+    def test_complete_flow_chain(self, complete_system):
+        """Test complete flow: Production → Storage → Compression → Delivery."""
+        (
+            registry, monitoring, 
+            electrolyzer, atr, 
+            lp_tanks, hp_tanks,
+            filling_compressor, outgoing_compressor,
+            demand_scheduler
+        ) = complete_system
+
+        # Run 24-hour simulation
+        for hour in range(24):
+            # Production (both pathways)
+            electrolyzer.power_demand_kw = 2000.0  # 80% capacity
+            electrolyzer.target_h2_output_kg_h = 45.0
+            electrolyzer.step(hour)
+
+            atr.ng_flow_rate_kg_h = 80.0  # 80% capacity
+            atr.step(hour)
+
+            # Aggregate production
+            total_prod = (
+                electrolyzer.h2_product_kg_h + 
+                atr.h2_output_kg_h
+            )
+
+            # Store production in LP
+            if total_prod > 0:
+                lp_stored, lp_overflow = lp_tanks.fill(total_prod)
+                lp_tanks.step(hour)
+
+            # Transfer from LP to HP when threshold reached
+            lp_mass = lp_tanks.get_total_mass()
+            if lp_mass > 100.0:  # Threshold for transfer
+                transfer_amount = min(
+                    lp_mass, 
+                    filling_compressor.max_flow_kg_h * 1.0  # 1 hour worth
+                )
+
+                # Discharge from LP
+                actual_discharged = lp_tanks.discharge(transfer_amount)
+
+                # Compress (update compressor parameters)
+                filling_compressor.flow_demand_kg_h = actual_discharged
+                filling_compressor.step(hour)
+
+                # Store in HP
+                hp_stored, hp_overflow = hp_tanks.fill(actual_discharged)
+                hp_tanks.step(hour)
+
+            # Demand fulfillment
+            demand = demand_scheduler.current_demand_kg_h * 1.0  # Convert hourly to timestep demand
+
+            if demand > 0:
+                # Check HP availability
+                hp_available = hp_tanks.get_total_mass()
+                if hp_available >= demand:
+                    # Discharge from HP
+                    hp_discharged = hp_tanks.discharge(demand)
+
+                    # Boost to delivery pressure
+                    outgoing_compressor.flow_demand_kg_h = hp_discharged
+                    outgoing_compressor.step(hour)
+                else:
+                    # Partial fulfillment
+                    hp_discharged = hp_tanks.discharge(hp_available)
+                    outgoing_compressor.flow_demand_kg_h = hp_discharged
+                    outgoing_compressor.step(hour)
+
+            # Monitoring
+            monitoring.collect(hour, registry)
+
+        # Verify complete flow occurred
+        assert electrolyzer.cumulative_h2_kg > 0.0
+        assert atr.cumulative_h2_kg > 0.0
+        assert lp_tanks.get_total_mass() >= 0.0
+        assert hp_tanks.get_total_mass() >= 0.0
+        assert demand_scheduler.cumulative_demand_kg > 0.0
+
+        # Verify mass conservation
+        total_produced = electrolyzer.cumulative_h2_kg + atr.cumulative_h2_kg
+        total_stored = lp_tanks.get_total_mass() + hp_tanks.get_total_mass()
+        # Note: Some mass is lost during compression energy calculation and other processes
+        # so we allow for a reasonable tolerance
+        assert abs(total_produced - total_stored) < 5.0  # Allow 5 kg for losses
+
+
+class TestSubcomponentInteraction:
+    """Test interactions between subsystems within a complex component."""
+
+    @pytest.fixture
+    def detailed_electrolyzer(self):
+        """Create detailed electrolyzer with all subsystems."""
+        return DetailedPEMElectrolyzer(
+            max_power_kw=2500.0,
+            num_stacks=10
+        )
+
+    def test_internal_subsystem_coordination(self, detailed_electrolyzer):
+        """Test internal coordination between electrolyzer subsystems."""
+        registry = ComponentRegistry()
+        detailed_electrolyzer.initialize(dt=1.0, registry)
+
+        # Set operating conditions
+        detailed_electrolyzer.power_demand_kw = 2000.0
+        detailed_electrolyzer.target_h2_output_kg_h = 50.0
+
+        # Execute timestep
+        detailed_electrolyzer.step(0.0)
+
+        # Verify subsystems were coordinated
+        # Check that water flow matched power input (hydrogen production)
+        assert detailed_electrolyzer.h2_product_kg_h > 0.0
+        assert detailed_electrolyzer.o2_byproduct_kg_h > 0.0
+        assert detailed_electrolyzer.total_energy_consumed_kw > 0.0
+
+        # Verify internal state consistency
+        state = detailed_electrolyzer.get_state()
+        assert 'subsystems' in state
+        assert 'pem_stacks' in state['subsystems']
+        assert 'rectifier' in state['subsystems']
+
+        # Verify power path: input → rectifier → stacks
+        rectifier_state = state['subsystems']['rectifier']
+        stack_state = state['subsystems']['pem_stacks']
+        
+        assert rectifier_state['ac_input_kw'] > 0.0
+        assert stack_state['total_power_input_kw'] > 0.0
+
+    def test_subsystem_coupling_matrices(self, detailed_electrolyzer):
+        """Test that subsystem coupling matrices are properly formed."""
+        registry = ComponentRegistry()
+        detailed_electrolyzer.initialize(dt=1.0, registry)
+
+        # Check that mass flows are properly connected
+        # Water circulation: feed → P1 → junction → P2 → HX1 → stacks → HX2/3 → separation → PSA
+        detailed_electrolyzer.power_demand_kw = 1500.0
+        detailed_electrolyzer.target_h2_output_kg_h = 30.0
+
+        detailed_electrolyzer.step(0.0)
+
+        # Verify state contains flows between subsystems
+        state = detailed_electrolyzer.get_state()
+        subsystem_flows = state.get('subsystems', {})
+
+        # Each subsystem should show its flows
+        for subsys_name, subsys_state in subsystem_flows.items():
+            if 'flows' in subsys_state:
+                # Flows should have inputs and outputs
+                flows = subsys_state['flows']
+                assert 'inputs' in flows
+                assert 'outputs' in flows
+
+
+def test_registry_component_interaction():
+    """Test ComponentRegistry properly coordinates component interactions."""
+    registry = ComponentRegistry()
+
+    # Create two interacting components
+    from h2_plant.components.utility.demand_scheduler import DemandScheduler
+    from h2_plant.components.storage.tank_array import TankArray
+    
+    demand_scheduler = DemandScheduler(pattern='constant', base_demand_kg_h=50.0)
+    hp_tanks = TankArray(n_tanks=4, capacity_kg=200.0, pressure_bar=350.0)
+
+    registry.register('demand', demand_scheduler, component_type='utility')
+    registry.register('hp_tanks', hp_tanks, component_type='storage')
+
+    registry.initialize_all(dt=1.0)
+
+    # Run simulation with registry coordination
+    for hour in range(5):
+        # Step all components
+        registry.step_all(hour)
+
+        # Verify both components updated
+        demand_state = registry.get('demand').get_state()
+        tank_state = registry.get('hp_tanks').get_state()
+
+        assert 'current_demand_kg_h' in demand_state
+        assert 'total_mass_kg' in tank_state
+
+    # Verify registry can collect all states
+    all_states = registry.get_all_states()
+    assert 'demand' in all_states
+    assert 'hp_tanks' in all_states
+
+
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

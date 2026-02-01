@@ -1,0 +1,107 @@
+Analyzing requirements from: /home/stuart/Documentos/Planta Hidrogenio/requirements.txt
+Found 81 packages.
+Scanning usage in: /home/stuart/Documentos/Planta Hidrogenio
+Found 465 Python files.
+Detected 100 unique top-level imports.
+
+============================================================
+ANALYSIS RESULT
+============================================================
+[USED] CoolProp
+[UNUSED] Mako - No imports or grep matches found.
+[UNUSED] MarkupSafe - No imports or grep matches found.
+[USED] NodeGraphQt
+[UNUSED] Pillow - No imports or grep matches found.
+[UNUSED] PyJWT - No imports or grep matches found.
+[UNUSED] PyNaCl - No imports or grep matches found.
+[USED] PySide6
+[USED] PyYAML
+[UNUSED] Pygments - No imports or grep matches found.
+[MAYBE USED?] attrs - Not in imports, but grep found matches:
+  - Term 'attrs' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/simulation/state_manager.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/config/plant_builder.py'])
+  - Term 'attr' found in 67 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/tests/comparison/compare_compressor.py', '/home/stuart/Documentos/Planta Hidrogenio/tests/test_bop_components.py'])
+[UNUSED] bcrypt - No imports or grep matches found.
+[UNUSED] beautifulsoup4 - No imports or grep matches found.
+[MAYBE USED?] black - Not in imports, but grep found matches:
+  - Term 'black' found in 23 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/gui/utils/report_generator.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/reporting/report_generator.py'])
+[UNUSED] blinker - No imports or grep matches found.
+[MAYBE USED?] certifi - Not in imports, but grep found matches:
+  - Term 'certifi' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/mixing/h2_distribution.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/pathways/allocation_strategies.py'])
+[UNUSED] chardet - No imports or grep matches found.
+[UNUSED] charset-normalizer - No imports or grep matches found.
+[MAYBE USED?] click - Not in imports, but grep found matches:
+  - Term 'click' found in 6 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/run_gui_simulation.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/gui/nodes/base_node.py'])
+[MAYBE USED?] coverage - Not in imports, but grep found matches:
+  - Term 'coverage' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/tests/runner.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/utility/energy_price_tracker.py'])
+[UNUSED] cryptography - No imports or grep matches found.
+[UNUSED] distro - No imports or grep matches found.
+[USED] entsoe-py
+[UNUSED] fasteners - No imports or grep matches found.
+[MAYBE USED?] flake8 - Not in imports, but grep found matches:
+  - Term 'flake8' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/setup.py'])
+[MAYBE USED?] future - Not in imports, but grep found matches:
+  - Term 'future' found in 17 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/tests/test_phase_ab_regression.py', '/home/stuart/Documentos/Planta Hidrogenio/tests/performance/test_hpc_benchmarks.py'])
+[USED] h5py
+[UNUSED] httplib2 - No imports or grep matches found.
+[UNUSED] idna - No imports or grep matches found.
+[UNUSED] iniconfig - No imports or grep matches found.
+[MAYBE USED?] invoke - Not in imports, but grep found matches:
+  - Term 'invoke' found in 3 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/compression/compressor_single.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/optimization/lut_manager.py'])
+[USED] jsonschema
+[UNUSED] jsonschema-specifications - No imports or grep matches found.
+[UNUSED] llvmlite - No imports or grep matches found.
+[USED] matplotlib
+[UNUSED] mccabe - No imports or grep matches found.
+[MAYBE USED?] monotonic - Not in imports, but grep found matches:
+  - Term 'monotonic' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/control/valve.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/thermal/heat_exchanger.py'])
+[MAYBE USED?] mypy - Not in imports, but grep found matches:
+  - Term 'mypy' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/core/types.py', '/home/stuart/Documentos/Planta Hidrogenio/setup.py'])
+[UNUSED] mypy_extensions - No imports or grep matches found.
+[UNUSED] narwhals - No imports or grep matches found.
+[USED] numba
+[USED] numpy
+[UNUSED] oauthlib - No imports or grep matches found.
+[UNUSED] packaging - No imports or grep matches found.
+[USED] pandas
+[UNUSED] paramiko - No imports or grep matches found.
+[UNUSED] pathspec - No imports or grep matches found.
+[UNUSED] pexpect - No imports or grep matches found.
+[UNUSED] phonenumbers - No imports or grep matches found.
+[UNUSED] platformdirs - No imports or grep matches found.
+[USED] plotly
+[UNUSED] pluggy - No imports or grep matches found.
+[UNUSED] psutil - No imports or grep matches found.
+[UNUSED] ptyprocess - No imports or grep matches found.
+[UNUSED] pycairo - No imports or grep matches found.
+[UNUSED] pycodestyle - No imports or grep matches found.
+[USED] pydantic
+[UNUSED] pyflakes - No imports or grep matches found.
+[UNUSED] pyparsing - No imports or grep matches found.
+[USED] pytest
+[MAYBE USED?] pytest-cov - Not in imports, but grep found matches:
+  - Term 'pytest-cov' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/setup.py'])
+[UNUSED] python-dateutil - No imports or grep matches found.
+[UNUSED] pytokens - No imports or grep matches found.
+[UNUSED] pytz - No imports or grep matches found.
+[UNUSED] referencing - No imports or grep matches found.
+[MAYBE USED?] requests - Not in imports, but grep found matches:
+  - Term 'requests' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/external/h2_source.py', '/home/stuart/Documentos/Planta Hidrogenio/h2_plant/components/water/ultrapure_water_tank.py'])
+[UNUSED] rpds-py - No imports or grep matches found.
+[USED] scipy
+[UNUSED] setproctitle - No imports or grep matches found.
+[USED] setuptools
+[UNUSED] six - No imports or grep matches found.
+[UNUSED] soupsieve - No imports or grep matches found.
+[UNUSED] tinycss - No imports or grep matches found.
+[UNUSED] tinycss2 - No imports or grep matches found.
+[UNUSED] typing_extensions - No imports or grep matches found.
+[UNUSED] tzdata - No imports or grep matches found.
+[UNUSED] urllib3 - No imports or grep matches found.
+[UNUSED] webencodings - No imports or grep matches found.
+[MAYBE USED?] wheel - Not in imports, but grep found matches:
+  - Term 'wheel' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/h2_plant/gui/ui/main_window.py'])
+[USED] windpowerlib
+[UNUSED] xlrd - No imports or grep matches found.
+
+============================================================
+Total Unused (Confident): 51

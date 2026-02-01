@@ -1,0 +1,494 @@
+{
+  "format": "h2plant",
+  "schema_version": "1.0",
+  "metadata": {
+    "name": "Untitled Plant",
+    "version": "1.0",
+    "created": "2025-12-02T19:51:02.669220",
+    "modified": "2025-12-02T19:51:02.669220",
+    "author": "H2 Plant GUI",
+    "description": "Plant configuration: Untitled Plant",
+    "tags": [],
+    "checksum": "474e15e845e7db9a9d0c4caa58bd47ec07f40135589072691167fb438cab574c"
+  },
+  "canvas_state": {
+    "zoom_level": 1.0,
+    "pan_x": 0.0,
+    "pan_y": 0.0,
+    "grid_enabled": true,
+    "grid_size": 20,
+    "snap_to_grid": true
+  },
+  "nodes": {
+    "0x7f4b88901e90": {
+      "type": "h2_plant.storage.lp.LPTankNode",
+      "display_name": "LP Buffer Tank",
+      "properties": {
+        "tank_count": "4.0",
+        "capacity_per_tank_kg": "50.0",
+        "operating_pressure_bar": "30.0",
+        "min_fill_level": "5.0",
+        "max_fill_level": "95.0",
+        "ambient_temp_c": "20.0",
+        "type_": "h2_plant.storage.lp.LPTankNode",
+        "icon": null,
+        "visible": true,
+        "width": 161.34375,
+        "height": 123.45,
+        "pos": [
+          -100.0,
+          0.0
+        ],
+        "layout_direction": 0,
+        "port_deletion_allowed": false,
+        "subgraph_session": {},
+        "inputs": {
+          "h2_in": {
+            "0x7f4b88900590": [],
+            "0x7f4b88967010": [
+              "h2_out"
+            ]
+          }
+        },
+        "outputs": {
+          "h2_out": {
+            "0x7f4b88939290": [
+              "h2_in"
+            ]
+          }
+        },
+        "custom": {
+          "component_id": "LP-Tank-1",
+          "tank_count": "4.0",
+          "capacity_per_tank_kg": "50.0",
+          "operating_pressure_bar": "30.0",
+          "min_fill_level": "5.0",
+          "max_fill_level": "95.0",
+          "ambient_temp_c": "20.0",
+          "node_color": [
+            0,
+            255,
+            255
+          ],
+          "custom_label": "",
+          "collapse_spacer": ""
+        }
+      },
+      "geometry": {
+        "x": -100.0,
+        "y": 0.0,
+        "width": 100.0,
+        "height": 100.0,
+        "color": [
+          100,
+          100,
+          100
+        ],
+        "border_color": [
+          50,
+          50,
+          50
+        ],
+        "text_color": [
+          255,
+          255,
+          255
+        ],
+        "selected": false,
+        "disabled": false,
+        "collapsed": false
+      }
+    },
+    "0x7f4b88939290": {
+      "type": "h2_plant.compression.filling.FillingCompressorNode",
+      "display_name": "Filling Compressor",
+      "properties": {
+        "max_flow_kg_h": "200.0",
+        "inlet_pressure_bar": "30.0",
+        "outlet_pressure_bar": "350.0",
+        "num_stages": "3.0",
+        "efficiency": "75.0",
+        "power_consumption_kw": "50.0",
+        "type_": "h2_plant.compression.filling.FillingCompressorNode",
+        "icon": null,
+        "visible": true,
+        "width": 185.078125,
+        "height": 123.45,
+        "pos": [
+          200.0,
+          0.0
+        ],
+        "layout_direction": 0,
+        "port_deletion_allowed": false,
+        "subgraph_session": {},
+        "inputs": {
+          "h2_in": {
+            "0x7f4b88901e90": [
+              "h2_out"
+            ]
+          }
+        },
+        "outputs": {
+          "h2_out": {
+            "0x7f4b8892d290": [
+              "h2_in"
+            ]
+          }
+        },
+        "custom": {
+          "component_id": "Comp-Fill",
+          "max_flow_kg_h": "200.0",
+          "inlet_pressure_bar": "30.0",
+          "outlet_pressure_bar": "350.0",
+          "num_stages": "3.0",
+          "efficiency": "75.0",
+          "power_consumption_kw": "50.0",
+          "node_color": [
+            100,
+            200,
+            255
+          ],
+          "custom_label": "",
+          "collapse_spacer": ""
+        }
+      },
+      "geometry": {
+        "x": 200.0,
+        "y": 0.0,
+        "width": 100.0,
+        "height": 100.0,
+        "color": [
+          100,
+          100,
+          100
+        ],
+        "border_color": [
+          50,
+          50,
+          50
+        ],
+        "text_color": [
+          255,
+          255,
+          255
+        ],
+        "selected": false,
+        "disabled": false,
+        "collapsed": false
+      }
+    },
+    "0x7f4b8892d290": {
+      "type": "h2_plant.storage.hp.HPTankNode",
+      "display_name": "HP Storage",
+      "properties": {
+        "tank_count": "8.0",
+        "capacity_per_tank_kg": "200.0",
+        "operating_pressure_bar": "350.0",
+        "min_fill_level": "5.0",
+        "max_fill_level": "95.0",
+        "ambient_temp_c": "20.0",
+        "type_": "h2_plant.storage.hp.HPTankNode",
+        "icon": null,
+        "visible": true,
+        "width": 161.34375,
+        "height": 123.45,
+        "pos": [
+          500.0,
+          0.0
+        ],
+        "layout_direction": 0,
+        "port_deletion_allowed": false,
+        "subgraph_session": {},
+        "inputs": {
+          "h2_in": {
+            "0x7f4b88939290": [
+              "h2_out"
+            ]
+          }
+        },
+        "outputs": {
+          "h2_out": {
+            "0x7f4b888ffe90": [
+              "h2_in"
+            ]
+          }
+        },
+        "custom": {
+          "component_id": "HP-Tank-1",
+          "tank_count": "8.0",
+          "capacity_per_tank_kg": "200.0",
+          "operating_pressure_bar": "350.0",
+          "min_fill_level": "5.0",
+          "max_fill_level": "95.0",
+          "ambient_temp_c": "20.0",
+          "material_type": "Type IV Composite",
+          "node_color": [
+            0,
+            200,
+            255
+          ],
+          "custom_label": "",
+          "collapse_spacer": ""
+        }
+      },
+      "geometry": {
+        "x": 500.0,
+        "y": 0.0,
+        "width": 100.0,
+        "height": 100.0,
+        "color": [
+          100,
+          100,
+          100
+        ],
+        "border_color": [
+          50,
+          50,
+          50
+        ],
+        "text_color": [
+          255,
+          255,
+          255
+        ],
+        "selected": false,
+        "disabled": false,
+        "collapsed": false
+      }
+    },
+    "0x7f4b888ffe90": {
+      "type": "h2_plant.compression.outgoing.OutgoingCompressorNode",
+      "display_name": "Outgoing Compressor",
+      "properties": {
+        "max_flow_kg_h": "200.0",
+        "inlet_pressure_bar": "350.0",
+        "outlet_pressure_bar": "900.0",
+        "efficiency": "75.0",
+        "power_consumption_kw": "75.0",
+        "type_": "h2_plant.compression.outgoing.OutgoingCompressorNode",
+        "icon": null,
+        "visible": true,
+        "width": 206.84375,
+        "height": 123.45,
+        "pos": [
+          800.0,
+          0.0
+        ],
+        "layout_direction": 0,
+        "port_deletion_allowed": false,
+        "subgraph_session": {},
+        "inputs": {
+          "h2_in": {
+            "0x7f4b8892d290": [
+              "h2_out"
+            ]
+          }
+        },
+        "custom": {
+          "component_id": "Comp-Out",
+          "max_flow_kg_h": "200.0",
+          "inlet_pressure_bar": "350.0",
+          "outlet_pressure_bar": "900.0",
+          "efficiency": "75.0",
+          "power_consumption_kw": "75.0",
+          "node_color": [
+            150,
+            200,
+            255
+          ],
+          "custom_label": "",
+          "collapse_spacer": ""
+        }
+      },
+      "geometry": {
+        "x": 800.0,
+        "y": 0.0,
+        "width": 100.0,
+        "height": 100.0,
+        "color": [
+          100,
+          100,
+          100
+        ],
+        "border_color": [
+          50,
+          50,
+          50
+        ],
+        "text_color": [
+          255,
+          255,
+          255
+        ],
+        "selected": false,
+        "disabled": false,
+        "collapsed": false
+      }
+    },
+    "0x7f4b88967010": {
+      "type": "h2_plant.electrolysis.pem.PEMStackNode",
+      "display_name": "PEM",
+      "properties": {
+        "rated_power_kw": "2500.0",
+        "efficiency_rated": "65.0",
+        "number_of_cells": "85.0",
+        "active_area_m2": "0.03",
+        "operating_temp_c": "60.0",
+        "type_": "h2_plant.electrolysis.pem.PEMStackNode",
+        "icon": null,
+        "visible": true,
+        "width": 191.0625,
+        "height": 123.45,
+        "pos": [
+          -391.1152459357872,
+          0.9214014353699066
+        ],
+        "layout_direction": 0,
+        "port_deletion_allowed": false,
+        "subgraph_session": {},
+        "outputs": {
+          "h2_out": {
+            "0x7f4b88901e90": [
+              "h2_in"
+            ]
+          }
+        },
+        "custom": {
+          "component_id": "PEM-Stack-1",
+          "rated_power_kw": "2500.0",
+          "efficiency_rated": "65.0",
+          "number_of_cells": "85.0",
+          "active_area_m2": "0.03",
+          "operating_temp_c": "60.0",
+          "node_color": [
+            0,
+            255,
+            255
+          ],
+          "custom_label": "",
+          "collapse_spacer": ""
+        }
+      },
+      "geometry": {
+        "x": -391.1152459357872,
+        "y": 0.9214014353699066,
+        "width": 100.0,
+        "height": 100.0,
+        "color": [
+          13,
+          18,
+          23
+        ],
+        "border_color": [
+          50,
+          50,
+          50
+        ],
+        "text_color": [
+          255,
+          255,
+          255
+        ],
+        "selected": false,
+        "disabled": false,
+        "collapsed": false
+      }
+    }
+  },
+  "edges": [
+    {
+      "source_node_id": "0x7f4b88901e90",
+      "target_node_id": "0x7f4b88939290",
+      "source_port": "h2_out",
+      "target_port": "h2_in",
+      "flow_type": "default",
+      "geometry": {
+        "source_node_id": "0x7f4b88901e90",
+        "target_node_id": "0x7f4b88939290",
+        "source_port": "h2_out",
+        "target_port": "h2_in",
+        "flow_type": "default",
+        "color": [
+          255,
+          255,
+          255
+        ],
+        "width": 2.0,
+        "style": "solid",
+        "selected": false,
+        "waypoints": []
+      }
+    },
+    {
+      "source_node_id": "0x7f4b88939290",
+      "target_node_id": "0x7f4b8892d290",
+      "source_port": "h2_out",
+      "target_port": "h2_in",
+      "flow_type": "default",
+      "geometry": {
+        "source_node_id": "0x7f4b88939290",
+        "target_node_id": "0x7f4b8892d290",
+        "source_port": "h2_out",
+        "target_port": "h2_in",
+        "flow_type": "default",
+        "color": [
+          255,
+          255,
+          255
+        ],
+        "width": 2.0,
+        "style": "solid",
+        "selected": false,
+        "waypoints": []
+      }
+    },
+    {
+      "source_node_id": "0x7f4b8892d290",
+      "target_node_id": "0x7f4b888ffe90",
+      "source_port": "h2_out",
+      "target_port": "h2_in",
+      "flow_type": "default",
+      "geometry": {
+        "source_node_id": "0x7f4b8892d290",
+        "target_node_id": "0x7f4b888ffe90",
+        "source_port": "h2_out",
+        "target_port": "h2_in",
+        "flow_type": "default",
+        "color": [
+          255,
+          255,
+          255
+        ],
+        "width": 2.0,
+        "style": "solid",
+        "selected": false,
+        "waypoints": []
+      }
+    },
+    {
+      "source_node_id": "0x7f4b88967010",
+      "target_node_id": "0x7f4b88901e90",
+      "source_port": "h2_out",
+      "target_port": "h2_in",
+      "flow_type": "default",
+      "geometry": {
+        "source_node_id": "0x7f4b88967010",
+        "target_node_id": "0x7f4b88901e90",
+        "source_port": "h2_out",
+        "target_port": "h2_in",
+        "flow_type": "default",
+        "color": [
+          255,
+          255,
+          255
+        ],
+        "width": 2.0,
+        "style": "solid",
+        "selected": false,
+        "waypoints": []
+      }
+    }
+  ],
+  "validation_result": null,
+  "topology_analysis": null
+}

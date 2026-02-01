@@ -1,0 +1,170 @@
+Analyzing requirements from: /home/stuart/Documentos/Planta Hidrogenio/requirements.txt
+Found 81 packages.
+Scanning usage in: /home/stuart/Documentos/Planta Hidrogenio
+Found 496 Python files.
+Detected 102 unique top-level imports.
+
+============================================================
+ANALYSIS RESULT
+============================================================
+[USED] CoolProp
+[MAYBE USED?] Mako - Not in imports, but grep found matches:
+  - Term 'Mako' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/pygments/lexers/_mapping.py'])
+  - Term 'mako' found in 5 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/pygments/lexers/_mapping.py'])
+[MAYBE USED?] MarkupSafe - Not in imports, but grep found matches:
+  - Term 'MarkupSafe' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/markupsafe/__init__.py'])
+  - Term 'markupsafe' found in 11 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/io/formats/style_render.py'])
+[USED] NodeGraphQt
+[MAYBE USED?] Pillow - Not in imports, but grep found matches:
+  - Term 'PIL' found in 208 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/tests/utilities.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/tests/test_system_info.py'])
+  - Term 'Pillow' found in 62 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/PIL/AvifImagePlugin.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/PIL/_version.py'])
+[MAYBE USED?] PyJWT - Not in imports, but grep found matches:
+  - Term 'PyJWT' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+  - Term 'jwt' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/streamlit/auth_util.py'])
+[MAYBE USED?] PyNaCl - Not in imports, but grep found matches:
+  - Term 'PyNaCl' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+  - Term 'nacl' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+[USED] PySide6
+[USED] PyYAML
+[MAYBE USED?] Pygments - Not in imports, but grep found matches:
+  - Term 'pygments' found in 388 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/rich/logging.py'])
+  - Term 'Pygments' found in 375 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/rich/traceback.py'])
+[MAYBE USED?] attrs - Not in imports, but grep found matches:
+  - Term 'attr' found in 4128 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/dtypes.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/matrixlib/tests/test_defmatrix.py'])
+  - Term 'attrs' found in 582 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/misc_util.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/ccompiler_opt.py'])
+[MAYBE USED?] bcrypt - Not in imports, but grep found matches:
+  - Term 'bcrypt' found in 3 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/packaging/licenses/_spdx.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/packaging/licenses/_spdx.py'])
+[MAYBE USED?] beautifulsoup4 - Not in imports, but grep found matches:
+  - Term 'bs4' found in 27 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/tests/io/xml/test_to_xml.py'])
+  - Term 'beautifulsoup4' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/compat/_optional.py'])
+[MAYBE USED?] black - Not in imports, but grep found matches:
+  - Term 'black' found in 365 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/misc_util.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_core/tests/test_regression.py'])
+[MAYBE USED?] blinker - Not in imports, but grep found matches:
+  - Term 'blinker' found in 5 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/streamlit/watcher/event_based_path_watcher.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/streamlit/config.py'])
+[MAYBE USED?] certifi - Not in imports, but grep found matches:
+  - Term 'certifi' found in 62 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/__init__.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_internal/build_env.py'])
+[MAYBE USED?] chardet - Not in imports, but grep found matches:
+  - Term 'chardet' found in 29 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/chardet/langgreekmodel.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/chardet/universaldetector.py'])
+[MAYBE USED?] charset-normalizer - Not in imports, but grep found matches:
+  - Term 'charset_normalizer' found in 20 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/f2py/crackfortran.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/f2py/tests/test_crackfortran.py'])
+  - Term 'charset-normalizer' found in 3 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/charset_normalizer/legacy.py'])
+[MAYBE USED?] click - Not in imports, but grep found matches:
+  - Term 'click' found in 196 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/fontTools/agl.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/mpl_toolkits/mplot3d/tests/test_axes3d.py'])
+[MAYBE USED?] coverage - Not in imports, but grep found matches:
+  - Term 'coverage' found in 182 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_pytesttester.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/ccompiler_opt.py'])
+[MAYBE USED?] cryptography - Not in imports, but grep found matches:
+  - Term 'cryptography' found in 6 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/urllib3/contrib/pyopenssl.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/requests/help.py'])
+[MAYBE USED?] distro - Not in imports, but grep found matches:
+  - Term 'distro' found in 16 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/backends/backend_pdf.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_internal/network/session.py'])
+[USED] entsoe-py
+[MAYBE USED?] fasteners - Not in imports, but grep found matches:
+  - Term 'fasteners' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+[MAYBE USED?] flake8 - Not in imports, but grep found matches:
+  - Term 'flake8' found in 46 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/urllib3/util/ssl_match_hostname.py'])
+[MAYBE USED?] future - Not in imports, but grep found matches:
+  - Term 'future' found in 2568 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/matrixlib/defmatrix.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/linalg/tests/test_deprecations.py'])
+[USED] h5py
+[MAYBE USED?] httplib2 - Not in imports, but grep found matches:
+  - Term 'httplib2' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/cachecontrol/controller.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/mypy/stubinfo.py'])
+[MAYBE USED?] idna - Not in imports, but grep found matches:
+  - Term 'idna' found in 28 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/urllib3/util/connection.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/urllib3/util/url.py'])
+[MAYBE USED?] iniconfig - Not in imports, but grep found matches:
+  - Term 'iniconfig' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/_pytest/legacypath.py'])
+[MAYBE USED?] invoke - Not in imports, but grep found matches:
+  - Term 'invoke' found in 228 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/tests/utilities.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/tests/test_shell_utils.py'])
+[USED] jsonschema
+[MAYBE USED?] jsonschema-specifications - Not in imports, but grep found matches:
+  - Term 'jsonschema-specifications' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+  - Term 'jsonschema_specifications' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/jsonschema_specifications/tests/test_jsonschema_specifications.py'])
+[MAYBE USED?] llvmlite - Not in imports, but grep found matches:
+  - Term 'llvmlite' found in 137 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/llvmlite/ir/instructions.py'])
+[USED] matplotlib
+[MAYBE USED?] mccabe - Not in imports, but grep found matches:
+  - Term 'mccabe' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/mccabe.py'])
+[MAYBE USED?] monotonic - Not in imports, but grep found matches:
+  - Term 'monotonic' found in 242 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/random/tests/test_generator_mt19937_regressions.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_core/multiarray.py'])
+[MAYBE USED?] mypy - Not in imports, but grep found matches:
+  - Term 'mypy' found in 576 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/typing/tests/data/pass/literal.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/typing/tests/data/pass/simple.py'])
+[MAYBE USED?] mypy_extensions - Not in imports, but grep found matches:
+  - Term 'mypy_extensions' found in 36 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/black/files.py'])
+[MAYBE USED?] narwhals - Not in imports, but grep found matches:
+  - Term 'narwhals' found in 160 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/plotly/data/__init__.py'])
+[USED] numba
+[USED] numpy
+[MAYBE USED?] oauthlib - Not in imports, but grep found matches:
+  - Term 'oauthlib' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/core/frame.py'])
+[MAYBE USED?] packaging - Not in imports, but grep found matches:
+  - Term 'packaging' found in 177 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_utils/_pep440.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/testing/_private/utils.py'])
+[USED] pandas
+[MAYBE USED?] paramiko - Not in imports, but grep found matches:
+  - Term 'paramiko' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/mypy/stubinfo.py'])
+[MAYBE USED?] pathspec - Not in imports, but grep found matches:
+  - Term 'pathspec' found in 9 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/black/files.py'])
+[MAYBE USED?] pexpect - Not in imports, but grep found matches:
+  - Term 'pexpect' found in 6 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/numba/tests/test_gdb_dwarf.py'])
+[MAYBE USED?] phonenumbers - Not in imports, but grep found matches:
+  - Term 'phonenumbers' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+[MAYBE USED?] platformdirs - Not in imports, but grep found matches:
+  - Term 'platformdirs' found in 26 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_internal/utils/appdirs.py'])
+[USED] plotly
+[MAYBE USED?] pluggy - Not in imports, but grep found matches:
+  - Term 'pluggy' found in 16 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pydantic/plugin/_loader.py'])
+[MAYBE USED?] psutil - Not in imports, but grep found matches:
+  - Term 'psutil' found in 18 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/testing/_private/utils.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/packaging/licenses/_spdx.py'])
+[MAYBE USED?] ptyprocess - Not in imports, but grep found matches:
+  - Term 'ptyprocess' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+[MAYBE USED?] pycairo - Not in imports, but grep found matches:
+  - Term 'pycairo' found in 9 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/backends/backend_cairo.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/tests/test_backends_interactive.py'])
+  - Term 'cairo' found in 54 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/fontTools/varLib/interpolatablePlot.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/figure.py'])
+[MAYBE USED?] pycodestyle - Not in imports, but grep found matches:
+  - Term 'pycodestyle' found in 6 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/flake8/plugins/finder.py'])
+[USED] pydantic
+[MAYBE USED?] pyflakes - Not in imports, but grep found matches:
+  - Term 'pyflakes' found in 25 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pyflakes/scripts/pyflakes.py'])
+[MAYBE USED?] pyparsing - Not in imports, but grep found matches:
+  - Term 'pyparsing' found in 72 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/pyparsing/diagram/__init__.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/pyparsing/testing.py'])
+[USED] pytest
+[MAYBE USED?] pytest-cov - Not in imports, but grep found matches:
+  - Term 'pytest-cov' found in 7 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_pytesttester.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pydantic/v1/_hypothesis_plugin.py'])
+[MAYBE USED?] python-dateutil - Not in imports, but grep found matches:
+  - Term 'dateutil' found in 112 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/lib/_iotools.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/dateutil/tz/tz.py'])
+  - Term 'python-dateutil' found in 3 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pyarrow/tests/test_types.py'])
+[MAYBE USED?] pytokens - Not in imports, but grep found matches:
+  - Term 'pytokens' found in 4 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/blib2to3/pgen2/tokenize.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pytokens/cli.py'])
+[MAYBE USED?] pytz - Not in imports, but grep found matches:
+  - Term 'pytz' found in 93 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_core/tests/test_deprecations.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_core/tests/test_datetime.py'])
+[MAYBE USED?] referencing - Not in imports, but grep found matches:
+  - Term 'referencing' found in 83 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/f2py/symbolic.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/f2py/cfuncs.py'])
+[MAYBE USED?] requests - Not in imports, but grep found matches:
+  - Term 'requests' found in 194 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/core.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/_core/_add_newdocs.py'])
+[MAYBE USED?] rpds-py - Not in imports, but grep found matches:
+  - Term 'rpds-py' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+  - Term 'rpds' found in 7 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/referencing/tests/test_core.py'])
+[USED] scipy
+[MAYBE USED?] setproctitle - Not in imports, but grep found matches:
+  - Term 'setproctitle' found in 1 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py'])
+[USED] setuptools
+[MAYBE USED?] six - Not in imports, but grep found matches:
+  - Term 'six' found in 261 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/tests/test_exec_command.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/tests/test_shell_utils.py'])
+[MAYBE USED?] soupsieve - Not in imports, but grep found matches:
+  - Term 'soupsieve' found in 5 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/soupsieve/pretty.py'])
+[MAYBE USED?] tinycss - Not in imports, but grep found matches:
+  - Term 'tinycss' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/io/formats/css.py'])
+[MAYBE USED?] tinycss2 - Not in imports, but grep found matches:
+  - Term 'tinycss2' found in 2 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/io/formats/css.py'])
+[MAYBE USED?] typing_extensions - Not in imports, but grep found matches:
+  - Term 'typing_extensions' found in 300 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/tests/test_api.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/matplotlib/pyplot.py'])
+[MAYBE USED?] tzdata - Not in imports, but grep found matches:
+  - Term 'tzdata' found in 19 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/dateutil/tz/tz.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/dateutil/parser/_parser.py'])
+[MAYBE USED?] urllib3 - Not in imports, but grep found matches:
+  - Term 'urllib3' found in 76 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_internal/network/session.py'])
+[MAYBE USED?] webencodings - Not in imports, but grep found matches:
+  - Term 'webencodings' found in 6 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pip/_vendor/webencodings/labels.py'])
+[MAYBE USED?] wheel - Not in imports, but grep found matches:
+  - Term 'wheel' found in 132 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/random/tests/test_extending.py', '/home/stuart/Documentos/Planta Hidrogenio/vendor/libs/numpy/distutils/misc_util.py'])
+[USED] windpowerlib
+[MAYBE USED?] xlrd - Not in imports, but grep found matches:
+  - Term 'xlrd' found in 13 files (e.g. ['/home/stuart/Documentos/Planta Hidrogenio/scripts/dependency_check.py', '/home/stuart/Documentos/Planta Hidrogenio/Hidrogenio/lib/python3.11/site-packages/pandas/core/config_init.py'])
+
+============================================================
+Total Unused (Confident): 0

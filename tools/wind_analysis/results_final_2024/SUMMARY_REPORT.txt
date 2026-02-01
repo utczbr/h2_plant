@@ -1,0 +1,34 @@
+🏗️ WIND FARM SUMMARY REPORT
+============================================================
+
+📊 TECHNOLOGY
+• Turbines: 7
+• Capacity: 9.5 MW × 7
+• Model: Vestas V164/9500
+
+⚡ PERFORMANCE
+• Annual Energy: 338 GWh
+• Capacity Factor: 57.9%
+• Peak Power: 63.0 MW
+
+💰 ECONOMICS
+• Total Revenue: 30,466,529 €
+• Avg Price: 90.2 €/MWh
+• Capture Price: 90.1 €/MWh
+
+📈 FILES GENERATED
+• 00_turbine_power_curve.png
+• 01_wind_speed_distribution.png
+• 02_power_distribution.png
+• 03_wind_timeseries.png
+• 04_power_timeseries.png
+• 05_daily_revenue.png
+• 06_price_distribution.png
+• 07_exceedance_curve.png
+• 08_matrix_capex_turbines.png
+• 09_matrix_sweet_spot.png
+• SUMMARY_REPORT.txt
+• matriz_decisao_dimensionamento.csv
+• producao_horaria_2_turbinas.csv
+• producao_horaria_turbina.csv
+• summary.csv

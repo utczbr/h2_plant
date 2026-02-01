@@ -1,0 +1,11 @@
+Garantia;Metodo;N_Turbinas;Potencia_Instalada_MW;Cobertura_Fisica_Real_%;Cobertura_Volume_%;Excedente_Energia_%
+P90;Físico (Instantâneo);52;494.0;90.1%;953.2%;853.2%
+P90;Volume (Energia);5;47.5;52.5%;91.7%;0%
+P80;Físico (Instantâneo);21;199.5;80.8%;385.0%;285.0%
+P80;Volume (Energia);5;47.5;52.5%;91.7%;0%
+P70;Físico (Instantâneo);11;104.5;70.8%;201.7%;101.7%
+P70;Volume (Energia);4;38.0;44.4%;73.4%;0%
+P60;Físico (Instantâneo);7;66.5;61.5%;128.4%;28.4%
+P60;Volume (Energia);4;38.0;44.4%;73.4%;0%
+P50;Físico (Instantâneo);5;47.5;52.5%;91.7%;0%
+P50;Volume (Energia);3;28.5;0.0%;55.0%;0%

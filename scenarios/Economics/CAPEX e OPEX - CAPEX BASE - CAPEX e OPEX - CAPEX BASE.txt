@@ -1,0 +1,118 @@
+CAPEX - GERAL,,,CAPEX - ATR,,,,,,,,,,,,,,,,,CAPEX - Water Treatment,CAPEX - SOEC,,,,,,,,,,,,,,,,CAPEX - PEM,,,,,,,,,,,,,,,,CAPEX - STORAGE & COMPRESSION,,,,,,,,,,,,,,,
+Item,,Tipo de Custo,Componente,Método de Estimativa,"A
+(Design Capacity)",Design Capacity Unit,Fator Multi,K_1,K_2,K_3,F_m,F_p,F_BM,B_1,B_2,Formula do Custo Base,Valor Base,Valor corrigido inflação (USD conv EUR),Source,Componente,Componente,TAG,"A
+(Design Capacity)",Design Capacity Unit,Fator Multi,K_1,K_2,K_3,F_m,F_p,F_BM,B_1,B_2,Formula do Custo Base,Final Value,Source,Componente,TAG,Método de Estimativa,Design Capacity Unit,Fator Multi,K_1,K_2,K_3,F_m,F_p,F_BM,B_1,B_2,Formula do Custo Base,Final Value,Source,Componente,Método de Estimativa,"A
+(Design Capacity)",Design Capacity Unit,Fator Multi,K_1,K_2,K_3,F_m,F_p,F_BM,B_1,B_2,Formula do Custo Base,Final Value,Source
+Electrical PEM,45-55%,Direto,ATR Reactor,Direto Fonte Confiável,-,-,,-,-,-,-,-,-,-,-,-,-,"€3.118.657,28","Carlini, G.(2025)",purification unit,Process Heaters - Electric,EBL-1,,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,Centrifugal Water Pump para Água Ultra Pura + Motor,PMP-1,,"Centrífuga (1 a 100 kW)
+Recíproca (0,1 a 200 kW)
+Desloc Positivo Rotativo (1 a 100 kW)",-,"3,3892
+3,8696
+3,4771","0,0536
+0,3161
+0,1350","0,1538
+0,1220
+0,1438","2,1 (Material Aço Inox 316 SS)",1,-,"1,89 (bomba centrífuga)","1,35 (bomba centrífuga)",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,5 Filling Loading Docks,Direto Fonte Confiável,-,-,-,-,-,-,-,-,-,-,-,-,"€1.931.019,12",ROGER
+Electrical SOEC,45-55%,Direto,HT-WGS,Direto Fonte Confiável,-,-,,-,-,-,-,-,-,-,-,-,-,"€436.612,02","Carlini, G.(2025)",Tanque,MRV Multistage Compressor Turbo-centrifugo - SOEC Steam,MTC-1,,450 - 3000 kW,-,"2,2891","1,3604","-0,1027","2,5 (Aço Inoxidável 316 ou Aço Liga. Obrigatório para vapor a 250°C para evitar erosão e oxidação.)",-,"2,15 (Instalação de unidade centrífuga tipo ""package"")",-,-,C_BM=C_0_p * F_BM * F_p,,,Motor para Bombas de Água,PMP-1,Método de Turton,"Até 75 kW
+75 a 2600 kW",-,"3,3432
+2,9508","0,2761
+1,0688","0,0543
+-0,1315",-,-,-,-,-,C_BM=C_0_p,,,Underground Storage costs,Direto Fonte Confiável,-,-,-,-,-,-,-,-,-,-,-,-,"€6.736.268,15",ROGER
+Instrumentation PEM,20%,Direto,LT-WGS,Direto Fonte Confiável,-,-,,-,-,-,-,-,-,-,-,-,-,"€436.612,02","Carlini, G.(2025)",,Attemperator (Venturi),ATT-1,,"0,05 a 50 m^3/s",-,"3,6298","-0,4991","0,0411","€3,10","€1,00",-,"2,25","1,82",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],"€19.778,00",,PEM Electrolizer,PEM,,,,,,,,,,,,,,,Multistage H2 Alternating Multistage Compressor,Método de Turton,,potência de eixo (10 - 10000 W),-,"2,0309","1,2524","-0,0638","2,4 (Aço Liga/Inox)",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_p,,
+Instrumentation SOEC,20%,Direto,Inter-reactor Heat Exchanges,Direto Fonte Confiável,-,-,,-,-,-,-,-,-,-,-,-,-,"€399.110,85","Carlini, G.(2025)",,SOEC Electrolyzer,SOEC,-,-,-,-,-,-,-,-,-,-,-,-,"€24.197.358,17",ROGER,Rectifier and Transfermer,RCT-1,Método de Turton,C-0-p = 200 USD/kW - IEA Global H2 Review,-,-,-,-,1,1,-,"1,28","0,87",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Multistage H2 Alternating Multistage Compressor,Método de Turton,,potência de eixo (10 - 10000 W),-,"2,0309","1,2524","-0,0638","2,4 (Aço Liga/Inox)",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_p,,
+Piping PEM,15%,Direto,Multistage Alternating Compressor for Biogas,Método de Turton,,Potência ( 10 - 10000 kW),-,"2,03","1,25","-0,06","1,5 (Aço Carbono + Recomenda-se usar pelo menos $F_m = 1,5$ em compressores de biogás para componentes internos (válvulas e anéis), mesmo em gás ""limpo"", devido ao risco de arraste de umidade residual.)",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_m,,,,,Rectifier and Transformer,RCT-2,,C-0-p = 200 USD/kW - IEA Global H2 Review,-,-,-,-,1,1,-,"1,28","0,87",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Knock Out Drum Separator,KOT-1,Método de Turton,capacidade (volume) em $m^3$,"1,2 (adição para contar odemister de alta eficiência no custo)","€3,50","€0,45","€0,11","3,1",1,-,"2,25","1,82",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)] * F_muilti,,,,,,,,,,,,,,,,,,
+Piping SOEC,15%,Direto,Trocador de Calor (Dry Cooler) - Compressor Biogas - Shell and Tube (fixed tube sheet),Método de Turton,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,1 (Aço Liga/Inox)",1,-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,Process Heaters - Electric,HTX-3,,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,Knock Out Drum Separator,KOT-2,Método de Turton,capacidade (volume) em $m^3$,"1,2 (adição para contar odemister de alta eficiência no custo)","€3,50","€0,45","€0,11","3,1",1,-,"2,25","1,82",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)] * F_muilti,,,,,,,,,,,,,,,,,,
+Piping ATR + CCS,60-70%,Direto,Trocador de Calor (Dry Cooler) - Compressor Biogas - Shell and Tube (fixed tube sheet),Método de Turton,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,1 (Aço Liga/Inox)","1,08",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,Trocador de Calor (Dry Cooler) - Primeiro na Linha H2 SOEC -  - Shell and Tube (fixed tube sheet),DCL-7,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Trocador de Calor (Dry Cooler) - O2 PEM,DCL-1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Civil & Foundations ATR + CCS,25%,Direto,Trocador de Calor (Dry Cooler) - pré HTWGS - Shell and Tube (tipo Floating Head - melhor para limpeza),Método de Turton,,10 - 1000 m^2,-,"4,8229","-0,0922","0,1258","2,1 (Aço Liga/Inox)","1,04",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],-,,,,Trocador de Calor (Dry Cooler) - 1° do 1° Compressor Multiestágio H2 SOEC -  - Shell and Tube (fixed tube sheet),DLC-8,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Trocador de Calor (Dry Cooler) - H2 PEM,DCL-2,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Insulation ATR + CCS,10%,Direto,Trocador de Calor (Dry Cooler) - pré LTWGS - Shell and Tube  (tipo Floating Head - melhor para limpeza),Método de Turton,,10 - 1000 m^2,-,"4,8229","-0,0922","0,1258","2,1 (Aço Liga/Inox)","1,04",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],-,,,,Trocador de Calor (Dry Cooler) - 2° do 1° Compressor Multiestágio H2 SOEC -  - Shell and Tube (fixed tube sheet),DLC-9,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Coalescer,COA-1,Método de Turton,Volume em $m^3$,,"3,4974","0,4485","0,1074","2,1 (Aço Liga/Inox)","1,38 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,,,,,,,,,,,,,,
+Piping & Insulation SOEC + ATR,20%,Direto,Trocador de Calor (Dry Cooler) - pós LTWGS - Shell and Tube (tipo Floating Head - melhor para limpeza),Método de Turton,,10 - 1000 m^2,-,"4,8229","-0,0922","0,1258","2,1 (Aço Liga/Inox)","1,04",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],-,,,,Trocador de Calor (Dry Cooler) - Entre Compressores Multiestágio H2 SOEC - Shell and Tube (fixed tube sheet),DLC-10,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Coalescer,COA-2,Método de Turton,Volume em $m^3$,,"3,4974","0,4485","0,1074","2,1 (Aço Liga/Inox)","1,38 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,,,,,,,,,,,,,,
+,,,Trocador de Calor (Dry Cooler) - Compressor H2 - Shell and Tube (fixed tube sheet),Método de Turton,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],-,,,,Trocador de Calor (Dry Cooler) - 1° do 2° Compressor Multiestágio H2 SOEC -  - Shell and Tube (fixed tube sheet),DLC-11,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Coalescer,COA-3,Método de Turton,Volume em $m^3$,,"3,4974","0,4485","0,1074","2,1 (Aço Liga/Inox)","1,38 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,,,,,,,,,,,,,,
+Engenharia e Supervisão,33%,Indireto,Trocador de Calor -  Aquecimento SOEC - Shell and Tube (Kettle Reboiler),Método de Turton,,10 - 1000 m^2,-,"4,4646","-0,5302","0,1644","2,7 (Aço Inox 316SS)","1,04",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,Trocador de Calor (Dry Cooler) - Antes Compressores Multiestágio O2 SOEC -  - Shell and Tube (fixed tube sheet),DLC-4,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Electrical Heater,HTR-1,Método de Turton,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,,,,,,,,,,,,,,,,
+Despesas de Construção,15%,Indireto,Trocador de Calor para Chiller Elétrico,Método de Turton,,10 - 1000 m^2,-,"4,4646","-0,5302","0,1644","2,7 (Aço Inox 316SS)","1,02",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,Trocador de Calor (Dry Cooler) - entre Compressores Multiestágio O2 SOEC - - Shell and Tube (fixed tube sheet),DLC-5,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Electrical Heater,HTR-2,Método de Turton,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,,,,,,,,,,,,,,,,
+Contingency,15%,Extra,Process Heaters - Electric,,,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,,,Trocador de Calor (Dry Cooler) - 2° do 2° Compressor Multiestágio O2 SOEC -,DLC-6,,10 - 1000 m^2,-,"4,3247","-0,303","0,1634","2,7 (Aço Inox 316SS)","1,092",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Electrical Heater,HTR-3,Método de Turton,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,,,,,,,,,,,,,,,,
+,,,Coalescer (Vaso de Pressão Vertical com ajuste para considerar filtro),Método de Turton,,Volume em m^3,,"3,4974","0,4485","0,1074","2,1 (Aço Liga/Inox)","1,2 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,Knock Out Drum Separator,KOT-3,,capacidade (volume) em $m^3$,"1,2 (adição para contar odemister de alta eficiência no custo)","3,4974","0,4485","0,1074","3,1",1,-,"2,25","1,82",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)] * F_muilti,,,Electrical Chiller,CHL-1,Método de Turton,Potência ( 10 - 1000 kW),-,"2,858","0,8209","0,0075",-,-,"1,3",-,-,C_BM=C_0_p * F_BM,,,,,,,,,,,,,,,,,,
+,,,PSA - ATR- Vaso de pressão,,,"volumes entre 0,3 e 520  m^3",,"3,4974","0,4485","0,1074","3,1 (Aço Liga/Inox)","1,2 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,Knock Out Drum Separator,KOT-4,,capacidade (volume) em $m^3$,"1,2 (adição para contar odemister de alta eficiência no custo)","3,4974","0,4485","0,1074","3,1",1,-,"2,25","1,82",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)] * F_muilti,,,Electrical Chiller Heat Exchanger,CHL-2,,10 - 1000 m^2,-,"4,4646","-0,5302","0,1644","2,7 (Aço Inox 316SS)","1,3",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,,,,,,,,,,,,,,
+Rectifier and Transfermer Balanço de Planta,"C-0-p = 200 USD/kW - IEA Global H2 Review
+
+C_BM=C_0_p * 2,15",,Multistage Alternating Compressor for Hydrogen,Método de Turton,,potência de eixo (10 - 10000 kW),-,"2,0309","1,2524","-0,0638","2,1 (Aço Liga/Inox)",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_p,,,,,Trocador de Calor para Chiller Elétrico,CHL-3,,10 - 1000 m^2,-,"4,4646","-0,5302","0,1644","2,7 (Aço Inox 316SS)",1,-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Electrical Chiller Heat Exchanger,CHL-3,,10 - 1000 m^2,-,"4,4646","-0,5302","0,1644","2,7 (Aço Inox 316SS)","1,3",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,,,,,,,,,,,,,,
+,,,Centrifugal Water Pump para Água Ultra Pura + Motor,Método de Turton,,"Centrífuga (1 a 100 kW)
+Recíproca (0,1 a 200 kW)
+Desloc Positivo Rotativo (1 a 100 kW)",-,"3,3892
+3,8696
+3,4771","0,0536
+0,3161
+0,1350","0,1538
+0,1220
+0,1438","2,1 (Material Aço Inox 316 SS)",1,-,"1,89 (bomba centrífuga)","1,35 (bomba centrífuga)",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,Trocador de Calor para Chiller Elétrico,CHL-4,,10 - 1000 m^2,-,"4,4646","-0,5302","0,1644","2,7 (Aço Inox 316SS)","1,3",-,"1,63","1,66",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,Deoxigenator,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,Motor para Bombas de Água,Método de Turton,,"Até 75 kW
+75 a 2600 kW",-,"3,3432
+2,9508","0,2761
+1,0688","0,0543
+-0,1315",-,-,-,-,-,C_BM=C_0_p,,,,,Compressor Centrífugo Multiestágio O2  (2 estágios),MTC-2,,potência de eixo (450 - 3000 W),-,"2,2891","1,3604","-0,1027","3,5 (ligas de Níquel/Monel (Serviço de alta pressão))",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_m,,,Control Pressure Valve (ball),VAL-1,,$A$ é geralmente o diâmetro nominal em polegadas ou o coeficiente $C_v$.,-,"3,1491","0,5841","-0,0125","2,4",1,-,"1,63","1,66",C_BM= {C_0_p * [B_1 + (B_2 * F_m * F_p)]},,,,,,,,,,,,,,,,,,
+,,,Centrifugal Water Pump para Água Ultra Pura + Motor,Método de Turton,,"Centrífuga (1 a 100 kW)
+Recíproca (0,1 a 200 kW)
+Desloc Positivo Rotativo (1 a 100 kW)",-,"3,3892
+3,8696
+3,4771","0,0536
+0,3161
+0,1350","0,1538
+0,1220
+0,1438","2,1 (Material Aço Inox 316 SS)",1,-,"1,89 (bomba centrífuga)","1,35 (bomba centrífuga)",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,Compressor Centrífugo Multiestágio O2  (2 estágios),MTC-3,,potência de eixo (450 - 3000 W),-,"2,2891","1,3604","-0,1027","3,5 (ligas de Níquel/Monel (Serviço de alta pressão))",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_m,,,Control Pressure Valve (ball),VAL-2,,$A$ é geralmente o diâmetro nominal em polegadas ou o coeficiente $C_v$.,-,"3,1491","0,5841","-0,0125","2,4",1,-,"1,63","1,66",C_BM= {C_0_p * [B_1 + (B_2 * F_m * F_p)]},,,,,,,,,,,,,,,,,,
+,,,Motor para Bombas de Água,Método de Turton,,"Até 75 kW
+75 a 2600 kW",-,"3,3432
+2,9508","0,2761
+1,0688","0,0543
+-0,1315",-,-,-,-,-,C_BM=C_0_p,,,,,Compressor Alternativo Multiestágio H2  (3 estágios),MTC-4,,potência de eixo (10 - 10000 W),-,"2,0309","1,2524","-0,0638","2,1 (Aço Liga/Inox)",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_m,,,Control Pressure Valve (ball),VAL-3,,$A$ é geralmente o diâmetro nominal em polegadas ou o coeficiente $C_v$.,-,"3,1491","0,5841","-0,0125","2,4",1,-,"1,63","1,66",C_BM= {C_0_p * [B_1 + (B_2 * F_m * F_p)]},,,,,,,,,,,,,,,,,,
+,,,Multicyclone Separator (Syngas) - [Vaso Vertical (Casco)],Método de Turton,,A = Volume do Vaso (m^3),,"3,4974","0,4485","0,1074","2,1 (Aço Inox 316)","1,78 (Pressão de referência 15 bar)",-,-,-,"C_{Base\_2001} = (C_{p,vaso} * F_P * F_M) + (C_{p,internos} * F_M)",,,,,Compressor Alternativo Multiestágio H2  (2 estágios),MTC-5,,potência de eixo (10 - 10000 W),-,"2,0309","1,2524","-0,0638","2,1 (Aço Liga/Inox)",-,"2,15",-,-,C_BM=C_0_p * F_BM * F_m,,,Degasser Tank,DGS-1,Método de Turton,"Volume (V) em m^3 - 0,3 a 520 m^3",,"3,4974","0,4485","0,1074",-,-,,,,C_BM=C_0_p,,,,,,,,,,,,,,,,,,
+,,,Multicyclone Separator (Syngas) - [Internos (Vane Pack)],Método de Turton,,A = Área Transversal do vaso em m^2 (A = \pi * D^2 / 4),,"3,349","0,4669","0,1243",,-,,,,,,,,,Separador Ciclonico,CYC-1,,,,,,,,,,,,,,,Degasser Tank,DGS-2,Método de Turton,"Volume (V) em m^3 - 0,3 a 520 m^3",,"3,4974","0,4485","0,1074",-,-,,,,C_BM=C_0_p,,,,,,,,,,,,,,,,,,
+,,,Multicyclone Separator (Syngas) - [Vaso Vertical (Casco)],Método de Turton,,A = Volume do Vaso (m^3),,"3,4974","0,4485","0,1074","2,1 (Aço Inox 316)","1,78 (Pressão de referência 15 bar)",-,-,-,"C_{Base\_2001} = (C_{p,vaso} * F_P * F_M) + (C_{p,internos} * F_M)",,,,,Separador Ciclonico,CYC-2,,,,,,,,,,,,,,,Multicyclone Separator (O2) - [Vaso Vertical (Casco)],MCY-1,Método de Turton,A = Volume do Vaso (m^3),,"3,4974","0,4485","0,1074",3 (oxigênio exige mais que só material mas também o método de produção dos ciclones),"2,27 (Pressão de referência 40 bar)",-,-,-,"C_{Base\_2001} = (C_{p,vaso} * F_P * F_M) + (C_{p,internos} * F_M)",,,,,,,,,,,,,,,,,,
+,,,Multicyclone Separator (Syngas) - [Internos (Vane Pack)],Método de Turton,,A = Área Transversal do vaso em m^2 (A = \pi * D^2 / 4),,"3,349","0,4669","0,1243",,-,,,,,,,,,Separador Ciclonico,CYC-3,,,,,,,,,,,,,,,Multicyclone Separator (O2) - [Internos (Vane Pack)],MCY-1,Método de Turton,A = Área Transversal do vaso em m^2 (A = \pi * D^2 / 4),,"3,349","0,4669","0,1243",,-,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,Separador Ciclonico,CYC-4,,,,,,,,,,,,,,,Multicyclone Separator (H2) - [Vaso Vertical (Casco)],MCY-2,Método de Turton,A = Volume do Vaso (m^3),,"3,4974","0,4485","0,1074","2,1 (Aço Inox 316)","2,27 (Pressão de referência 40 bar)",-,-,-,"C_{Base\_2001} = (C_{p,vaso} * F_P * F_M) + (C_{p,internos} * F_M)",,,,,,,,,,,,,,,,,,
+Grid connection safeguarding costs,"€439.041,23",,,,,,,,,,,,,,,,,,,,Separador Ciclonico,CYC-5,,,,,,,,,,,,,,,Multicyclone Separator (H2) - [Internos (Vane Pack)],MCY-2,Método de Turton,A = Área Transversal do vaso em m^2 (A = \pi * D^2 / 4),,"3,349","0,4669","0,1243",,-,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,Deoxigenator,DXO-2,,,,,,,,,,,,,,,PSA,PSA-1,,"volumes entre 0,3 e 520  m^3",,"3,4974","0,4485","0,1074","3,1 (Aço Liga/Inox)","1,2 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,Coalescer,COA-4,,Volume em m^3,,"3,4974","0,4485","0,1074","2,1 (Aço Liga/Inox)","1,38 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Os componentes Flow Mixer e Flow Separator não serão quantificados como componentes mas como elementos de encanamento e válculas,,,,,,,,,,,,,,,,,,,,,PSA,PSA-2,,"volumes entre 0,3 e 520  m^3",,"3,4974","0,4485","0,1074","3,1 (Aço Liga/Inox)","1,2 (Pressão de referência 15 bar)",-,"2,25","1,82","C_BM= 1,25 * {C_0_p * [B_1 + (B_2 * F_m * F_p)]}",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+BOP Transformer and Rectifier,,,,,,,,,,,,,,,,,,,,,Centrifugal Water Pump para Água Ultra Pura + Motor,PMP-2,,"Centrífuga (1 a 100 kW)
+Recíproca (0,1 a 200 kW)
+Desloc Positivo Rotativo (1 a 100 kW)",-,"3,3892
+3,8696
+3,4771","0,0536
+0,3161
+0,1350","0,1538
+0,1220
+0,1438","2,41 (Material Aço Inox 316 SS)",1,-,"1,89 (bomba centrífuga)","1,35 (bomba centrífuga)",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,Motor para Bombas de Água,PMP-2,,"Até 75 kW
+75 a 2600 kW",-,"3,3432
+2,9508","0,2761
+1,0688","0,0543
+-0,1315",-,-,-,-,-,C_BM=C_0_p,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Chiller Elétrico Central (com Free Cooling?),https://gemini.google.com/share/4f8608bd53da,,,,,,,,,,,,,,,,,,,,Centrifugal Water Pump para Água Ultra Pura + Motor,PMP-3,,"Centrífuga (1 a 100 kW)
+Recíproca (0,1 a 200 kW)
+Desloc Positivo Rotativo (1 a 100 kW)",-,"3,3892
+3,8696
+3,4771","0,0536
+0,3161
+0,1350","0,1538
+0,1220
+0,1438","2,41 (Material Aço Inox 316 SS)",1,-,"1,89 (bomba centrífuga)","1,35 (bomba centrífuga)",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Torre de Resfriamento,https://gemini.google.com/share/4f8608bd53da,,,,,,,,,,,,,,,,,,,,Motor para Bombas de Água,PMP-3,,"Até 75 kW
+75 a 2600 kW",-,"3,3432
+2,9508","0,2761
+1,0688","0,0543
+-0,1315",-,-,-,-,-,C_BM=C_0_p,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Dry Cooler Adiabático Central,https://gemini.google.com/share/4f8608bd53da,,,,,,,,,,,,,,,,,,,,Centrifugal Water Pump para Água Ultra Pura + Motor,PMP-4,,"Centrífuga (1 a 100 kW)
+Recíproca (0,1 a 200 kW)
+Desloc Positivo Rotativo (1 a 100 kW)",-,"3,3892
+3,8696
+3,4771","0,0536
+0,3161
+0,1350","0,1538
+0,1220
+0,1438","2,41 (Material Aço Inox 316 SS)",1,-,"1,89 (bomba centrífuga)","1,35 (bomba centrífuga)",C_BM=C_0_p * [B_1 + (B_2 * F_m * F_p)],,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Grid connection safeguarding costs,"€439.041,23",,,,,,,,,,,,,,,,,,,,Motor para Bombas de Água,PMP-4,,"Até 75 kW
+75 a 2600 kW",-,"3,3432
+2,9508","0,2761
+1,0688","0,0543
+-0,1315",-,-,-,-,-,C_BM=C_0_p,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Rectifier and Transfermer Balanço de Planta,RCT-3,,,,,,,,,,,,,,,,,,,,Multicyclone Separator (H2) - [Vaso Vertical (Casco)],MCY-4,,A = Volume do Vaso (m^3),,"3,4974","0,4485","0,1074","2,41 (Aço Inox 316)",1 (Pressão Baixa),-,-,-,"C_{Base\_2001} = (C_{p,vaso} * F_P * F_M) + (C_{p,internos} * F_M)",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+Electrical Chiller Central System,"Indicador de Performance (COP):
+Faixa esperada: 4.0 a 7.0. Coeficientes Sugeridos (Centrífugos): $K_1=4.2523$, $K_2=0.7615$, $K_3=-0.0031$.",,,,,,,,,,,,,,,,,,,,Multicyclone Separator (H2) - [Internos (Vane Pack)],MCY-4,,A = Área Transversal do vaso em m^2 (A = \pi * D^2 / 4),,"3,349","0,4669","0,1243",,-,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
