@@ -84,9 +84,28 @@ class Attemperator(Component):
         
         if registry.has('lut_manager'):
             self.lut_manager = registry.get('lut_manager')
+            # Pre-bind fast lookup closures (P12 optimization)
+            try:
+                self._lookup_H2O_H = self.lut_manager.bind_lookup('H2O', 'H')
+                self._lookup_H2O_D = self.lut_manager.bind_lookup('H2O', 'D')
+            except Exception:
+                self._lookup_H2O_H = self._lookup_H2O_D = None
         else:
+            self._lookup_H2O_H = self._lookup_H2O_D = None
             logger.warning(f"Attemperator {self.component_id}: LUTManager not found. "
                           "Thermodynamics will be approximate (Ideal Gas).")
+
+    def _fast_lookup_H(self, P: float, T: float) -> float:
+        """Fast enthalpy lookup using pre-bound closure, fallback to lut_manager."""
+        if self._lookup_H2O_H:
+            return self._lookup_H2O_H(P, T)
+        return self.lut_manager.lookup('H2O', 'H', P, T)
+
+    def _fast_lookup_D(self, P: float, T: float) -> float:
+        """Fast density lookup using pre-bound closure, fallback to lut_manager."""
+        if self._lookup_H2O_D:
+            return self._lookup_H2O_D(P, T)
+        return self.lut_manager.lookup('H2O', 'D', P, T)
 
     def step(self, t: float) -> None:
         """
@@ -155,14 +174,14 @@ class Attemperator(Component):
             # Get Enthalpies
             h_s = 0.0
             if self.lut_manager:
-                 h_s = self.lut_manager.lookup('H2O', 'H', P_out, s_in.temperature_k)
+                 h_s = self._fast_lookup_H(P_out, s_in.temperature_k)
             else:
                  h_s = s_in.specific_enthalpy_j_kg
-            
+
             # Estimate h_target at P_out, safe_target_T
             h_target = 0.0
             if self.lut_manager:
-                h_target = self.lut_manager.lookup('H2O', 'H', P_out, safe_target_T)
+                h_target = self._fast_lookup_H(P_out, safe_target_T)
             else:
                 # Ideal gas fallback (Cp ~ 2.0 kJ/kgK for steam)
                 h_target = h_s - 2000.0 * (s_in.temperature_k - safe_target_T)
@@ -172,7 +191,7 @@ class Attemperator(Component):
             if w_in:
                  w_h = w_in.specific_enthalpy_j_kg
                  if w_h == 0.0 and self.lut_manager:
-                      w_h = self.lut_manager.lookup('H2O', 'H', w_in.pressure_pa, w_temp)
+                      w_h = self._fast_lookup_H(w_in.pressure_pa, w_temp)
             
             if w_h == 0.0:
                 w_h = 4184.0 * (w_temp - 273.15) # Fallback Cp_liq * dT
@@ -214,13 +233,13 @@ class Attemperator(Component):
         # Determine Enthalpies for Mixing (LUT Preferred)
         h_s_mix = s_in.specific_enthalpy_j_kg
         if self.lut_manager:
-              h_s_mix = self.lut_manager.lookup('H2O', 'H', P_out, s_in.temperature_k)
+              h_s_mix = self._fast_lookup_H(P_out, s_in.temperature_k)
         
         w_h_mix = 0.0
         if w_in:
              w_h_mix = w_in.specific_enthalpy_j_kg
              if w_h_mix == 0.0 and self.lut_manager:
-                  w_h_mix = self.lut_manager.lookup('H2O', 'H', w_in.pressure_pa, w_temp)
+                  w_h_mix = self._fast_lookup_H(w_in.pressure_pa, w_temp)
         if w_h_mix == 0.0:
             w_h_mix = 4184.0 * (w_temp - 273.15)
 
@@ -279,9 +298,7 @@ class Attemperator(Component):
                     area_m2 = 3.14159265 * (self.pipe_diameter_m / 2.0) ** 2
                     
                     # 2. Lookup Steam Density at outlet conditions
-                    rho_steam = self.lut_manager.lookup(
-                        'H2O', 'D', P_out, T_final
-                    )
+                    rho_steam = self._fast_lookup_D(P_out, T_final)
                     
                     # 3. Calculate Velocity (m/s)
                     # mass_flow is kg/h, convert to kg/s -> / 3600
@@ -317,8 +334,8 @@ class Attemperator(Component):
             try:
                 # 1. Get Outlet Density (Real Gas)
                 # T_final and P_out are calculated in the existing mixing logic
-                rho_mix = self.lut_manager.lookup(
-                    'H2O', 'D', self.output_stream.pressure_pa, self.output_stream.temperature_k
+                rho_mix = self._fast_lookup_D(
+                    self.output_stream.pressure_pa, self.output_stream.temperature_k
                 )
                 
                 # 2. Calculate Volumetric Flow (m3/s)

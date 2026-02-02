@@ -686,6 +686,25 @@ class LUTManager(Component):
             self._t_min <= temperature <= self._t_max
         )
 
+    def get_species_map(self) -> np.ndarray:
+        """
+        Build canonical→LUT index mapping array.
+
+        Returns an int32 array of length len(config.fluids) (7). For each LUT
+        fluid, the value is the index in CANONICAL_FLUID_ORDER, or -1 if the
+        species is absent from canonical (e.g. CO).
+
+        This mapping is the single source of truth for all JIT mixture paths
+        (P1 interchanger flash, P6 mixer flash, P1.5 mixture_thermodynamics).
+        """
+        canonical = StandardConditions.CANONICAL_FLUID_ORDER  # 6-elem tuple
+        lut_order = self.config.fluids                         # 7-elem tuple
+        mapping = np.full(len(lut_order), -1, dtype=np.int32)
+        for i, fluid in enumerate(lut_order):
+            if fluid in canonical:
+                mapping[i] = canonical.index(fluid)
+        return mapping
+
     def bind_lookup(self, fluid: str, property_type: PropertyType):
         """
         Return a fast callable for repeated lookups of the same fluid/property.

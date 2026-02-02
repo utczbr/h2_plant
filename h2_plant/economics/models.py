@@ -70,8 +70,8 @@ class CostCoefficients(BaseModel):
     B2: Optional[float] = Field(None, description="B2 constant for module factor")
     
     # Additional multipliers
-    F_multi: float = Field(1.0, description="Additional multiplier (e.g., demister addon)")
-    F_multi_note: Optional[str] = None
+    F_complex: float = Field(1.0, description="Complex factor multiplier (e.g., demister addon, multi-vessel)")
+    F_complex_note: Optional[str] = None
     
     # Capacity bounds for correlation validity
     capacity_min: Optional[float] = Field(None, description="Minimum valid capacity")
@@ -106,8 +106,7 @@ class EquipmentMapping(BaseModel):
     # Cost estimation
     coefficients: Optional[CostCoefficients] = Field(None, description="Turton coefficients (or inherit from type)")
     cost_source: str = Field("turton", description="Cost source: turton, vendor_quote, percentage")
-    vendor_quote_usd: Optional[float] = Field(None, description="Vendor quote if available")
-    fixed_cost_eur: Optional[float] = Field(None, description="Fixed cost in EUR (will be converted to USD)")
+    vendor_quote_eur: Optional[float] = Field(None, description="Vendor quote in EUR (passes through without conversion)")
     
     # Modular Design
     modular_design: bool = Field(False, description="Whether to split capacity into modular units")
@@ -133,6 +132,7 @@ class CapexEntry(BaseModel):
     """
     tag: str
     name: str
+    block: str = Field("General", description="Block for installation cost grouping (SOEC, PEM, ATR, Storage, etc.)")
     topology_ids: List[str]
     component_type: str
     
@@ -144,7 +144,7 @@ class CapexEntry(BaseModel):
     
     # Cost
     C_p0: Optional[float] = Field(None, description="Base purchased cost (before inflation)")
-    C_BM: Optional[float] = Field(None, description="Bare module cost (USD, CEPCI 2026)")
+    C_BM: Optional[float] = Field(None, description="Bare module cost (EUR, CEPCI-adjusted)")
     C_BM_low: Optional[float] = Field(None, description="Low estimate (uncertainty band)")
     C_BM_high: Optional[float] = Field(None, description="High estimate (uncertainty band)")
     
@@ -171,8 +171,9 @@ class CEPCIData(BaseModel):
     """Chemical Engineering Plant Cost Index data."""
     base_year: int = Field(2001, description="Base year for Turton correlations")
     base_index: float = Field(397.0, description="CEPCI for base year")
-    current_year: int = Field(2026, description="Current/target year")
-    current_index: float = Field(820.0, description="CEPCI for current year")
+    current_year: int = Field(2025, description="Current/target year")
+    current_index: float = Field(797.0, description="CEPCI for current year")
+    usd_to_eur_rate: float = Field(0.8573, description="USD to EUR conversion rate (2025 average)")
     
     @property
     def inflation_factor(self) -> float:
@@ -218,7 +219,7 @@ class CapexReport(BaseModel):
     
     # Economic parameters
     cepci: CEPCIData = Field(default_factory=CEPCIData)
-    currency: str = Field("USD", description="Cost currency")
+    currency: str = Field("EUR", description="Cost currency")
     
     # Cost classification
     overall_cost_class: AACECostClass = Field(AACECostClass.CLASS_4)
@@ -256,8 +257,8 @@ class CapexReport(BaseModel):
     def to_summary_dict(self) -> Dict[str, Any]:
         """Return summary statistics for quick review."""
         return {
-            "total_C_BM": f"${self.total_C_BM:,.0f}",
-            "total_range": f"${self.total_C_BM_low:,.0f} - ${self.total_C_BM_high:,.0f}",
+            "total_C_BM": f"€{self.total_C_BM:,.0f}",
+            "total_range": f"€{self.total_C_BM_low:,.0f} - €{self.total_C_BM_high:,.0f}",
             "cost_class": self.overall_cost_class.value,
             "entries_valid": f"{self.entries_with_cost}/{len(self.entries)}",
             "entries_out_of_bounds": self.entries_out_of_bounds,

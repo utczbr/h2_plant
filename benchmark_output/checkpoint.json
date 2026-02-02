@@ -1,5 +1,5 @@
 {
-  "simulation_id": "20260202_015753",
+  "simulation_id": "20260202_102657",
   "total_steps_target": 10080,
   "total_steps_completed": 10000,
   "chunk_index": 0,
@@ -1428,5 +1428,5 @@
       "file": "chunk_0000.parquet"
     }
   ],
-  "created_at": "2026-02-02T02:01:20.616680"
+  "created_at": "2026-02-02T10:29:28.271257"
 }

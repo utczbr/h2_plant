@@ -3289,6 +3289,447 @@ def batch_pressure_update_vector_T(
 
 
 # =============================================================================
+# SPECIES MAPPING & INTERCHANGER/MIXER JIT FLASH (P1 / P6)
+# =============================================================================
+
+@njit(cache=True)
+def solve_dry_cooler_thermal_jit(
+    m_dot_gas: float,         # gas mass flow (kg/s)
+    cp_gas: float,            # gas Cp (J/kg·K)
+    T_gas_in_k: float,        # gas inlet temp (K)
+    glycol_flow_kg_s: float,  # glycol mass flow (kg/s)
+    glycol_cp: float,         # glycol Cp (J/kg·K)
+    T_glycol_in_k: float,     # glycol inlet temp (K)
+    tqc_u: float,             # TQC U-value (W/m²·K)
+    tqc_area: float,          # TQC area (m²)
+    T_air_in_k: float,        # ambient air temp (K)
+    dc_u: float,              # DC U-value (W/m²·K)
+    dc_area: float,           # DC area (m²)
+    dc_air_flow_kg_s: float,  # air mass flow (kg/s)
+    cp_air: float,            # air Cp (J/kg·K)
+    use_dc: bool,             # False if central utility (skip DC)
+    # Dynamic U inputs
+    flow_area_gas: float,
+    flow_area_glycol: float,
+    d_tube_in: float,
+    d_tube_out: float,
+    mu_gas: float,
+    k_gas: float,
+    pr_gas: float,
+    mu_glycol: float,
+    k_glycol: float,
+    pr_glycol: float,
+    k_tube_wall: float,
+    r_foul_glycol: float,
+    use_dynamic_u: bool
+) -> Tuple[float, float, float, float, float, float, float]:
+    """
+    Fused JIT kernel for dry cooler TQC + DC thermal solution (P5).
+
+    Returns:
+        (T_gas_out_k, T_glycol_hot_k, T_glycol_cold_k,
+         Q_tqc_w, Q_dc_w, eff_tqc, eff_dc)
+    """
+    # --- Dynamic U-value (optional) ---
+    u_tqc = tqc_u
+    if use_dynamic_u and flow_area_gas > 0 and flow_area_glycol > 0:
+        # Gas-side Reynolds and Nusselt
+        G_gas = m_dot_gas / flow_area_gas
+        Re_gas = G_gas * d_tube_in / mu_gas if mu_gas > 0 else 0.0
+        # Dittus-Boelter (cooling: n=0.3)
+        if Re_gas > 0 and pr_gas > 0:
+            Nu_gas = 0.023 * Re_gas**0.8 * pr_gas**0.3
+        else:
+            Nu_gas = 3.66
+        h_gas = Nu_gas * k_gas / d_tube_in if d_tube_in > 0 else 500.0
+
+        # Glycol-side
+        G_gly = glycol_flow_kg_s / flow_area_glycol
+        Re_gly = G_gly * d_tube_out / mu_glycol if mu_glycol > 0 else 0.0
+        if Re_gly > 0 and pr_glycol > 0:
+            Nu_gly = 0.023 * Re_gly**0.8 * pr_glycol**0.4
+        else:
+            Nu_gly = 3.66
+        h_gly = Nu_gly * k_glycol / d_tube_out if d_tube_out > 0 else 200.0
+
+        # Overall U with fouling
+        r_in = d_tube_in / 2.0
+        r_out = d_tube_out / 2.0
+        if h_gas > 0 and h_gly > 0 and k_tube_wall > 0:
+            R_total = (1.0 / h_gas +
+                       r_in * np.log(r_out / r_in) / k_tube_wall +
+                       (r_in / r_out) / h_gly +
+                       r_foul_glycol)
+            if R_total > 0:
+                u_tqc = 1.0 / R_total
+
+    # --- TQC (Counter-Flow) ---
+    C_hot = m_dot_gas * cp_gas
+    C_cold = glycol_flow_kg_s * glycol_cp
+
+    C_min_tqc = min(C_hot, C_cold)
+    C_max_tqc = max(C_hot, C_cold)
+
+    eff_tqc = 0.0
+    Q_tqc = 0.0
+    if C_min_tqc > 1e-9:
+        R_tqc = C_min_tqc / C_max_tqc if C_max_tqc > 1e-9 else 0.0
+        NTU_tqc = (u_tqc * tqc_area) / C_min_tqc
+        # Counter-flow effectiveness
+        if abs(R_tqc - 1.0) < 1e-9:
+            eff_tqc = NTU_tqc / (1.0 + NTU_tqc)
+        else:
+            exp_val = np.exp(-NTU_tqc * (1.0 - R_tqc))
+            denom = 1.0 - R_tqc * exp_val
+            if abs(denom) > 1e-12:
+                eff_tqc = (1.0 - exp_val) / denom
+            else:
+                eff_tqc = 1.0
+
+        Q_max_tqc = C_min_tqc * (T_gas_in_k - T_glycol_in_k)
+        Q_tqc = eff_tqc * Q_max_tqc
+
+    T_gas_out_k = T_gas_in_k - Q_tqc / C_hot if C_hot > 1e-9 else T_gas_in_k
+    T_glycol_hot_k = T_glycol_in_k + Q_tqc / C_cold if C_cold > 1e-9 else T_glycol_in_k
+
+    # --- DC (Cross-Flow) ---
+    eff_dc = 0.0
+    Q_dc = 0.0
+    T_glycol_cold_k = T_glycol_hot_k  # default: no DC
+
+    if use_dc:
+        C_air = dc_air_flow_kg_s * cp_air
+        C_min_dc = min(C_cold, C_air)
+        C_max_dc = max(C_cold, C_air)
+
+        if C_min_dc > 1e-9:
+            R_dc = C_min_dc / C_max_dc if C_max_dc > 1e-9 else 0.0
+            NTU_dc = (dc_u * dc_area) / C_min_dc
+            # Cross-flow (unmixed/unmixed) approximation
+            if NTU_dc > 0 and R_dc > 0:
+                eff_dc = 1.0 - np.exp(
+                    (NTU_dc**0.22 / R_dc) * (np.exp(-R_dc * NTU_dc**0.78) - 1.0)
+                )
+            elif NTU_dc > 0:
+                eff_dc = 1.0 - np.exp(-NTU_dc)
+
+            Q_max_dc = C_min_dc * (T_glycol_hot_k - T_air_in_k)
+            Q_dc = eff_dc * Q_max_dc
+
+        T_glycol_cold_k = T_glycol_hot_k - Q_dc / C_cold if C_cold > 1e-9 else T_glycol_hot_k
+
+    return T_gas_out_k, T_glycol_hot_k, T_glycol_cold_k, Q_tqc, Q_dc, eff_tqc, eff_dc
+
+
+@njit(cache=True)
+def solve_ph_flash_jit(
+    h_target_molar: float,
+    mole_fractions: np.ndarray,
+    h_formations: np.ndarray,
+    cp_coeffs_matrix: np.ndarray,
+    T_guess: float,
+    tol: float = 0.05,
+    max_iter: int = 10
+) -> float:
+    """
+    JIT-compiled PH flash solver: find T such that H_mix(T) = h_target.
+
+    Newton-Raphson with f(T) = H(T) - h_target, f'(T) = Cp(T).
+
+    Args:
+        h_target_molar: Target molar enthalpy (J/mol).
+        mole_fractions: Component mole fractions.
+        h_formations: Formation enthalpies (J/mol).
+        cp_coeffs_matrix: Cp polynomial coefficients [n_species x 5].
+        T_guess: Initial temperature guess (K).
+        tol: Convergence tolerance for delta_T (K).
+        max_iter: Maximum Newton iterations.
+
+    Returns:
+        Converged temperature (K).
+    """
+    T = T_guess
+    for _ in range(max_iter):
+        h_calc = calculate_mixture_enthalpy(T, mole_fractions, h_formations, cp_coeffs_matrix)
+        cp_calc = calculate_mixture_cp(T, mole_fractions, cp_coeffs_matrix)
+
+        if abs(cp_calc) < 1e-4:
+            break
+
+        delta_T = (h_target_molar - h_calc) / cp_calc
+        T = T + delta_T
+
+        if abs(delta_T) < tol:
+            break
+
+        if T < 275.0:
+            T = 275.0
+        elif T > 5000.0:
+            T = 5000.0
+
+    return T
+
+
+@njit(cache=True)
+def remap_canonical_to_lut(
+    canonical_fracs: np.ndarray,  # 6-element canonical order
+    h2o_liq_frac: float,          # liquid water mass fraction (folded into H2O)
+    species_map: np.ndarray       # int32[7]: canonical index per LUT slot, -1 if absent
+) -> np.ndarray:
+    """
+    Remap a 6-element canonical mass fraction array to a 7-element LUT-ordered array.
+
+    - Missing species (map == -1, e.g. CO) are zero-filled.
+    - H2O_liq is folded into the H2O slot (LUT index for H2O).
+
+    Args:
+        canonical_fracs: Mass fractions in CANONICAL_FLUID_ORDER (6 elements).
+        h2o_liq_frac: Mass fraction of liquid water to fold into H2O.
+        species_map: Index mapping array from get_species_map().
+
+    Returns:
+        7-element float64 array in LUT fluid order.
+    """
+    n_lut = len(species_map)
+    lut_fracs = np.zeros(n_lut, dtype=np.float64)
+    for i in range(n_lut):
+        idx = species_map[i]
+        if idx >= 0:
+            lut_fracs[i] = canonical_fracs[idx]
+    # Fold H2O_liq into H2O slot.
+    # H2O is at LUT index 5 for config ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O', 'CO')
+    # But we find it dynamically: the slot whose canonical index == 5 (H2O canonical idx)
+    # Actually canonical H2O idx is 5 in ('H2', 'O2', 'N2', 'CO2', 'CH4', 'H2O').
+    # We need to find which LUT slot maps to canonical 5.
+    for i in range(n_lut):
+        if species_map[i] == 5:  # canonical H2O index
+            lut_fracs[i] += h2o_liq_frac
+            break
+    return lut_fracs
+
+
+@njit(cache=True)
+def _antoine_psat_water(T_k: float) -> float:
+    """
+    Antoine equation for water saturation pressure.
+
+    log10(P_mmHg) = A - B / (C + T_C)
+    Returns P_sat in Pa.
+    """
+    T_C = T_k - 273.15
+    if T_C < 0.01:
+        T_C = 0.01
+    val = 8.07131 - 1730.63 / (233.426 + T_C)
+    p_mmhg = 10.0 ** val
+    return p_mmhg * 133.322
+
+
+@njit(cache=True)
+def solve_interchanger_flash_jit(
+    z_h2o_mole: float,       # feed H2O mole fraction
+    M_mix_feed: float,        # feed molar mass (kg/mol)
+    P_system: float,          # system pressure (Pa)
+    h_target: float,          # target outlet specific enthalpy (J/kg)
+    T_h_in: float,            # hot inlet temperature (K) — upper bound
+    lut_mass_fracs: np.ndarray,  # 7-element mass fracs in LUT order
+    stacked_H: np.ndarray,    # (N_fluids, N_P, N_T)
+    P_grid: np.ndarray,       # pressure grid
+    T_grid: np.ndarray,       # temperature grid
+    max_iter: int = 40,
+    tol: float = 100.0        # J/kg convergence tolerance
+) -> Tuple[float, float, bool]:
+    """
+    JIT-compiled interchanger outlet flash solver.
+
+    Solves H_mix(T, phase_split) = h_target using hybrid bisection/Newton.
+    Single-condensable (H2O) Rachford-Rice flash at each temperature candidate.
+
+    Returns:
+        (T_out, beta_vap_frac, was_clamped)
+    """
+    n_fluids = stacked_H.shape[0]
+    n_p = len(P_grid)
+    n_t = len(T_grid)
+
+    # Clamp P to grid bounds
+    was_clamped = False
+    P_lookup = P_system
+    if P_lookup < P_grid[0]:
+        P_lookup = P_grid[0]
+        was_clamped = True
+    elif P_lookup > P_grid[-1]:
+        P_lookup = P_grid[-1]
+        was_clamped = True
+
+    # Pre-compute pressure interpolation index and weight (constant across iterations)
+    if P_lookup <= P_grid[0]:
+        ix_p = 0
+        wp = 0.0
+    elif P_lookup >= P_grid[-1]:
+        ix_p = n_p - 2
+        wp = 1.0
+    else:
+        ix_p = np.searchsorted(P_grid, P_lookup) - 1
+        p0 = P_grid[ix_p]
+        p1 = P_grid[ix_p + 1]
+        wp = (P_lookup - p0) / (p1 - p0)
+
+    # MW constants
+    MW_H2O = 0.018015
+
+    # Average MW of inerts (non-condensable)
+    mw_inerts_avg = 0.028  # default
+    if (1.0 - z_h2o_mole) > 1e-9:
+        mw_inerts_avg = (M_mix_feed - z_h2o_mole * MW_H2O) / (1.0 - z_h2o_mole)
+
+    # Bisection bounds
+    T_lo = 273.16
+    T_hi = max(T_h_in, 500.0)
+
+    T_sol = T_h_in
+    beta_sol = 1.0
+
+    # Evaluate enthalpy at a given T (inner helper inlined for Numba)
+    for iteration in range(max_iter):
+        T_mid = 0.5 * (T_lo + T_hi)
+
+        # --- Antoine P_sat ---
+        P_sat = _antoine_psat_water(T_mid)
+
+        # --- Rachford-Rice (single condensable) ---
+        K_w = P_sat / P_system
+        if K_w >= 1.0 or z_h2o_mole < 1e-12 or z_h2o_mole <= K_w:
+            beta = 1.0
+        else:
+            beta = (1.0 - z_h2o_mole) / (1.0 - K_w)
+            if beta < 0.0:
+                beta = 0.0
+            elif beta > 1.0:
+                beta = 1.0
+
+        # --- Phase split masses ---
+        n_gas = beta
+        n_liq = 1.0 - beta
+
+        if beta < 0.9999 and K_w < 1.0:
+            y_w = K_w
+        else:
+            y_w = z_h2o_mole
+
+        mw_gas = y_w * MW_H2O + (1.0 - y_w) * mw_inerts_avg
+        mw_liq = MW_H2O
+
+        mass_gas = n_gas * mw_gas
+        mass_liq = n_liq * mw_liq
+        total_mass_calc = mass_gas + mass_liq
+
+        psi_gas = 1.0
+        if total_mass_calc > 0.0:
+            psi_gas = mass_gas / total_mass_calc
+        psi_liq = 1.0 - psi_gas
+
+        # --- Gas phase water mass fraction ---
+        w_w_gas = 0.0
+        if mw_gas > 0.0:
+            w_w_gas = (y_w * MW_H2O) / mw_gas
+
+        # --- Temperature interpolation weight (changes each iteration) ---
+        T_lookup = T_mid
+        if T_lookup < T_grid[0]:
+            T_lookup = T_grid[0]
+            was_clamped = True
+        elif T_lookup > T_grid[-1]:
+            T_lookup = T_grid[-1]
+            was_clamped = True
+
+        if T_lookup <= T_grid[0]:
+            iy_t = 0
+            wt = 0.0
+        elif T_lookup >= T_grid[-1]:
+            iy_t = n_t - 2
+            wt = 1.0
+        else:
+            iy_t = np.searchsorted(T_grid, T_lookup) - 1
+            t0 = T_grid[iy_t]
+            t1 = T_grid[iy_t + 1]
+            wt = (T_lookup - t0) / (t1 - t0)
+
+        # --- Inert enthalpy (mass-weighted, excluding H2O) ---
+        h_inert_spec = 0.0
+        total_w_inert = 0.0
+        for i in range(n_fluids):
+            w_i = lut_mass_fracs[i]
+            if w_i < 1e-12:
+                continue
+            # Skip H2O (LUT index 5 for standard config)
+            if i == 5:
+                continue
+            # Bilinear interpolation
+            H_table = stacked_H[i]
+            f00 = H_table[ix_p, iy_t]
+            f10 = H_table[ix_p + 1, iy_t]
+            f01 = H_table[ix_p, iy_t + 1]
+            f11 = H_table[ix_p + 1, iy_t + 1]
+            h_i = (1.0 - wp) * (1.0 - wt) * f00 + wp * (1.0 - wt) * f10 + (1.0 - wp) * wt * f01 + wp * wt * f11
+            h_inert_spec += w_i * h_i
+            total_w_inert += w_i
+
+        if total_w_inert > 0.0:
+            h_inert_spec /= total_w_inert
+
+        # --- H2O vapor enthalpy at partial pressure ---
+        # Use LUT H2O index (5) at system P * y_w (clamped)
+        p_h2o = max(P_grid[0], P_system * max(y_w, 1e-6))
+        if p_h2o > P_grid[-1]:
+            p_h2o = P_grid[-1]
+        # Re-compute pressure weight for water partial pressure
+        if p_h2o <= P_grid[0]:
+            ix_pw = 0
+            wpw = 0.0
+        elif p_h2o >= P_grid[-1]:
+            ix_pw = n_p - 2
+            wpw = 1.0
+        else:
+            ix_pw = np.searchsorted(P_grid, p_h2o) - 1
+            pw0 = P_grid[ix_pw]
+            pw1 = P_grid[ix_pw + 1]
+            wpw = (p_h2o - pw0) / (pw1 - pw0)
+
+        H_w = stacked_H[5]  # H2O LUT index
+        h_vap_w = ((1.0 - wpw) * (1.0 - wt) * H_w[ix_pw, iy_t] +
+                   wpw * (1.0 - wt) * H_w[ix_pw + 1, iy_t] +
+                   (1.0 - wpw) * wt * H_w[ix_pw, iy_t + 1] +
+                   wpw * wt * H_w[ix_pw + 1, iy_t + 1])
+
+        h_gas_spec = w_w_gas * h_vap_w + (1.0 - w_w_gas) * h_inert_spec
+
+        # --- Liquid water enthalpy at system P ---
+        h_liq_w = ((1.0 - wp) * (1.0 - wt) * H_w[ix_p, iy_t] +
+                   wp * (1.0 - wt) * H_w[ix_p + 1, iy_t] +
+                   (1.0 - wp) * wt * H_w[ix_p, iy_t + 1] +
+                   wp * wt * H_w[ix_p + 1, iy_t + 1])
+
+        # --- Total mixture enthalpy ---
+        h_calc = psi_gas * h_gas_spec + psi_liq * h_liq_w
+
+        # --- Convergence check ---
+        if abs(h_calc - h_target) < tol:
+            T_sol = T_mid
+            beta_sol = beta
+            break
+
+        if h_calc > h_target:
+            T_hi = T_mid
+        else:
+            T_lo = T_mid
+
+        T_sol = T_mid
+        beta_sol = beta
+
+    return T_sol, beta_sol, was_clamped
+
+
+# =============================================================================
 # JIT WARMUP — Pre-compile all kernels with production-matching type signatures
 # =============================================================================
 
@@ -3520,3 +3961,24 @@ def warmup_jit_kernels(lut_mgr=None):
     # UV Flash
     solve_uv_flash(1e5, 1.0, 10.0, mole_fracs_6, h_formations, cp_coeffs,
                    400.0, R_const)
+
+    # Interchanger / Mixer JIT flash (P1/P6)
+    species_map = np.array([0, 1, 2, 3, 4, 5, -1], dtype=np.int32)
+    remap_canonical_to_lut(mass_fracs_6, 0.0, species_map)
+    _antoine_psat_water(400.0)
+    solve_interchanger_flash_jit(
+        0.05, 0.01, 30e5, 5e5, 500.0,
+        mass_fracs_7, stacked_H, P_grid, T_grid, 5, 100.0)
+    solve_ph_flash_jit(0.0, mole_fracs_6, h_formations, cp_coeffs, 400.0, 0.05, 10)
+    solve_dry_cooler_thermal_jit(
+        1.0, 14300.0, 400.0,  # m_dot, cp, T_gas_in
+        2.0, 3500.0, 310.0,   # glycol flow, cp, T_in
+        500.0, 10.0,           # tqc U, area
+        298.0, 30.0, 20.0,    # T_air, dc U, dc area
+        5.0, 1005.0, True,    # dc air flow, cp_air, use_dc
+        0.01, 0.015,          # flow areas
+        0.02, 0.025,          # tube diameters
+        9e-6, 0.18, 0.7,      # mu_gas, k_gas, pr_gas
+        3e-3, 0.4, 20.0,      # mu_glycol, k_glycol, pr_glycol
+        50.0, 0.0002, True    # k_wall, r_foul, use_dynamic_u
+    )

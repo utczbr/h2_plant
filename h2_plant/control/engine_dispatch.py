@@ -174,6 +174,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # Pre-allocated history arrays
         self._history: Dict[str, np.ndarray] = {}
         self._total_steps: int = 0
+        self._cached_history: Optional[Dict[str, np.ndarray]] = None
 
     def initialize(
         self,
@@ -181,7 +182,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         context: 'SimulationContext',
         total_steps: int,
         output_dir: 'Path' = None,
-        use_chunked_history: bool = False
+        use_chunked_history: bool = False,
+        resume: bool = False
     ) -> None:
         self._registry = registry
         self._context = context
@@ -250,7 +252,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             self._history_manager = ChunkedHistoryManager(
                 output_dir=output_dir,
                 total_steps=total_steps,
-                chunk_size=10_000  # ~7 simulated days
+                chunk_size=10_000,  # ~7 simulated days
+                resume=resume
             )
             
             # Define ALL columns (Base + Extra) in one place for consistency
@@ -1503,12 +1506,16 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
     def get_history(self) -> Dict[str, np.ndarray]:
         """
         Get the recorded history.
-        
+
         Returns dict of column -> array for in-memory mode.
         For chunked mode, finalizes and returns DataFrame-based dict.
+        Results are cached after first call to avoid repeated disk I/O.
         """
+        if self._cached_history is not None:
+            return self._cached_history
+
         actual_steps = self._state.step_idx
-        
+
         if self._use_chunked_history and self._history_manager:
             # Finalize chunks and load from disk
             self._history_manager.finalize()
@@ -1517,11 +1524,12 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         else:
             # Traditional in-memory mode
             result = {k: v[:actual_steps] for k, v in self._history.items()}
-        
+
         # Merge matrix history (2D arrays stored separately)
         for k, v in self._matrix_history.items():
             result[k] = v[:actual_steps]
-        
+
+        self._cached_history = result
         return result
 
     def export_history_to_csv(self, output_path: Path) -> bool:

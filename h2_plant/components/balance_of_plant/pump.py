@@ -70,6 +70,14 @@ class Pump(Component):
         
         if registry.has('lut_manager'):
             self._lut_manager = registry.get('lut_manager')
+            # Pre-bind fast lookup closures (P12 optimization)
+            try:
+                self._lookup_H = self._lut_manager.bind_lookup(self.fluid, 'H')
+                self._lookup_S = self._lut_manager.bind_lookup(self.fluid, 'S')
+            except Exception:
+                self._lookup_H = self._lookup_S = None
+        else:
+            self._lookup_H = self._lookup_S = None
         if not COOLPROP_OK:
             logger.warning(f"Pump {self.component_id}: CoolProp not available. Using simplified fallback.")
 
@@ -142,16 +150,19 @@ class Pump(Component):
             h1 = 0.0
             s1 = 0.0
             
-            # Tier 1: LUTManager (Fastest)
-            if self._lut_manager:
+            # Tier 1: Pre-bound lookup (Fastest - no dict dispatch)
+            if self._lookup_H:
                 try:
-                    # LUT Manager returns SI units (J/kg)
-                    # We keep internal variables in SI (J/kg) to match CoolProp calls
-                    # Note: Pump.py logic uses J/kg for H and J/kg/K for S
+                    h1 = self._lookup_H(P1_Pa, T1_K)
+                    s1 = self._lookup_S(P1_Pa, T1_K)
+                except (ValueError, RuntimeError):
+                     h1 = CoolPropLUT.PropsSI('H', 'P', P1_Pa, 'T', T1_K, self.fluid)
+                     s1 = CoolPropLUT.PropsSI('S', 'P', P1_Pa, 'T', T1_K, self.fluid)
+            elif self._lut_manager:
+                try:
                     h1 = self._lut_manager.lookup(self.fluid, 'H', P1_Pa, T1_K)
                     s1 = self._lut_manager.lookup(self.fluid, 'S', P1_Pa, T1_K)
                 except (ValueError, RuntimeError):
-                     # Fallback
                      h1 = CoolPropLUT.PropsSI('H', 'P', P1_Pa, 'T', T1_K, self.fluid)
                      s1 = CoolPropLUT.PropsSI('S', 'P', P1_Pa, 'T', T1_K, self.fluid)
             else:

@@ -248,6 +248,22 @@ class SimulationEngine:
         self.is_running = True
         self.steps_run = 0
 
+        # JIT Pre-warming: compile all Numba kernels before the timed loop
+        # This shifts ~15s of compilation from random mid-loop steps to startup
+        try:
+            from h2_plant.optimization.numba_ops import warmup_jit_kernels
+            lut_mgr = None
+            for _, comp in self.registry.list_components():
+                if hasattr(comp, 'lut_manager'):
+                    lut_mgr = comp.lut_manager
+                    break
+            logger.info("Pre-warming JIT kernels...")
+            t0 = time.time()
+            warmup_jit_kernels(lut_mgr)
+            logger.info(f"JIT warm-up complete: {time.time() - t0:.1f}s")
+        except Exception as e:
+            logger.warning(f"JIT warm-up failed (non-fatal): {e}")
+
         # Local variable optimization
         dispatch_decide = self._dispatch_decide_method
         dispatch_record = self._dispatch_record_method
@@ -547,10 +563,11 @@ class SimulationEngine:
         logger.info(f"Dispatch data loaded: {len(prices)} price points, {len(wind)} wind points")
 
     def initialize_dispatch_strategy(
-        self, 
-        context: 'SimulationContext', 
+        self,
+        context: 'SimulationContext',
         total_steps: int,
-        use_chunked_history: bool = False
+        use_chunked_history: bool = False,
+        resume: bool = False
     ) -> None:
         """
         Initialize the dispatch strategy with context and pre-allocate arrays.
@@ -560,6 +577,7 @@ class SimulationEngine:
             total_steps (int): Total number of timesteps for pre-allocation.
             use_chunked_history (bool): If True, use memory-efficient chunked storage
                                         (recommended for simulations > 7 days).
+            resume (bool): If True, preserve existing chunk files for resumption.
         """
         if self.dispatch_strategy:
             self.dispatch_strategy.initialize(
@@ -567,7 +585,8 @@ class SimulationEngine:
                 context=context,
                 total_steps=total_steps,
                 output_dir=self.output_dir,
-                use_chunked_history=use_chunked_history
+                use_chunked_history=use_chunked_history,
+                resume=resume
             )
             logger.info(f"Dispatch strategy initialized (chunked_history={use_chunked_history})")
 

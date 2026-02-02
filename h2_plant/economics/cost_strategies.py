@@ -61,7 +61,7 @@ class TurtonStrategy(CostStrategy):
     Formula: log10(Cp0) = K1 + K2*log10(A) + K3*[log10(A)]^2
     
     Module cost calculation:
-    - B-factor method: C_BM = Cp0 * (B1 + B2*F_m*F_p) * F_multi
+    - B-factor method: C_BM = Cp0 * (B1 + B2*F_m*F_p) * F_complex
     - Simple method: C_BM = Cp0 * F_BM * F_m
     """
     
@@ -108,15 +108,15 @@ class TurtonStrategy(CostStrategy):
             F_p = coefficients.F_p
             B1 = coefficients.B1
             B2 = coefficients.B2
-            F_multi = coefficients.F_multi
-            
-            C_BM = Cp_current * (B1 + B2 * F_m * F_p) * F_multi
+            F_complex = coefficients.F_complex
+
+            C_BM = Cp_current * (B1 + B2 * F_m * F_p) * F_complex
             
             formula = (
                 f"log10(Cp0) = {coefficients.K1} + {coefficients.K2}*log10({design_capacity:.2f}) "
                 f"+ {coefficients.K3}*[log10({design_capacity:.2f})]²; "
                 f"Cp0 = ${Cp0:,.0f}; "
-                f"C_BM = Cp0 × ({B1} + {B2}×{F_m}×{F_p}) × {F_multi} × CEPCI({cepci.inflation_factor:.4f})"
+                f"C_BM = Cp0 × ({B1} + {B2}×{F_m}×{F_p}) × {F_complex} × CEPCI({cepci.inflation_factor:.4f})"
             )
         else:
             # Simple F_BM method
@@ -158,30 +158,30 @@ class VendorQuoteStrategy(CostStrategy):
         design_capacity: float,
         coefficients: Optional[CostCoefficients],
         cepci: CEPCIData,
-        vendor_quote_usd: Optional[float] = None,
+        vendor_quote_eur: Optional[float] = None,
         quote_year: Optional[int] = None,
         quote_cepci: float = 800.0,
         **kwargs
     ) -> Tuple[Optional[float], Optional[float], str, AACECostClass]:
-        """Calculate cost from vendor quote."""
-        
-        if vendor_quote_usd is None or vendor_quote_usd <= 0:
+        """Calculate cost from vendor quote in EUR."""
+
+        if vendor_quote_eur is None or vendor_quote_eur <= 0:
             return None, None, "No valid vendor quote provided", AACECostClass.CLASS_5
-        
+
         # Inflate quote to current year if needed
         # Only inflate if explicit quote_year is provided and differs from current
         if quote_year is not None and quote_year != cepci.current_year:
             inflation = cepci.current_index / quote_cepci
-            C_BM = vendor_quote_usd * inflation
-            formula = f"Vendor Quote ${vendor_quote_usd:,.0f} × CEPCI({inflation:.4f}) to {cepci.current_year}"
+            C_BM = vendor_quote_eur * inflation
+            formula = f"Vendor Quote €{vendor_quote_eur:,.0f} × CEPCI({inflation:.4f}) to {cepci.current_year}"
         else:
-            C_BM = vendor_quote_usd
-            formula = f"Vendor Quote ${vendor_quote_usd:,.0f} (direct)"
-        
+            C_BM = vendor_quote_eur
+            formula = f"Vendor Quote €{vendor_quote_eur:,.0f} (direct)"
+
         # Vendor quotes have higher accuracy
         cost_class = AACECostClass.CLASS_3
-        
-        return vendor_quote_usd, round(C_BM, 2), formula, cost_class
+
+        return vendor_quote_eur, round(C_BM, 2), formula, cost_class
 
 
 class PercentageStrategy(CostStrategy):

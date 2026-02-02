@@ -88,6 +88,13 @@ COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
     'revenue_analysis': CORE_COLUMNS + ['cumulative_h2_kg'],
     'temporal_averages': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg'],
     'cumulative_energy': CORE_COLUMNS,
+    'net_profit_plotly': CORE_COLUMNS + [
+        'cumulative_h2_kg', 'h2_kg',
+        'H2_pem_kg', 'H2_soec_kg', 'H2_atr_kg',
+        'H2_pem', 'H2_soec', 'H2_atr',
+        'H2_pem_kg_h', 'H2_soec_kg_h', 'H2_atr_kg_h',
+        '*_outlet_mass_flow_kg_h', '*capex*', '*CAPEX*', '*opex*', '*OPEX*'
+    ],
     
     # =========================================================================
     # RFNBO COMPLIANCE
@@ -616,7 +623,7 @@ class GraphCatalog:
             description='Weighted average PPA price over time',
             function=pg.plot_effective_ppa,  # P2 FIX: Now points to dedicated implementation
             library=GraphLibrary.PLOTLY,
-            data_required=['ppa_price_effective_eur_mwh', 'spot_price'],
+            data_required=['ppa_price_effective_eur_mwh', 'spot_price', 'P_offer', 'sell_decision', 'P_sold', 'spot_purchased_mw'],
             priority=GraphPriority.HIGH,
             category='economics',
             enabled=True
@@ -644,6 +651,19 @@ class GraphCatalog:
             function=pg.plot_rfnbo_pie,
             library=GraphLibrary.PLOTLY,
             data_required=['cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg'],
+            priority=GraphPriority.MEDIUM,
+            category='economics',
+            enabled=True
+        ))
+
+        # 12. Net Profit (CAPEX/OPEX Deducted)
+        self.register(GraphMetadata(
+            graph_id='net_profit_plotly',
+            title='Cumulative Net Profit (Interactive)',
+            description='Cumulative H2 value with upfront CAPEX and OPEX deducted',
+            function=pg.plot_cumulative_net_profit,
+            library=GraphLibrary.PLOTLY,
+            data_required=['history'],
             priority=GraphPriority.MEDIUM,
             category='economics',
             enabled=True

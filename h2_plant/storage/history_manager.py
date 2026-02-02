@@ -81,22 +81,25 @@ class ChunkedHistoryManager:
         output_dir: Path,
         total_steps: int,
         chunk_size: int = DEFAULT_CHUNK_SIZE,
-        simulation_id: Optional[str] = None
+        simulation_id: Optional[str] = None,
+        resume: bool = False
     ):
         """
         Initialize the chunked history manager.
-        
+
         Args:
             output_dir: Directory for chunk files and checkpoints
             total_steps: Total expected simulation steps
             chunk_size: Steps per chunk (default 10,000)
             simulation_id: Unique ID for this simulation run
+            resume: If True, preserve existing chunk files for resumption
         """
         self.output_dir = Path(output_dir)
         self.chunks_dir = self.output_dir / "history_chunks"
-        
+
         # Clean up old chunk files from previous runs to prevent stale data
-        if self.chunks_dir.exists():
+        # BUT skip cleanup when resuming — we need those chunks!
+        if not resume and self.chunks_dir.exists():
             old_chunks = list(self.chunks_dir.glob("chunk_*.parquet"))
             if old_chunks:
                 logger.info(f"Cleaning {len(old_chunks)} old chunk files from previous run")
@@ -105,6 +108,8 @@ class ChunkedHistoryManager:
                         old_chunk.unlink()
                     except Exception as e:
                         logger.warning(f"Failed to delete {old_chunk}: {e}")
+        elif resume:
+            logger.info("Resume mode: preserving existing chunk files")
         
         self.chunks_dir.mkdir(parents=True, exist_ok=True)
         

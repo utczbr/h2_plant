@@ -1793,6 +1793,247 @@ def plot_lcoh_waterfall_breakdown(df: pd.DataFrame, **kwargs) -> go.Figure:
 
 
 @log_graph_errors
+def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot cumulative net profit over time after CAPEX and OPEX deduction.
+    
+    Net Profit = (Cumulative H2 Value) - CAPEX - OPEX
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import (
+        downsample_dataframe,
+        get_time_axis_hours,
+        get_viz_config,
+        get_config_value,
+        get_dt_hours
+    )
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    
+    if df_plot.empty:
+        return _empty_figure("No data available")
+    
+    hours = get_time_axis_hours(df_plot)
+    
+    # H2 price (EUR/kg)
+    h2_price = kwargs.get('h2_price_eur_kg')
+    if h2_price is None:
+        h2_price = get_config_value(df_plot, 'h2_price_eur_kg', None)
+    if h2_price is None:
+        h2_price = get_config_value(df_plot, 'h2_price_kg', None)
+    if h2_price is None:
+        h2_price = get_viz_config('plant_parameters.h2_price_eur_kg', 9.6)
+    try:
+        h2_price = float(h2_price)
+    except (TypeError, ValueError):
+        h2_price = 0.0
+    
+    def _is_rate_col(col_name: str) -> bool:
+        col_lower = col_name.lower()
+        return (
+            col_lower.endswith('_kg_h') or
+            'kg_h' in col_lower or
+            'mass_flow_kg_h' in col_lower or
+            'flow_kg_h' in col_lower
+        )
+    
+    # --- Cumulative H2 Production ---
+    cumulative_h2 = None
+    cumulative_col = None
+    for col in df_plot.columns:
+        col_lower = col.lower()
+        if col_lower in ['cumulative_h2_kg', 'cumulative_h2_total_kg', 'cumulative_h2_all_kg']:
+            cumulative_col = col
+            break
+    if cumulative_col is None:
+        for col in df_plot.columns:
+            col_lower = col.lower()
+            if col_lower.startswith('cumulative_h2') and 'kg' in col_lower and 'rfnbo' not in col_lower and 'non' not in col_lower:
+                cumulative_col = col
+                break
+    
+    if cumulative_col:
+        cumulative_h2 = pd.to_numeric(df_plot[cumulative_col], errors='coerce').fillna(0).values
+    else:
+        # Fallback: integrate per-step mass from production columns
+        dt_h = np.median(np.diff(hours)) if len(hours) > 1 else get_dt_hours(df_plot)
+        if not np.isfinite(dt_h) or dt_h <= 0:
+            dt_h = get_dt_hours(df_plot)
+        
+        col_map = {c.lower(): c for c in df_plot.columns}
+
+        step_mass = np.zeros(len(df_plot))
+        found = False
+
+        # Priority 1: Purified H2 (PSA outlets)
+        psa_cols = [
+            c for c in df_plot.columns
+            if 'psa' in c.lower() and 'h2' in c.lower() and
+            ('mass_flow_kg_h' in c.lower() or 'flow_kg_h' in c.lower())
+        ]
+        if psa_cols:
+            for col in psa_cols:
+                data = pd.to_numeric(df_plot[col], errors='coerce').fillna(0).values
+                step_mass += data * dt_h
+            found = True
+
+        # Priority 2: Total H2 column if PSA not available
+        if not found:
+            total_col = None
+            for key in ['h2_kg', 'h2_total_kg', 'total_h2_kg']:
+                if key in col_map:
+                    total_col = col_map[key]
+                    break
+            if total_col:
+                step_mass = pd.to_numeric(df_plot[total_col], errors='coerce').fillna(0).values
+                if _is_rate_col(total_col):
+                    step_mass = step_mass * dt_h
+                found = True
+
+        # Priority 3: Sum of source production if PSA/total not available
+        if not found:
+            source_keys = [
+                'h2_pem_kg', 'h2_soec_kg', 'h2_atr_kg',
+                'h2_pem', 'h2_soec', 'h2_atr',
+                'h2_pem_kg_h', 'h2_soec_kg_h', 'h2_atr_kg_h'
+            ]
+            
+            for key in source_keys:
+                col = col_map.get(key)
+                if col:
+                    data = pd.to_numeric(df_plot[col], errors='coerce').fillna(0).values
+                    if _is_rate_col(col):
+                        data = data * dt_h
+                    step_mass += data
+                    found = True
+        
+        if not found:
+            return _empty_figure("No purified H2 data found (PSA outlets missing).")
+        
+        cumulative_h2 = np.cumsum(step_mass)
+    
+    cumulative_value = cumulative_h2 * h2_price
+    
+    # --- CAPEX / OPEX Extraction ---
+    metrics = df.attrs.get('metrics', {})
+    config = df.attrs.get('config', {})
+    metrics_lc = {str(k).lower(): v for k, v in metrics.items()}
+    config_lc = {str(k).lower(): v for k, v in config.items()}
+    kwargs_lc = {str(k).lower(): v for k, v in kwargs.items()}
+    col_map = {c.lower(): c for c in df_plot.columns}
+    
+    def _resolve_cost(keys: List[str]) -> Optional[float]:
+        # kwargs (case-insensitive)
+        for key in keys:
+            if key in kwargs_lc and kwargs_lc[key] is not None:
+                return float(kwargs_lc[key])
+        # df.attrs['metrics']
+        for key in keys:
+            if key in metrics_lc and metrics_lc[key] is not None:
+                return float(metrics_lc[key])
+        # df.attrs['config']
+        for key in keys:
+            if key in config_lc and config_lc[key] is not None:
+                return float(config_lc[key])
+        # direct column match
+        for key in keys:
+            col = col_map.get(key)
+            if col:
+                series = pd.to_numeric(df_plot[col], errors='coerce')
+                if series.notna().any():
+                    return float(series.dropna().iloc[-1])
+        # substring match fallback
+        for col_lower, col in col_map.items():
+            if 'per_kg' in col_lower or 'perkg' in col_lower:
+                continue
+            if any(key in col_lower for key in keys):
+                series = pd.to_numeric(df_plot[col], errors='coerce')
+                if series.notna().any():
+                    return float(series.dropna().iloc[-1])
+        return None
+    
+    capex_keys = [
+        'capex', 'capex_total', 'total_capex', 'total_c_bm',
+        'total_installed_cost', 'fixed_capital_investment', 'fci'
+    ]
+    opex_keys = [
+        'opex', 'opex_total', 'total_opex', 'opex_cost',
+        'annual_opex', 'opex_annual', 'total_annual_opex'
+    ]
+    
+    capex = _resolve_cost(capex_keys)
+    opex = _resolve_cost(opex_keys)
+    
+    missing = []
+    if capex is None:
+        missing.append('CAPEX')
+        capex = 0.0
+    if opex is None:
+        missing.append('OPEX')
+        opex = 0.0
+    
+    if len(missing) == 2:
+        return _empty_figure("CAPEX/OPEX values not available. Provide economics data (attrs or columns).")
+    
+    net_profit = cumulative_value - capex - opex
+    
+    # --- Plot ---
+    profit_color = get_viz_config('styling.colors.profit', '#2c3e50')
+    value_color = get_viz_config('styling.colors.h2total', '#2ecc71')
+    
+    ScatterType = get_scatter_type(len(hours))
+    fig = go.Figure()
+    
+    # Net Profit (Primary)
+    fig.add_trace(ScatterType(
+        x=hours,
+        y=net_profit,
+        mode='lines',
+        name='Net Profit (CAPEX + OPEX Deducted)',
+        line=dict(color=profit_color, width=2),
+        hovertemplate='Net Profit: %{y:,.0f}<extra></extra>'
+    ))
+    
+    # Cumulative H2 Value (Reference)
+    fig.add_trace(ScatterType(
+        x=hours,
+        y=cumulative_value,
+        mode='lines',
+        name='Cumulative H2 Value',
+        line=dict(color=value_color, width=1.5, dash='dot'),
+        hovertemplate='H2 Value: %{y:,.0f}<extra></extra>'
+    ))
+    
+    # Break-even line
+    fig.add_hline(y=0, line=dict(color='#7f8c8d', width=1, dash='dash'))
+    
+    # Cost annotation
+    capex_label = f"{capex:,.0f}" if 'CAPEX' not in missing else "n/a (0)"
+    opex_label = f"{opex:,.0f}" if 'OPEX' not in missing else "n/a (0)"
+    fig.add_annotation(
+        text=f"CAPEX: {capex_label} | OPEX: {opex_label}",
+        xref="paper", yref="paper",
+        x=0.01, y=1.08,
+        showarrow=False,
+        align="left",
+        font=dict(size=10, color="#555")
+    )
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'Cumulative Net Profit (H2 Value - CAPEX - OPEX)'),
+        xaxis_title='Time (hours)',
+        yaxis_title='Value (EUR)',
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    return fig
+
+
+@log_graph_errors
 def plot_pem_performance_surface(df: pd.DataFrame, **kwargs) -> go.Figure:
     _check_dependencies()
     
@@ -1996,17 +2237,91 @@ def plot_effective_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     ppa_price = df_plot[ppa_col].values
     spot_price = df_plot[spot_col].values if spot_col else None
-    
+
+    def _find_col(names):
+        for name in names:
+            for col in df_plot.columns:
+                if col.lower() == name.lower():
+                    return col
+        return None
+
+    p_offer_col = _find_col(['P_offer', 'p_offer'])
+    p_sold_col = _find_col(['P_sold', 'P_sold_mw', 'p_sold'])
+    sell_decision_col = _find_col(['sell_decision'])
+    spot_purchased_col = _find_col(['spot_purchased_mw'])
+
+    p_offer = pd.to_numeric(df_plot[p_offer_col], errors='coerce').fillna(0.0).values if p_offer_col else None
+    p_sold = pd.to_numeric(df_plot[p_sold_col], errors='coerce').fillna(0.0).values if p_sold_col else None
+    sell_decision = pd.to_numeric(df_plot[sell_decision_col], errors='coerce').fillna(0.0).values if sell_decision_col else None
+    spot_purchased = pd.to_numeric(df_plot[spot_purchased_col], errors='coerce').fillna(0.0).values if spot_purchased_col else None
+
+    tol = 1e-6
+
+    # Dispatch-aware classification:
+    #   Green: Plant at max capacity + selling excess (sell_decision=1, PEM active)
+    #   Yellow: No surplus sold — plant consumes all power (sell_decision=0)
+    #   Red: Selling because energy is more valuable than H2 (sell_decision=1, PEM off)
+    p_pem_col = _find_col(['P_pem', 'p_pem'])
+    p_pem_vals = pd.to_numeric(df_plot[p_pem_col], errors='coerce').fillna(0.0).values if p_pem_col else None
+
+    green_mask = np.zeros(len(hours), dtype=bool)
+    yellow_mask = np.zeros(len(hours), dtype=bool)
+    red_mask = np.zeros(len(hours), dtype=bool)
+
+    if sell_decision is not None and p_pem_vals is not None:
+        sell_flag = sell_decision > 0
+        green_mask = sell_flag & (p_pem_vals > tol)
+        red_mask = sell_flag & (p_pem_vals <= tol)
+        yellow_mask = ~sell_flag
+    elif sell_decision is not None:
+        sell_flag = sell_decision > 0
+        green_mask = sell_flag
+        yellow_mask = ~sell_flag
+    elif p_sold is not None:
+        green_mask = p_sold > tol
+        yellow_mask = ~green_mask
+    else:
+        yellow_mask = np.ones(len(hours), dtype=bool)
+
+    # Dilate sparse masks by 1 point so segments connect to adjacent lines
+    for mask in [yellow_mask, red_mask]:
+        if np.any(mask):
+            dilated = mask.copy()
+            dilated[1:] |= mask[:-1]    # extend right
+            dilated[:-1] |= mask[1:]    # extend left
+            mask[:] = dilated
+
     fig = go.Figure()
-    
-    # Effective PPA line
-    fig.add_trace(get_scatter_type(len(hours))(
-        x=hours,
-        y=ppa_price,
-        mode='lines',
-        name='Effective PPA Price',
-        line=dict(color='#e74c3c', width=2)
-    ))
+
+    # Effective PPA line with dispatch-aware coloring
+    if np.any(green_mask):
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours,
+            y=np.where(green_mask, ppa_price, np.nan),
+            mode='lines',
+            name='Max Production + Selling Excess',
+            line=dict(color='#2ecc71', width=2)
+        ))
+
+    if np.any(yellow_mask):
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours,
+            y=np.where(yellow_mask, ppa_price, np.nan),
+            mode='lines+markers',
+            name='Full Consumption (No Surplus)',
+            line=dict(color="#fff344", width=3),
+            marker=dict(size=6, color='#fff344')
+        ))
+
+    if np.any(red_mask):
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours,
+            y=np.where(red_mask, ppa_price, np.nan),
+            mode='lines+markers',
+            name='Selling (Energy > H2 Value)',
+            line=dict(color='#e74c3c', width=3),
+            marker=dict(size=6, color='#e74c3c')
+        ))
     
     # Spot price overlay
     if spot_price is not None:
@@ -5236,6 +5551,30 @@ def plot_power_vs_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     if p_offer_col not in df_plot.columns or ppa_col not in df_plot.columns:
         return _empty_figure("No power offer or PPA data found")
+
+    def _get_dispatch_order_mask(df_local: pd.DataFrame):
+        # Priority 1: explicit sell decision flag
+        sell_cols = [c for c in df_local.columns if 'sell_decision' in c.lower()]
+        if sell_cols:
+            series = pd.to_numeric(df_local[sell_cols[0]], errors='coerce').fillna(0.0)
+            return series > 0, "Dispatch Order (Sell)"
+
+        # Priority 2: sold power > 0
+        sold_cols = [c for c in df_local.columns if c.lower() in ['p_sold', 'p_sold_mw'] or 'p_sold' in c.lower()]
+        if sold_cols:
+            series = pd.to_numeric(df_local[sold_cols[0]], errors='coerce').fillna(0.0)
+            return series > 0, "Dispatch Order (Grid Sell)"
+
+        # Priority 3: spot purchase (economic dispatch)
+        spot_cols = [c for c in df_local.columns if 'spot_purchased_mw' in c.lower()]
+        if spot_cols:
+            series = pd.to_numeric(df_local[spot_cols[0]], errors='coerce').fillna(0.0)
+            return series > 0, "Dispatch Order (Spot Purchase)"
+
+        return None, None
+
+    dispatch_mask, dispatch_label = _get_dispatch_order_mask(df_plot)
+    has_dispatch = dispatch_mask is not None and np.any(dispatch_mask)
     
     fig = go.Figure()
     
@@ -5248,6 +5587,17 @@ def plot_power_vs_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
         marker=dict(opacity=0.6, size=5),
         visible=True 
     ))
+
+    # Shipment markers (Scatter View)
+    if has_dispatch:
+        fig.add_trace(go.Scatter(
+            x=df_plot[p_offer_col].values[dispatch_mask],
+            y=df_plot[ppa_col].values[dispatch_mask],
+            mode='markers',
+            name=dispatch_label,
+            marker=dict(symbol='x', size=9, color='#f39c12', line=dict(width=1, color='#d35400')),
+            visible=True
+        ))
     
     # View B: Time Series (Dual Axis) - Default Hidden
     fig.add_trace(go.Scatter(
@@ -5264,6 +5614,25 @@ def plot_power_vs_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
         yaxis='y2',
         visible=False
     ))
+
+    # Shipment markers (Time Series View)
+    if has_dispatch:
+        fig.add_trace(go.Scatter(
+            x=hours[dispatch_mask],
+            y=df_plot[ppa_col].values[dispatch_mask],
+            mode='markers',
+            name=dispatch_label,
+            marker=dict(symbol='x', size=9, color='#f39c12', line=dict(width=1, color='#d35400')),
+            yaxis='y2',
+            visible=False
+        ))
+
+    if has_dispatch:
+        scatter_visible = [True, True, False, False, False]
+        timeseries_visible = [False, False, True, True, True]
+    else:
+        scatter_visible = [True, False, False]
+        timeseries_visible = [False, True, True]
     
     # Dropdown for switching views
     fig.update_layout(
@@ -5272,14 +5641,14 @@ def plot_power_vs_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
                 buttons=[
                     dict(label='Scatter View (Correlation)',
                          method='update',
-                         args=[{'visible': [True, False, False]},
+                         args=[{'visible': scatter_visible},
                                {'title': 'Power Offer vs PPA Price (Scatter)',
                                 'xaxis': {'title': 'Power Offer (MW)'},
                                 'yaxis': {'title': 'PPA Price (EUR/MWh)'},
                                 'yaxis2': {'visible': False}}]),
                     dict(label='Time Series View',
                          method='update',
-                         args=[{'visible': [False, True, True]},
+                         args=[{'visible': timeseries_visible},
                                {'title': 'Power Offer and PPA Price Over Time',
                                 'xaxis': {'title': 'Time (hours)'},
                                 'yaxis': {'title': 'Power Offer (MW)'},
@@ -5306,6 +5675,7 @@ def plot_storage_apc_enhanced(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     Row 1: Storage SOC (Right Axis) vs APC Action Factor (Left Axis).
     Row 2: H2 Production Rate vs Demand Rate (Mass Balance).
+    Row 3: Accumulated Purified H2 (Tank Inlets or PSA Outputs).
     """
     _check_dependencies()
     from plotly.subplots import make_subplots
@@ -5353,13 +5723,50 @@ def plot_storage_apc_enhanced(df: pd.DataFrame, **kwargs) -> go.Figure:
         generic_dem = next((c for c in ['demand_kg_h', 'h2_demand_kg_h'] if c in df_plot.columns), None)
         demand_rate = df_plot[generic_dem].values if generic_dem else np.zeros(len(hours))
 
+    # 3. Accumulated Purified H2 (Tank Inlets or PSA Outputs)
+    dt_h = np.median(np.diff(hours)) if len(hours) > 1 else dt_h
+    if not np.isfinite(dt_h) or dt_h <= 0:
+        dt_h = dt_seconds / 3600.0
+
+    tank_inlet_cols = [
+        c for c in df_plot.columns
+        if ('tank' in c.lower() or 'storage' in c.lower())
+        and 'inlet' in c.lower()
+        and ('kg_h' in c.lower() or 'mass_flow_kg_h' in c.lower() or 'flow_kg_h' in c.lower())
+    ]
+    psa_outlet_cols = [
+        c for c in df_plot.columns
+        if 'psa' in c.lower() and 'h2' in c.lower() and 'outlet' in c.lower()
+        and ('kg_h' in c.lower() or 'mass_flow_kg_h' in c.lower() or 'flow_kg_h' in c.lower())
+    ]
+
+    purified_rate = np.zeros(len(hours))
+    purified_source = None
+
+    if tank_inlet_cols:
+        for col in tank_inlet_cols:
+            purified_rate += df_plot[col].values
+        purified_source = "Tank Inlets"
+    elif psa_outlet_cols:
+        for col in psa_outlet_cols:
+            purified_rate += df_plot[col].values
+        purified_source = "PSA Outlets"
+    else:
+        purified_source = "No purified H2 flow data"
+
+    purified_cumulative = np.cumsum(purified_rate * dt_h)
+
     # --- Plot Generation ---
     fig = make_subplots(
-        rows=2, cols=1,
+        rows=3, cols=1,
         shared_xaxes=True,
         vertical_spacing=0.08,
-        subplot_titles=("Control Status (SOC & Action Factor)", "Mass Balance (Production vs Demand)"),
-        specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+        subplot_titles=(
+            "Control Status (SOC & Action Factor)",
+            "Mass Balance (Production vs Demand)",
+            "Accumulated Purified H2 Balance"
+        ),
+        specs=[[{"secondary_y": True}], [{"secondary_y": False}], [{"secondary_y": False}]]
     )
 
     ScatterType = get_scatter_type(len(hours))
@@ -5419,20 +5826,29 @@ def plot_storage_apc_enhanced(df: pd.DataFrame, **kwargs) -> go.Figure:
         hoverinfo='skip'
     ), row=2, col=1)
 
+    # === ROW 3: Accumulated Purified H2 ===
+    fig.add_trace(ScatterType(
+        x=hours, y=purified_cumulative,
+        mode='lines', name=f'Purified H2 Accumulated ({purified_source})',
+        line=dict(color='#34495e', width=2),
+        hovertemplate='Accumulated H2: %{y:,.0f} kg<extra></extra>'
+    ), row=3, col=1)
+
     # --- Layout Updates ---
     fig.update_layout(
         title=kwargs.get('title', 'Storage APC Dynamics & Mass Balance'),
         template='plotly_white',
         hovermode='x unified',
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-        height=700
+        height=900
     )
 
     # Axis Labels
     fig.update_yaxes(title_text="Action Factor (0-1)", range=[-0.05, 1.1], row=1, col=1, secondary_y=False)
     fig.update_yaxes(title_text="SOC (%)", range=[0, 105], row=1, col=1, secondary_y=True)
     fig.update_yaxes(title_text="Mass Flow (kg/h)", row=2, col=1)
-    fig.update_xaxes(title_text="Time (hours)", row=2, col=1)
+    fig.update_yaxes(title_text="Accumulated H2 (kg)", row=3, col=1)
+    fig.update_xaxes(title_text="Time (hours)", row=3, col=1)
 
     return fig
 

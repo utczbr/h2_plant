@@ -106,7 +106,8 @@ class WaterPumpThermodynamic(Component):
         pump_id: str,
         eta_is: float = 0.82,
         eta_m: float = 0.96,
-        target_pressure_pa: Optional[float] = None
+        target_pressure_pa: Optional[float] = None,
+        capacity_kg_h: Optional[float] = None
     ):
         """
         Initialize the water pump.
@@ -119,6 +120,8 @@ class WaterPumpThermodynamic(Component):
                 Motor + coupling: 0.93-0.98. Default: 0.96.
             target_pressure_pa (float, optional): Target outlet pressure in Pa.
                 Required for operation.
+            capacity_kg_h (float, optional): Design flow capacity in kg/h.
+                Used for CAPEX sizing when simulation history is not available.
         """
         super().__init__()
         self.component_id = pump_id
@@ -126,6 +129,7 @@ class WaterPumpThermodynamic(Component):
         # Efficiency parameters
         self.eta_is = eta_is
         self.eta_m = eta_m
+        self.capacity_kg_h = capacity_kg_h or 0.0
 
         # Configuration
         self.target_pressure_pa = target_pressure_pa
@@ -168,6 +172,15 @@ class WaterPumpThermodynamic(Component):
 
         if registry.has('lut_manager'):
             self._lut_manager = registry.get('lut_manager')
+            # Pre-bind fast lookup closures (P12 optimization)
+            try:
+                self._lookup_H = self._lut_manager.bind_lookup('H2O', 'H')
+                self._lookup_S = self._lut_manager.bind_lookup('H2O', 'S')
+                self._lookup_D = self._lut_manager.bind_lookup('H2O', 'D')
+            except Exception:
+                self._lookup_H = self._lookup_S = self._lookup_D = None
+        else:
+            self._lookup_H = self._lookup_S = self._lookup_D = None
 
         if not COOLPROP_AVAILABLE:
             logger.warning(
@@ -248,7 +261,14 @@ class WaterPumpThermodynamic(Component):
             h1 = 0.0
             s1 = 0.0
 
-            if self._lut_manager:
+            if self._lookup_H:
+                try:
+                    h1 = self._lookup_H(P1_Pa, T1_K) / 1000.0
+                    s1 = self._lookup_S(P1_Pa, T1_K) / 1000.0
+                except:
+                    h1 = CoolPropLUT.PropsSI('H', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
+                    s1 = CoolPropLUT.PropsSI('S', 'P', P1_Pa, 'T', T1_K, fluido) / 1000.0
+            elif self._lut_manager:
                 try:
                     h1 = self._lut_manager.lookup(fluido, 'H', P1_Pa, T1_K) / 1000.0
                     s1 = self._lut_manager.lookup(fluido, 'S', P1_Pa, T1_K) / 1000.0
@@ -359,7 +379,14 @@ class WaterPumpThermodynamic(Component):
             h2 = 0.0
             rho_2 = 0.0
 
-            if self._lut_manager:
+            if self._lookup_H:
+                try:
+                    h2 = self._lookup_H(P2_Pa, T2_K) / 1000.0
+                    rho_2 = self._lookup_D(P2_Pa, T2_K)
+                except:
+                    h2 = CoolPropLUT.PropsSI('H', 'P', P2_Pa, 'T', T2_K, fluido) / 1000.0
+                    rho_2 = CoolPropLUT.PropsSI('D', 'P', P2_Pa, 'T', T2_K, fluido)
+            elif self._lut_manager:
                 try:
                     h2 = self._lut_manager.lookup(fluido, 'H', P2_Pa, T2_K) / 1000.0
                     rho_2 = self._lut_manager.lookup(fluido, 'D', P2_Pa, T2_K)

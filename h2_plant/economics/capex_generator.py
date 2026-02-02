@@ -196,9 +196,33 @@ class CapexGenerator:
             for comp_type, coeffs in config['coefficients'].items():
                 self.type_coefficients[comp_type] = coeffs
         
+        def _normalize_topology_ids(raw_ids: Any) -> List[str]:
+            if raw_ids is None:
+                return []
+            if isinstance(raw_ids, str):
+                return [part.strip() for part in raw_ids.split(",") if part.strip()]
+            if isinstance(raw_ids, list):
+                normalized: List[str] = []
+                for item in raw_ids:
+                    if item is None:
+                        continue
+                    if isinstance(item, str):
+                        if "," in item:
+                            normalized.extend([part.strip() for part in item.split(",") if part.strip()])
+                        else:
+                            normalized.append(item.strip())
+                    else:
+                        normalized.append(str(item))
+                return normalized
+            return [str(raw_ids)]
+
         # Load equipment mappings
         if 'equipment' in config:
             for mapping_data in config['equipment']:
+                # Normalize topology_ids to avoid comma-separated strings
+                if 'topology_ids' in mapping_data:
+                    mapping_data['topology_ids'] = _normalize_topology_ids(mapping_data.get('topology_ids'))
+
                 # Get coefficients from type or inline
                 comp_type = mapping_data.get('component_type', '')
                 if 'coefficients' not in mapping_data and comp_type in self.type_coefficients:
@@ -206,9 +230,14 @@ class CapexGenerator:
                         **self.type_coefficients[comp_type]
                     )
                 elif 'coefficients' in mapping_data:
-                    mapping_data['coefficients'] = CostCoefficients(
-                        **mapping_data['coefficients']
-                    )
+                    coeffs = mapping_data['coefficients']
+                    if coeffs.get('cost_method') in ('power_law_scaling',):
+                        # Non-Turton cost method — store raw dict, skip CostCoefficients
+                        logger.info(f"Skipping CostCoefficients for {mapping_data.get('tag')}: "
+                                    f"cost_method={coeffs['cost_method']}")
+                        mapping_data['coefficients'] = None
+                    else:
+                        mapping_data['coefficients'] = CostCoefficients(**coeffs)
                 
                 self.mappings.append(EquipmentMapping(**mapping_data))
         
@@ -285,7 +314,8 @@ class CapexGenerator:
         history_mappings = {
             "power_kw": [
                 "power_kw", "power_input_kw", "P_consumed_kw", "electrical_power_kw",
-                "timestep_power_kw", "energy_consumed_kwh",  # Need to derive power
+                "timestep_power_kw", "power_shaft_kw", "power_fluid_kw",
+                "energy_consumed_kwh",  # Need to derive power
             ],
             "flow_kg_h": [
                 "mass_flow_kg_h", "outlet_mass_flow_kg_h", "actual_mass_transferred_kg",
@@ -346,8 +376,9 @@ class CapexGenerator:
                         )
                         if calculated is not None:
                             comp_value, calc_note = calculated
-                            comp_source = f"{calc_note} (fallback from design)"
-                            source = "calculated"
+                            tried = param_mappings.get(capacity_variable, [capacity_variable])
+                            comp_source = calc_note
+                            source = f"calculated (fallback; {capacity_variable} not in history or params: {', '.join(tried)})"
             
             else:
                 # DESIGN MODE (default): Try component parameters FIRST
@@ -378,8 +409,9 @@ class CapexGenerator:
                         )
                         if calculated is not None:
                             comp_value, calc_note = calculated
+                            tried = param_mappings.get(capacity_variable, [capacity_variable])
                             comp_source = calc_note
-                            source = "calculated"
+                            source = f"calculated (fallback; {capacity_variable} not in params: {', '.join(tried)})"
                 
                 # ===== TIER 3: Monitoring history as fallback =====
                 # Try this even if component is not in registry (uses CSV cache)
@@ -400,7 +432,8 @@ class CapexGenerator:
                 if comp is None:
                     notes.append(f"❌ {comp_id} not found in registry or history")
                 else:
-                    notes.append(f"⚠️ {comp_id}: no {capacity_variable} data found")
+                    tried = param_mappings.get(capacity_variable, [capacity_variable])
+                    notes.append(f"⚠️ {comp_id}: no {capacity_variable} found (tried params: {', '.join(tried)})")
         
         # Aggregate values across all components
         if not values:
@@ -483,10 +516,77 @@ class CapexGenerator:
         if capacity_variable == "power_kw":
             # Some compressors are sized by flow, not power
             # We'll need history for actual power
-            if hasattr(comp, 'max_flow_kg_h'):
-                # Can't directly convert flow to power - need history
-                pass
-        
+            if (
+                hasattr(comp, 'max_flow_kg_h') and
+                hasattr(comp, 'inlet_pressure_bar') and
+                hasattr(comp, 'outlet_pressure_bar')
+            ):
+                max_flow_kg_h = getattr(comp, 'max_flow_kg_h', 0.0) or 0.0
+                inlet_p_bar = getattr(comp, 'inlet_pressure_bar', 0.0) or 0.0
+                outlet_p_bar = getattr(comp, 'outlet_pressure_bar', 0.0) or 0.0
+                inlet_t_c = getattr(comp, 'inlet_temperature_c', 25.0) or 25.0
+
+                if max_flow_kg_h > 0 and inlet_p_bar > 0 and outlet_p_bar > inlet_p_bar:
+                    # Infer gas properties from component ID (fallback to air)
+                    comp_id_upper = comp_id.upper()
+                    if "H2" in comp_id_upper:
+                        gamma = 1.41
+                        R_spec = 4124.0  # J/(kg·K)
+                    elif "O2" in comp_id_upper:
+                        gamma = 1.40
+                        R_spec = 259.8
+                    elif "STEAM" in comp_id_upper or "H2O" in comp_id_upper:
+                        gamma = 1.33
+                        R_spec = 461.5
+                    elif "CO2" in comp_id_upper:
+                        gamma = 1.30
+                        R_spec = 188.9
+                    else:
+                        gamma = 1.40
+                        R_spec = 287.0
+
+                    eta_is = getattr(comp, 'isentropic_efficiency', 0.7) or 0.7
+                    eta_m = getattr(comp, 'mechanical_efficiency', 0.96) or 0.96
+
+                    pr = outlet_p_bar / inlet_p_bar
+                    t_in_k = inlet_t_c + 273.15
+
+                    # Isentropic compression work per kg (J/kg)
+                    exponent = (gamma - 1.0) / gamma
+                    work_j_kg = (gamma / (gamma - 1.0)) * R_spec * t_in_k * (pr ** exponent - 1.0)
+
+                    m_dot = max_flow_kg_h / 3600.0
+                    denom = max(eta_is, 1e-3) * max(eta_m, 1e-3)
+                    power_kw = (m_dot * work_j_kg / denom) / 1000.0
+
+                    if power_kw > 0:
+                        return power_kw, (
+                            f"{comp_id}: est power from max_flow_kg_h({max_flow_kg_h:.1f}), "
+                            f"PR={pr:.2f}, T={inlet_t_c:.1f}C"
+                        )
+
+            # Pump: estimate power from capacity_kg_h and target_pressure
+            if hasattr(comp, 'capacity_kg_h') and hasattr(comp, 'target_pressure_pa'):
+                cap_kg_h = getattr(comp, 'capacity_kg_h', 0.0) or 0.0
+                target_pa = getattr(comp, 'target_pressure_pa', 0.0) or 0.0
+                eta_is = getattr(comp, 'eta_is', 0.82) or 0.82
+                eta_m = getattr(comp, 'eta_m', 0.96) or 0.96
+
+                # Assume inlet at atmospheric (1 bar = 1e5 Pa) for water pumps
+                inlet_pa = 1e5
+                if target_pa > inlet_pa and cap_kg_h > 0:
+                    delta_p = target_pa - inlet_pa
+                    rho_water = 998.0  # kg/m³
+                    m_dot = cap_kg_h / 3600.0
+                    vol_flow = m_dot / rho_water  # m³/s
+                    hydraulic_power = vol_flow * delta_p  # W
+                    power_kw = (hydraulic_power / (max(eta_is, 1e-3) * max(eta_m, 1e-3))) / 1000.0
+                    if power_kw > 0:
+                        return power_kw, (
+                            f"{comp_id}: est pump power from capacity_kg_h({cap_kg_h:.1f}), "
+                            f"ΔP={delta_p/1e5:.1f} bar"
+                        )
+
         # Heat exchanger area extraction (including DryCooler)
         if capacity_variable == "area_m2":
             # 1. Check for explicit area attribute
@@ -592,57 +692,66 @@ class CapexGenerator:
         """
         maxima: Dict[str, float] = {}
         
-        # Try CSV first
-        csv_path = output_dir / "simulation_history.csv"
-        if csv_path.exists():
-            try:
-                df = pd.read_csv(csv_path, nrows=0)  # Get columns only
-                columns = df.columns.tolist()
-                
-                # Read in chunks to handle large files
-                chunk_size = 10000
-                for chunk in pd.read_csv(csv_path, chunksize=chunk_size):
-                    for col in chunk.columns:
-                        if chunk[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                            chunk_max = chunk[col].max()
-                            if col in maxima:
-                                maxima[col] = max(maxima[col], chunk_max)
-                            else:
-                                maxima[col] = chunk_max
-                
-                logger.info(f"Loaded {len(maxima)} column maxima from {csv_path}")
-                return maxima
-            except Exception as e:
-                logger.warning(f"Failed to load CSV history: {e}")
-        
-        
-        # Try Parquet chunks (Standard Location: output_dir/history_chunks/chunk_*.parquet)
-        chunks_dir = output_dir / "history_chunks"
-        parquet_pattern = []
-        
-        if chunks_dir.exists():
-            parquet_pattern = list(chunks_dir.glob("chunk_*.parquet"))
-        
-        # Fallback: Check older/flat structure
-        if not parquet_pattern:
-             parquet_pattern = list(output_dir.glob("chunk_*.parquet"))
-             
-        if parquet_pattern:
-            try:
-                for pq_file in sorted(parquet_pattern):
-                    df = pd.read_parquet(pq_file)
-                    for col in df.columns:
-                        if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                            chunk_max = df[col].max()
-                            if col in maxima:
-                                maxima[col] = max(maxima[col], chunk_max)
-                            else:
-                                maxima[col] = chunk_max
-                
-                logger.info(f"Loaded {len(maxima)} column maxima from {len(parquet_pattern)} Parquet files")
-                return maxima
-            except Exception as e:
-                logger.warning(f"Failed to load Parquet history: {e}")
+        def _try_dir(base_dir: Path) -> Optional[Dict[str, float]]:
+            # Try CSV first
+            csv_path = base_dir / "simulation_history.csv"
+            if csv_path.exists():
+                try:
+                    df = pd.read_csv(csv_path, nrows=0)  # Get columns only
+                    columns = df.columns.tolist()
+                    
+                    # Read in chunks to handle large files
+                    chunk_size = 10000
+                    for chunk in pd.read_csv(csv_path, chunksize=chunk_size):
+                        for col in chunk.columns:
+                            if chunk[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                                chunk_max = chunk[col].max()
+                                if col in maxima:
+                                    maxima[col] = max(maxima[col], chunk_max)
+                                else:
+                                    maxima[col] = chunk_max
+                    
+                    logger.info(f"Loaded {len(maxima)} column maxima from {csv_path}")
+                    return maxima
+                except Exception as e:
+                    logger.warning(f"Failed to load CSV history from {csv_path}: {e}")
+            
+            # Try Parquet chunks (Standard Location: base_dir/history_chunks/chunk_*.parquet)
+            chunks_dir = base_dir / "history_chunks"
+            parquet_pattern = []
+            
+            if chunks_dir.exists():
+                parquet_pattern = list(chunks_dir.glob("chunk_*.parquet"))
+            
+            # Fallback: Check older/flat structure
+            if not parquet_pattern:
+                 parquet_pattern = list(base_dir.glob("chunk_*.parquet"))
+                 
+            if parquet_pattern:
+                try:
+                    for pq_file in sorted(parquet_pattern):
+                        df = pd.read_parquet(pq_file)
+                        for col in df.columns:
+                            if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
+                                chunk_max = df[col].max()
+                                if col in maxima:
+                                    maxima[col] = max(maxima[col], chunk_max)
+                                else:
+                                    maxima[col] = chunk_max
+                    
+                    logger.info(f"Loaded {len(maxima)} column maxima from {len(parquet_pattern)} Parquet files")
+                    return maxima
+                except Exception as e:
+                    logger.warning(f"Failed to load Parquet history from {base_dir}: {e}")
+            
+            return None
+
+        # Try output_dir first, then parent (common when output_dir is /Economics)
+        _try_dir(output_dir)
+        if not maxima and output_dir.name.lower() == "economics":
+            _try_dir(output_dir.parent)
+        elif not maxima and output_dir.parent != output_dir:
+            _try_dir(output_dir.parent)
         
         return maxima
 
@@ -662,16 +771,13 @@ class CapexGenerator:
             return (0.0, 0.0, "Excluded", AACECostClass.CLASS_5, True)
 
         if mapping.cost_source == "fixed":
-            cost_usd = 0.0
+            cost_eur = 0.0
             formula = "Fixed Cost"
-            if mapping.fixed_cost_eur:
-                cost_usd = mapping.fixed_cost_eur  # Approx EUR -> USD
-                formula = f"Fixed: €{mapping.fixed_cost_eur:,.0f}"
-            elif mapping.vendor_quote_usd:
-                cost_usd = mapping.vendor_quote_usd
-                formula = f"Fixed: ${mapping.vendor_quote_usd:,.0f}"
-            
-            return (cost_usd, cost_usd, formula, AACECostClass.CLASS_1, True)
+            if mapping.vendor_quote_eur:
+                cost_eur = mapping.vendor_quote_eur
+                formula = f"Fixed: €{mapping.vendor_quote_eur:,.0f}"
+
+            return (cost_eur, cost_eur, formula, AACECostClass.CLASS_1, True)
 
         if mapping.cost_source == "iea_scaling":
             # Linear scaling without inflation (current cost basis)
@@ -686,7 +792,7 @@ class CapexGenerator:
             cp0 = design_capacity * unit_cost
             c_bm = cp0 * factor
             
-            formula = f"IEA Method: {design_capacity:,.1f} {mapping.capacity_unit} * ${unit_cost} * {factor}"
+            formula = f"IEA Method: {design_capacity:,.1f} {mapping.capacity_unit} * €{unit_cost} * {factor}"
             return (cp0, c_bm, formula, AACECostClass.CLASS_4, True)
 
         strategy = get_strategy(mapping.cost_source)
@@ -706,8 +812,8 @@ class CapexGenerator:
         
         # Calculate cost
         kwargs = {}
-        if mapping.vendor_quote_usd:
-            kwargs['vendor_quote_usd'] = mapping.vendor_quote_usd
+        if mapping.vendor_quote_eur:
+            kwargs['vendor_quote_eur'] = mapping.vendor_quote_eur
         
         C_p0, C_BM, formula, cost_class = strategy.calculate(
             design_capacity=design_capacity,
@@ -762,6 +868,9 @@ class CapexGenerator:
 
         # Calculate Base Cost (Cp0) 
         # log10(Cp0) = K1 + K2*log10(P) + K3*(log10(P)^2)
+        if motor_power_kw <= 0:
+            return 0.0, "Motor(P_elec=0kW): skipped"
+
         log_P = np.log10(motor_power_kw)
         log_Cp0 = coeffs["K1"] + coeffs["K2"] * log_P + coeffs["K3"] * (log_P ** 2)
         cp0_usd = 10 ** log_Cp0
@@ -773,7 +882,7 @@ class CapexGenerator:
         inflated_cost = cp0_usd * self.cepci.inflation_factor
         
         formula = (
-            f"Motor(P_elec={motor_power_kw:.1f}kW): ${inflated_cost:,.0f} "
+            f"Motor(P_elec={motor_power_kw:.1f}kW): €{inflated_cost:,.0f} "
             f"[{range_desc} K1={coeffs['K1']}]"
         )
         
@@ -891,12 +1000,12 @@ class CapexGenerator:
             warnings = []
             errors = []
             
-            if not within_bounds:
-                warnings.append(f"Capacity {capacity} outside correlation bounds")
-            
             # Suppress capacity error if we have a valid cost from a direct source (Vendor Quote)
             # This respects the user's "source of truth" in equipment_mappings.yaml
-            is_direct_cost = mapping.cost_source in ["vendor_quote", "fixed_cost", "manual"]
+            is_direct_cost = mapping.cost_source in ["vendor_quote", "fixed_cost", "manual", "excluded"]
+            
+            if not within_bounds and not is_direct_cost:
+                warnings.append(f"Capacity {capacity} outside correlation bounds")
             
             if capacity == 0:
                 if C_BM is not None and is_direct_cost:
@@ -918,6 +1027,7 @@ class CapexGenerator:
             entry = CapexEntry(
                 tag=mapping.tag,
                 name=mapping.name,
+                block=mapping.block,
                 topology_ids=mapping.topology_ids,
                 component_type=mapping.component_type,
                 design_capacity=round(capacity, 2),
@@ -954,9 +1064,9 @@ class CapexGenerator:
             self._export_csv(report, output_dir / "capex_report.csv")
             
             logger.info(f"CAPEX report generated: {output_dir}")
-            logger.info(f"  Equipment Total C_BM: ${report.total_C_BM:,.0f}")
-            logger.info(f"  Installation Total: ${report.total_installation:,.0f}")
-            logger.info(f"  Total Installed Cost: ${report.total_installed_cost:,.0f}")
+            logger.info(f"  Equipment Total C_BM: €{report.total_C_BM:,.0f}")
+            logger.info(f"  Installation Total: €{report.total_installation:,.0f}")
+            logger.info(f"  Total Installed Cost: €{report.total_installed_cost:,.0f}")
             logger.info(f"  Entries: {report.entries_with_cost}/{len(report.entries)} with valid cost")
         
         return report
@@ -974,22 +1084,24 @@ class CapexGenerator:
             
             # Header
             writer.writerow([
-                "Tag", "Name", "Component Type", "Topology IDs",
-                "Design Capacity", "Unit", "Capacity Source",
-                "C_BM (USD)", "C_BM Low", "C_BM High", "Cost Class",
+                "Tag", "Name", "Block", "Component Type", "Topology IDs",
+                "Design Capacity", "Unit", "Capacity Source", "Capacity Method",
+                "C_BM (EUR)", "C_BM Low", "C_BM High", "Cost Class",
                 "Formula", "Within Bounds", "Warnings", "Errors"
             ])
-            
+
             # Data rows
             for entry in report.entries:
                 writer.writerow([
                     entry.tag,
                     entry.name,
+                    entry.block,
                     entry.component_type,
                     ", ".join(entry.topology_ids),
                     entry.design_capacity,
                     entry.capacity_unit,
                     entry.capacity_source,
+                    entry.cost_source,
                     entry.C_BM or "",
                     entry.C_BM_low or "",
                     entry.C_BM_high or "",
@@ -1002,42 +1114,36 @@ class CapexGenerator:
             
             # Summary row
             writer.writerow([])
-            writer.writerow(["TOTAL", "", "", "", "", "", "",
+            writer.writerow(["TOTAL", "", "", "", "", "", "", "", "",
                            report.total_C_BM, report.total_C_BM_low, report.total_C_BM_high,
                            report.overall_cost_class.value, "", "", "", ""])
-        
-        
+
             # Append Block Summary Section
             writer.writerow([])
             writer.writerow([])
-            writer.writerow(["BLOCK SUMMARY", "", "", "", "", "", "", "", "", "", "", "", "", "", ""])
+            writer.writerow(["BLOCK SUMMARY"] + [""] * 16)
             writer.writerow([
-                "Block", "Equipment Count", "Equipment Total (USD)",
-                "Installation Categories", "Installation Total (USD)",
-                "Total Installed Cost (USD)", "", "", "", "", "", "", "", "", ""
-            ])
-            
+                "Block", "Equipment Count", "Equipment Total (EUR)",
+                "Installation Categories", "Installation Total (EUR)",
+                "Total Installed Cost (EUR)"] + [""] * 11)
+
             for summary in report.block_summaries:
-                install_cats = "; ".join([f"{k}: ${v:,.0f}" for k, v in summary.installation_costs.items()])
+                install_cats = "; ".join([f"{k}: €{v:,.0f}" for k, v in summary.installation_costs.items()])
                 writer.writerow([
                     summary.block_name,
                     len(summary.equipment_tags),
                     round(summary.equipment_total, 0),
                     install_cats,
                     round(summary.installation_total, 0),
-                    round(summary.total_installed_cost, 0),
-                    "", "", "", "", "", "", "", "", ""
-                ])
-                
+                    round(summary.total_installed_cost, 0)] + [""] * 11)
+
             # Overall Totals with Installation
             writer.writerow([])
             writer.writerow([
                 "OVERALL TOTAL", len(report.entries),
                 round(report.total_C_BM, 0), "",
                 round(report.total_installation, 0),
-                round(report.total_installed_cost, 0),
-                "", "", "", "", "", "", "", "", ""
-            ])
+                round(report.total_installed_cost, 0)] + [""] * 11)
 
         logger.info(f"✓ CSV export: {path}")
     

@@ -69,7 +69,49 @@ Optimizations are grouped into two phases with a mandatory re-profile gate betwe
 - **P12** `LUTManager.bind_lookup()` exists, but no hot components use it yet. Integrate into fixed‑fluid/property callers (compressors, valves, pumps) and re‑profile.
 - **P11 (optional)** component‑level memoization not added; current cache is global last‑pressure only (safe but less effective).
 
-**Re‑profile gate:** Benchmark harness now mirrors `engine.run()`; a fresh profile is still required before Phase 2.
+**Re-profile gate:** Not yet passed. The current report still reflects benchmark-only overhead; update the harness to mirror `engine.run()` and re-profile before Phase 2 estimates are trusted.
+
+#### Phase 1 — Partial / Still to Close
+
+The current benchmark shows the impact (or lack thereof) of Phase 1 work:
+
+- **P9 (Flow network pre-binding):** `_execute_single_flow` is still at 28.9 s cumtime / 8.0 s tottime across 1.44M calls. The plan estimated 2–3 s savings from pre-binding. The signal/flow split and flow-type pre-mapping were done, but without the actual callable pre-binding (`_resolved_flows`), the per-call dict lookups and `isinstance` checks remain. This is the #2 bottleneck in the profile — finishing it is worthwhile. However, the realistic gain from pre-binding alone is modest (~2 s) because most of the 28.9 s cumtime is in the callees (component `get_output`/`receive_input`), not dispatch overhead.
+- **P12 (LUT `bind_lookup`):** `lut_manager.lookup()` is at 20.8 s cumtime (4.7M calls), with `_interpolate_2d` at 12.7 s (4.3M calls). The `bind_lookup` infrastructure exists but is unused by hot components. This is the #5 bottleneck. Integrating it into compressors (191K calls), valves (30K calls), and pumps (80K calls) would bypass the Python dict dispatch on every call. Estimated 4–6 s savings is reasonable — the 8.1 s gap between lookup cumtime and `_interpolate_2d` cumtime represents the Python overhead that pre-binding eliminates.
+- **P11 (component-level memoization):** The single-entry global cache was implemented. The profile doesn't directly show `get_saturation_properties` in the top 50, which may indicate it dropped out or was absorbed. The optional per-component cache would help if multiple components query at the same pressure within a step, but without it appearing in the top 50, this is low priority.
+
+**Verdict on partials:** P12 is the highest-value unfinished item (~4–6 s). P9 pre-binding is worth finishing but lower impact (~2 s). P11 component-level cache can be deferred.
+
+#### Phase 2 — Critical Analysis
+
+Comparing plan estimates against the current profile numbers:
+
+| ID | Plan's Target | Current Profile | Plan Est. Savings | Assessment |
+|---|---|---|---|---|
+| P1 | Interchanger JIT flash | 24.3 s cumtime (was 36.3 s in plan baseline) | 25–30 s | Overestimated. Current cumtime is 24.3 s, not 36.3 s. The plan baseline was from a different benchmark run. Realistic savings: ~15–18 s (getting from 24 s to ~6–8 s). Still the single biggest win. |
+| P5 | Dry cooler fused JIT | 14.9 s cumtime, 9.8 s tottime | 5–7 s | Reasonable. 9.8 s tottime is Python orchestration between JIT calls. Fusing could reclaim ~5 s. |
+| P6 | Mixer PH-flash JIT | 13.5 s cumtime, `_perform_ph_flash` = 8.9 s | 5–6 s | Reasonable. Same pattern as P1 but smaller. |
+| P7 | `numpy.interp` scalar | Not in top 50 individually | 2–4 s | Likely irrelevant now. The plan correctly flagged this for re-scoping. If it's not in the top 50, the residual cost post-Phase-1 may be <1 s. Drop or defer. |
+| P8 | Stream creation | `__post_init__` = 4.2 s, `_cache_composition_arrays` = 11.0 s, `get_composition_arrays` = 11.9 s | 5–8 s | Underestimated risk, potentially overestimated savings. The 11.9 s in `get_composition_arrays` is mostly consumed by callers (interchanger, mixer, etc). If P1 and P6 JIT-compile those callers, they bypass `get_composition_arrays` entirely. The residual savings from `from_arrays` may be much smaller. Also, the mutation safety concern is real and non-trivial to enforce. |
+| P10 | LUT float32 | N/A (memory) | 550 MB | Valid but has a hidden cost. Numba recompiles for float32 signatures — this interacts with P0 (warm-up). More importantly, float32 introduces interpolation noise that compounds through iterative solvers (P1, P6). Should be done after P1/P6 are validated with float64, not before. |
+| P1.5 | Wire `mixture_thermo` to JIT | Not directly visible | TBD | Correct to defer. Without knowing which callers remain on the slow path post-P1/P6, this is speculative. |
+| P3b | CoolProp → LUT routing | PropsSI = 5.0 s (800K calls) | 3–4 s | Reasonable. Down from 8.6 s in plan baseline. A 1D water saturation LUT for dry cooler/chiller would eliminate most of these calls. |
+
+**Key Concerns with Phase 2:**
+- Double-counting is real. P1, P6, P8, and P7 share call chains. If P1 JIT-compiles the interchanger, it no longer calls `get_composition_arrays`, `lut_manager.lookup`, or `np.interp` from Python — those functions' profile times drop without any work on P7/P8/P12. The plan's combined estimate of 45–59 s for Phase 2 likely double-counts 10–15 s.
+- Numba JIT overhead is still 15.0 s (`_compile_for_args`). This means P0 warm-up is either incomplete or not running in this benchmark. The max step time increased to 2,256 ms (from 1,906 ms in the plan baseline). This needs to be fixed before Phase 2 — otherwise JIT compilation from new P1/P5/P6 kernels will add even more first-run cost.
+- The re-profile gate hasn't been passed. The plan requires a clean post-Phase-1 profile before starting Phase 2. The current report still shows benchmark-specific overhead (the plan notes ~50–60 s of it). Until the harness mirrors `engine.run()`, Phase 2 savings estimates are unreliable.
+
+**Recommended Phase 2 priority order:**
+- P1 (interchanger JIT) — largest single target, ~15–18 s realistic
+- P6 (mixer PH-flash JIT) — ~5–6 s, shares infrastructure with P1
+- P5 (dry cooler fused JIT) — ~5 s, independent
+- P3b (CoolProp → LUT) — ~3–4 s, enables P5 to go fully JIT
+- P10 (float32 LUTs) — memory only, do last after all JIT solvers are validated
+- P8 (Stream fast-path) — re-evaluate after P1/P6, may be unnecessary
+- P7 (`np.interp`) — likely drop entirely
+- P1.5 (mixture_thermo wiring) — evaluate only after re-profile
+
+Realistic Phase 2 savings after deduplication: ~25–35 s + 550 MB memory, not 45–59 s. Combined with Phase 1 residual work (P9, P12: ~6–8 s), total remaining opportunity is roughly 30–40 s from the current 208 s loop time.
 
 ### Phase 2 — Physics-Touching Refactors (Require Validation)
 

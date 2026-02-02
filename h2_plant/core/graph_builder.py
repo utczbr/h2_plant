@@ -499,7 +499,8 @@ class PlantGraphBuilder:
                  pump_id=pump_id,
                  target_pressure_pa=target_p,
                  eta_is=eta_is,
-                 eta_m=eta_m
+                 eta_m=eta_m,
+                 capacity_kg_h=capacity
              )
 
         elif node.type == "BiogasSource":

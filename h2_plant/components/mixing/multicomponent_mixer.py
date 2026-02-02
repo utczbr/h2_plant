@@ -419,7 +419,7 @@ class MultiComponentMixer(Component):
         """
         Solve PH flash (Enthalpy conserved).
         T_new such that H(T_new) = H_target.
-        Essentially a weighted average of enthalpies using Newton-Raphson.
+        Uses JIT-compiled Newton-Raphson solver (P6).
         """
         total_moles = sum(self.moles_stored.values())
         if total_moles < 1e-12:
@@ -431,52 +431,14 @@ class MultiComponentMixer(Component):
         for i, s in enumerate(self.species_keys):
             mole_fractions[i] = self.moles_stored[s] / total_moles
 
-        # Newton-Raphson Solver for H(T) = H_target
-        T = self.temperature_k
-        max_iter = 10
-        tol = 0.05
+        from h2_plant.optimization.numba_ops import solve_ph_flash_jit
 
-        for _ in range(max_iter):
-            h_calc = 0.0
-            cp_calc = 0.0
-            
-            # Using pre-computed matrices
-            A = self._cp_coeffs[:, 0]
-            B = self._cp_coeffs[:, 1]
-            C = self._cp_coeffs[:, 2]
-            D = self._cp_coeffs[:, 3]
-            E = self._cp_coeffs[:, 4]
-            
-            T_ref = 298.15
-            
-            # Integral terms (H - H_form)
-            # Int = A*T + B*T^2/2 ...
-            def integ(t_val):
-                return A*t_val + 0.5*B*t_val**2 + (1.0/3.0)*C*t_val**3 + 0.25*D*t_val**4 - E/t_val if t_val > 0 else 0
-            
-            delta_h_sens = integ(T) - integ(T_ref)
-            h_total_species = self._h_formations + delta_h_sens 
-            h_calc = np.sum(mole_fractions * h_total_species)
-            
-            # Cp terms
-            cp_species = A + B*T + C*T**2 + D*T**3 + E/(T**2)
-            cp_calc = np.sum(mole_fractions * cp_species)
-            
-            if abs(cp_calc) < 1e-4:
-                break
-                
-            delta_T = (h_target_molar - h_calc) / cp_calc
-            T = T + delta_T
-            
-            if abs(delta_T) < tol:
-                break
-                
-            # Clamp physics
-            T = max(275.0, min(T, 5000.0))
-            
-        self.temperature_k = T
-        
-        
+        self.temperature_k = solve_ph_flash_jit(
+            h_target_molar, mole_fractions,
+            self._h_formations, self._cp_coeffs,
+            self.temperature_k, 0.05, 10
+        )
+
         # In Continuous Flow, Pressure is NOT calculated from Volume (P != nRT/V)
         # It is determined by the hydraulic condition (governed by step() logic)
         # We KEEP self.pressure_pa as set in step()

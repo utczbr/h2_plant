@@ -199,7 +199,7 @@ def run_with_dispatch_strategy(
     # Threshold: 7 days × 24 hours × 60 minutes = 10,080 steps
     # Always use chunked history for consistent parquet output (enables graph compatibility)
     use_chunked_history = True  # Previously: total_steps > 10_080
-    engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history)
+    engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history, resume=bool(resume_from_hour))
 
     # Run simulation
     # If we have a checkpoint path, the engine will load it and update current_hour.
@@ -595,6 +595,108 @@ def generate_graphs(
         # Note: We load full resolution data first, then resample during execution
         df = executor.load_data(history=history, resample_freq=resample_freq, chunks_dir=chunks_dir)
         logger.info(f"Loaded DataFrame: {df.shape[0]} rows x {df.shape[1]} columns")
+
+        # ------------------------------------------------------------------
+        # Inject CAPEX/OPEX into df.attrs['metrics'] for economics graphs
+        # ------------------------------------------------------------------
+        try:
+            import csv
+            import json
+
+            def _to_float(value):
+                if value is None:
+                    return None
+                if isinstance(value, (int, float)):
+                    return float(value)
+                text = str(value).strip().replace(",", "").replace("€", "").replace("$", "")
+                try:
+                    return float(text)
+                except ValueError:
+                    return None
+
+            def _parse_capex_csv(path: Path) -> Dict[str, float]:
+                totals: Dict[str, float] = {}
+                total_cbm = None
+                total_installed = None
+
+                with open(path, "r", encoding="utf-8") as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if not row:
+                            continue
+                        label = str(row[0]).strip().upper()
+                        if label == "TOTAL":
+                            # Standard totals row in itemized section
+                            if len(row) > 9:
+                                total_cbm = _to_float(row[9]) or total_cbm
+                        elif label == "OVERALL TOTAL":
+                            # Summary row in block summary section
+                            if len(row) > 2:
+                                total_cbm = total_cbm or _to_float(row[2])
+                            if len(row) > 5:
+                                total_installed = _to_float(row[5]) or total_installed
+
+                if total_cbm is not None:
+                    totals["total_c_bm"] = total_cbm
+                    totals["capex"] = total_cbm
+                    totals["capex_total"] = total_cbm
+                if total_installed is not None:
+                    totals["total_installed_cost"] = total_installed
+                    totals["fci"] = total_installed
+                return totals
+
+            metrics = df.attrs.get("metrics", {})
+            if not isinstance(metrics, dict):
+                metrics = {}
+
+            # CAPEX (CSV)
+            capex_path = output_dir / "capex_report.csv"
+            if not capex_path.exists():
+                alt_capex = output_dir / "Economics" / "capex_report.csv"
+                if alt_capex.exists():
+                    capex_path = alt_capex
+            if capex_path.exists():
+                capex_metrics = _parse_capex_csv(capex_path)
+                for k, v in capex_metrics.items():
+                    metrics.setdefault(k, v)
+            else:
+                logger.info(f"CAPEX report not found at {capex_path}")
+
+            # OPEX (JSON)
+            opex_path = output_dir / "opex_report.json"
+            if not opex_path.exists():
+                alt_opex = output_dir / "Economics" / "opex_report.json"
+                if alt_opex.exists():
+                    opex_path = alt_opex
+            if opex_path.exists():
+                with open(opex_path, "r", encoding="utf-8") as f:
+                    opex_data = json.load(f)
+                if isinstance(opex_data, dict):
+                    for key in [
+                        "total_opex",
+                        "total_fixed_cost",
+                        "total_variable_cost",
+                        "total_maintenance_cost",
+                        "annual_opex",
+                        "opex_annual",
+                        "opex",
+                        "fci",
+                    ]:
+                        if key in opex_data:
+                            val = _to_float(opex_data.get(key))
+                            if val is not None:
+                                metrics.setdefault(key, val)
+                    if "total_opex" in opex_data:
+                        metrics.setdefault("opex_total", _to_float(opex_data.get("total_opex")))
+                        metrics.setdefault("total_annual_opex", _to_float(opex_data.get("total_opex")))
+                else:
+                    logger.warning(f"OPEX report JSON did not contain a dict: {opex_path}")
+            else:
+                logger.info(f"OPEX report not found at {opex_path}")
+
+            df.attrs["metrics"] = metrics
+        except Exception as e:
+            logger.warning(f"Failed to inject CAPEX/OPEX metrics: {e}", exc_info=True)
         
         # Execute all enabled graphs with timeout protection and resampling
         timeout = viz_config.get('visualization', {}).get('timeout_seconds', 60)
@@ -798,7 +900,7 @@ def main():
             strategy=args.strategy,
             resume_from_hour=resume_hour,
             resume_checkpoint_path=checkpoint_path if resume_hour is not None else None,
-            load_history=(args.resample is None) # Skip full load if resampling requested (use streaming)
+            load_history=True  # Always load history; executor handles resampling from dict
         )
     
     # Memory profiling report

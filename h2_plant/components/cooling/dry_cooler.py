@@ -288,71 +288,23 @@ class DryCooler(Component):
         m_dot_gas = self.inlet_stream.mass_flow_kg_h / 3600.0
 
         # ================================================================
-        # Dynamic U-Value Calculation (TQC: Gas -> Glycol)
+        # Fused TQC + DC Thermal Solution (P5 JIT Kernel)
         # ================================================================
-        # Use time-lagged film temperature for property estimation
-        T_prev_k = (self.outlet_temp_c + 273.15) if self.outlet_temp_c > 0 else self.inlet_stream.temperature_k
-        T_film_k = 0.5 * (self.inlet_stream.temperature_k + T_prev_k)
-        
-        # Gas viscosity and Prandtl number (use defaults, could extend with LUT)
-        # H2: μ ≈ 9e-6 Pa·s, k ≈ 0.18 W/mK, Pr ≈ 0.7
-        # O2: μ ≈ 2e-5 Pa·s, k ≈ 0.027 W/mK, Pr ≈ 0.7
-        if self.fluid_type == "H2":
-            mu_gas = 9.0e-6 * (T_film_k / 300.0) ** 0.7  # Sutherland approx
-            k_gas = 0.18
-            pr_gas = 0.7
-        else:
-            mu_gas = 2.0e-5 * (T_film_k / 300.0) ** 0.7
-            k_gas = 0.027
-            pr_gas = 0.7
-        
-        # Calculate Reynolds and Nusselt for gas side (tube-side, cooling)
-        Re_gas = numba_ops.calculate_reynolds_flux(
-            m_dot_gas, self._tqc_flow_area_gas, DCC.D_TUBE_IN_M, mu_gas
-        )
-        Nu_gas = numba_ops.calculate_nusselt_dittus_boelter(Re_gas, pr_gas, False)  # Cooling
-        h_gas = (Nu_gas * k_gas) / DCC.D_TUBE_IN_M
-        
-        # Calculate Reynolds and Nusselt for glycol side (shell-side, heating)
-        Re_gly = numba_ops.calculate_reynolds_flux(
-            self.glycol_flow_kg_s, self._tqc_flow_area_glycol, DCC.D_TUBE_OUT_M, DCC.MU_GLYCOL_PA_S
-        )
-        Nu_gly = numba_ops.calculate_nusselt_dittus_boelter(Re_gly, DCC.PR_GLYCOL, True)  # Heating
-        h_gly = (Nu_gly * DCC.K_GLYCOL_W_M_K) / DCC.D_TUBE_OUT_M
-        
-        # Calculate dynamic U-value with fouling (steel tube k ≈ 50 W/mK)
-        K_TUBE_WALL = 50.0  # Carbon steel thermal conductivity
-        dynamic_u = numba_ops.calculate_dynamic_u_fouled(
-            h_gas, h_gly, 
-            DCC.D_TUBE_IN_M, DCC.D_TUBE_OUT_M, 
-            K_TUBE_WALL, 
-            0.0, DCC.R_FOUL_GLYCOL  # No gas-side fouling, glycol fouling
-        )
-        
-        # Use dynamic U if valid, otherwise fallback to design value
-        if dynamic_u > 0:
-            self.tqc_u_value = dynamic_u
-        else:
-            self.tqc_u_value = DCC.U_VALUE_TQC_W_M2_K
-
-        # PERFORMANCE: Only use rigorous mix_thermo for true multi-species streams
-        # For near-pure streams (>98% single species), fallback is faster and equally accurate
+        T_gas_in_k = self.inlet_stream.temperature_k
         comp = self.inlet_stream.composition
-        dominant_frac = max(comp.values()) if comp else 0
-        use_mix_thermo = (dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None)
+
+        # Gas Cp (mass-weighted average)
         cp_gas_mix = 0.0
-        
-        if use_mix_thermo:
+        # PERFORMANCE: Only use rigorous mix_thermo for true multi-species streams
+        dominant_frac = max(comp.values()) if comp else 0
+        if dominant_frac < 0.98 and MIX_THERMO_AVAILABLE and mix_thermo is not None:
             try:
                 lut_manager = None
                 if hasattr(self, 'registry') and self.registry is not None:
                     lut_manager = self.registry.get('lut_manager')
-
-                if (lut_manager is not None and 
-                    lut_manager.stacked_C is not None and 
+                if (lut_manager is not None and
+                    lut_manager.stacked_C is not None and
                     lut_manager._pressure_grid is not None):
-                    
-                    # optimized JIT path
                     mass_fracs_arr, _, _, _ = self.inlet_stream.get_composition_arrays()
                     cp_gas_mix = numba_ops.get_mix_cp_jit(
                         self.inlet_stream.pressure_pa,
@@ -362,128 +314,72 @@ class DryCooler(Component):
                         lut_manager._pressure_grid,
                         lut_manager._temperature_grid
                     )
-                elif lut_manager is not None:
-                     # Python fallback (slow but robust if JIT not ready)
-                     P_in = self.inlet_stream.pressure_pa
-                     T_in = self.inlet_stream.temperature_k
-                     h_t1 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in, lut_manager)
-                     h_t2 = mix_thermo.get_mixture_enthalpy(comp, P_in, T_in - 1.0, lut_manager)
-                     cp_gas_mix = h_t1 - h_t2
-            except Exception as e:
-                # logger.warning(f"DryCooler mixture thermodynamics error: {e}")
+            except Exception:
                 pass
 
-        # Fallback: Mass-weighted average of constant Cp (FAST)
         if cp_gas_mix <= 0:
             for sp, y in comp.items():
                 if sp == 'H2O':
-                    cp_sp = 1860.0  # Water vapor Cp (J/kg·K)
+                    cp_sp = 1860.0
                 elif sp == 'H2':
                     cp_sp = GasConstants.CP_H2_AVG
                 elif sp == 'O2':
                     cp_sp = GasConstants.CP_O2_AVG
                 else:
-                    cp_sp = 1000.0  # Conservative default
+                    cp_sp = 1000.0
                 cp_gas_mix += y * cp_sp
 
-        # Enhancement for wet streams with entrained liquid
-        h2o_liq_frac = comp.get('H2O_liq', 0.0)
-        if h2o_liq_frac > 0:
-            # Liquid water thermal mass included implicitly via higher effective Cp
-            pass
+        # Gas viscosity for dynamic U
+        T_prev_k = (self.outlet_temp_c + 273.15) if self.outlet_temp_c > 0 else T_gas_in_k
+        T_film_k = 0.5 * (T_gas_in_k + T_prev_k)
 
-        # Heat capacity rates
-        C_hot_gas = m_dot_gas * cp_gas_mix
-        C_coolant = self.glycol_flow_kg_s * self.glycol_cp_j_kg_k
+        if self.fluid_type == "H2":
+            mu_gas = 9.0e-6 * (T_film_k / 300.0) ** 0.7
+            k_gas = 0.18
+        else:
+            mu_gas = 2.0e-5 * (T_film_k / 300.0) ** 0.7
+            k_gas = 0.027
+        pr_gas = 0.7
 
-        # ================================================================
-        # Stage 1: TQC (Counter-Flow Heat Exchanger)
-        # ================================================================
-        # Counter-flow achieves higher effectiveness than parallel-flow
-        # for the same NTU, making it preferred for process applications.
-        T_gas_in_k = self.inlet_stream.temperature_k
-        
-        # Get glycol inlet temperature from CoolingManager or local state
+        # Glycol inlet temperature
         if self.cooling_manager:
             T_glycol_in_k = self.cooling_manager.glycol_supply_temp_c + 273.15
         else:
             T_glycol_in_k = self.t_glycol_cold_c + 273.15
 
-        C_min_tqc = min(C_hot_gas, C_coolant)
-        C_max_tqc = max(C_hot_gas, C_coolant)
+        T_air_in_k = DCC.T_AIR_DESIGN_C + 273.15
+        use_dc = not bool(self.cooling_manager)
 
-        if C_min_tqc > 1e-9:
-            R_tqc = C_min_tqc / C_max_tqc if C_max_tqc > 1e-9 else 0.0
-            NTU_tqc = (self.tqc_u_value * self.tqc_area_m2) / C_min_tqc
-            eff_tqc = numba_ops.counter_flow_ntu_effectiveness(NTU_tqc, R_tqc)
-        else:
-            NTU_tqc = 0.0
-            eff_tqc = 0.0
+        (T_gas_out_k, T_glycol_out_k, T_glycol_return_k,
+         Q_tqc, Q_dc, eff_tqc, eff_dc) = numba_ops.solve_dry_cooler_thermal_jit(
+            m_dot_gas, cp_gas_mix, T_gas_in_k,
+            self.glycol_flow_kg_s, self.glycol_cp_j_kg_k,
+            T_glycol_in_k,
+            self.tqc_u_value, self.tqc_area_m2,
+            T_air_in_k,
+            self.dc_u_value, self.dc_area_m2,
+            self.dc_air_flow_kg_s, DCC.CP_AIR_J_KG_K,
+            use_dc,
+            self._tqc_flow_area_gas, self._tqc_flow_area_glycol,
+            DCC.D_TUBE_IN_M, DCC.D_TUBE_OUT_M,
+            mu_gas, k_gas, pr_gas,
+            DCC.MU_GLYCOL_PA_S, DCC.K_GLYCOL_W_M_K, DCC.PR_GLYCOL,
+            50.0, DCC.R_FOUL_GLYCOL,
+            True  # use_dynamic_u
+        )
 
         self.tqc_effectiveness = eff_tqc
-
-        Q_max_tqc = C_min_tqc * (T_gas_in_k - T_glycol_in_k)
-        Q_tqc = eff_tqc * Q_max_tqc
         self.tqc_duty_kw = Q_tqc / 1000.0
-
-        # Energy balance: outlet temperatures
-        if C_hot_gas > 1e-9:
-            T_gas_out_k = T_gas_in_k - Q_tqc / C_hot_gas
-        else:
-            T_gas_out_k = T_gas_in_k
-
-        if C_coolant > 1e-9:
-            T_glycol_out_k = T_glycol_in_k + Q_tqc / C_coolant
-        else:
-            T_glycol_out_k = T_glycol_in_k
-            
         self.t_glycol_hot_c = T_glycol_out_k - 273.15
-        # ================================================================
-        # Stage 2: DC (Cross-Flow Air Cooler)
-        # ================================================================
-        # Cross-flow geometry is standard for forced-air coolers due to
-        # fan and duct arrangement, though less effective than counter-flow.
-        T_air_in_k = DCC.T_AIR_DESIGN_C + 273.15
-        
-        # If connected to Central Utility, the local air cooler is BYPASSED.
-        # The glycol carries heat to the central cooling tower.
-        if self.cooling_manager:
-            self.dc_duty_kw = 0.0
-            self.fan_power_kw = 0.0 # No local fan
-            self.dc_effectiveness = 0.0
-            # Glycol returns "hot" to the manager (Loop logic handled by Manager)
-            # For local state tracking, we assume T_return = T_out (no local cooling)
-            T_glycol_return_k = T_glycol_out_k
-        else:
-            # Local Dry Cooler Mode
-            # Cross-flow geometry is standard for forced-air coolers due to
-            # fan and duct arrangement, though less effective than counter-flow.
-            T_air_in_k = DCC.T_AIR_DESIGN_C + 273.15
-            C_air = self.dc_air_flow_kg_s * DCC.CP_AIR_J_KG_K
 
-            C_min_dc = min(C_coolant, C_air)
-            C_max_dc = max(C_coolant, C_air)
-            
-            if C_min_dc > 1e-9:
-                R_dc = C_min_dc / C_max_dc if C_max_dc > 1e-9 else 0.0
-                NTU_dc = (self.dc_u_value * self.dc_area_m2) / C_min_dc
-                eff_dc = numba_ops.dry_cooler_ntu_effectiveness(NTU_dc, R_dc)
-            else:
-                NTU_dc = 0.0
-                eff_dc = 0.0
-
+        if use_dc:
             self.dc_effectiveness = eff_dc
-
-            Q_max_dc = C_min_dc * (T_glycol_out_k - T_air_in_k)
-            Q_dc = eff_dc * Q_max_dc
             self.dc_duty_kw = Q_dc / 1000.0
+        else:
+            self.dc_duty_kw = 0.0
+            self.fan_power_kw = 0.0
+            self.dc_effectiveness = 0.0
 
-            # Glycol return temperature (quasi-dynamic state update)
-            if C_coolant > 1e-9:
-                T_glycol_return_k = T_glycol_out_k - Q_dc / C_coolant
-            else:
-                T_glycol_return_k = T_glycol_out_k
-                
         self.t_glycol_cold_c = T_glycol_return_k - 273.15
 
         # Gas-side pressure drop through TQC internals
@@ -510,7 +406,7 @@ class DryCooler(Component):
         if T_gas_out_k < T_out_limit_k:
             # Clamp T_out and recalculate Q to conserve energy
             T_gas_out_k = T_out_limit_k
-            Q_tqc_real = C_hot_gas * (T_gas_in_k - T_gas_out_k)
+            Q_tqc_real = m_dot_gas * cp_gas_mix * (T_gas_in_k - T_gas_out_k)
             self.tqc_duty_kw = Q_tqc_real / 1000.0
 
         # Prepare output stream
@@ -597,23 +493,38 @@ class DryCooler(Component):
         # Mass condensed = Initial Vapor - Final Vapor (kg/h)
         m_condensed_kg_h = max(0.0, m_H2O_vap_in - m_H2O_vapor_out)
         
-        # Calculate Delta H_vap using rigorous CoolProp properties at saturation
-        # Uses T_gas_out_k as the saturation temperature
-        try:
-            # Enthalpy of Saturated Vapor (Q=1)
-            h_vap_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 1.0, 'Water')
-            # Enthalpy of Saturated Liquid (Q=0)
-            h_liq_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 0.0, 'Water')
-            
-            # Check for valid return values (CoolPropLUT returns 0.0 on failure)
-            if h_vap_sat == 0.0 or h_liq_sat == 0.0:
-                 delta_h_vap = 2400.0 * 1000.0 # Fallback J/kg
+        # Calculate Delta H_vap using LUT saturation data (P3b: avoids CoolProp)
+        lut_mgr_ref = None
+        if hasattr(self, 'registry') and self.registry is not None:
+            lut_mgr_ref = self.registry.get('lut_manager')
+
+        delta_h_vap = 2400.0 * 1000.0  # Fallback J/kg
+        if (lut_mgr_ref is not None and
+            lut_mgr_ref._saturation_temp_grid is not None and
+            'H_liq' in lut_mgr_ref._saturation_lut and
+            'H_vap' in lut_mgr_ref._saturation_lut):
+            T_grid = lut_mgr_ref._saturation_temp_grid
+            if T_grid[0] <= T_gas_out_k <= T_grid[-1]:
+                h_liq_sat = float(np.interp(T_gas_out_k, T_grid, lut_mgr_ref._saturation_lut['H_liq']))
+                h_vap_sat = float(np.interp(T_gas_out_k, T_grid, lut_mgr_ref._saturation_lut['H_vap']))
+                if h_vap_sat > 0 and h_liq_sat > 0:
+                    delta_h_vap = h_vap_sat - h_liq_sat
             else:
-                 delta_h_vap = h_vap_sat - h_liq_sat # J/kg
-                 
-        except Exception as e:
-            logger.warning(f"DryCooler thermodynamic property error: {e}")
-            delta_h_vap = 2400.0 * 1000.0 # Fallback J/kg
+                try:
+                    h_vap_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 1.0, 'Water')
+                    h_liq_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 0.0, 'Water')
+                    if h_vap_sat > 0 and h_liq_sat > 0:
+                        delta_h_vap = h_vap_sat - h_liq_sat
+                except Exception:
+                    pass
+        else:
+            try:
+                h_vap_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 1.0, 'Water')
+                h_liq_sat = CoolPropLUT.PropsSI('H', 'T', T_gas_out_k, 'Q', 0.0, 'Water')
+                if h_vap_sat > 0 and h_liq_sat > 0:
+                    delta_h_vap = h_vap_sat - h_liq_sat
+            except Exception:
+                pass
             
         q_latent_kw = (m_condensed_kg_h / 3600.0) * (delta_h_vap / 1000.0) # kW
         

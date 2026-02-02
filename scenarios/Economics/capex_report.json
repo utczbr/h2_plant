@@ -1,0 +1,2835 @@
+{
+  "generated_at": "2026-02-02T14:13:19.519884",
+  "simulation_name": "Plant PEM+SOEC+ATR original tank (30 tanks with 107.37 m3 each)",
+  "total_simulation_hours": null,
+  "cepci": {
+    "base_year": 2001,
+    "base_index": 397.0,
+    "current_year": 2025,
+    "current_index": 797.0,
+    "usd_to_eur_rate": 0.8573
+  },
+  "currency": "EUR",
+  "overall_cost_class": "Class 4",
+  "entries": [
+    {
+      "tag": "MTC-1",
+      "name": "Multistage Steam Compressor (SOEC Feed)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Steam_Compressor_1",
+        "SOEC_Steam_Compressor_2"
+      ],
+      "component_type": "Centrifugal Compressor",
+      "design_capacity": 694.49,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 211638.74,
+      "C_BM": 2283712.59,
+      "C_BM_low": 1598598.81,
+      "C_BM_high": 2968826.37,
+      "cost_formula": "log10(Cp0) = 2.2891 + 1.3604*log10(694.49) + -0.1027*[log10(694.49)]\u00b2; Cp0 = $211,639; C_BM = Cp0 \u00d7 2.15 \u00d7 2.5 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.2891,
+        "K2": 1.3604,
+        "K3": -0.1027,
+        "F_m": 2.5,
+        "F_m_note": "SS for steam service",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_Steam_Compressor_1: est power from max_flow_kg_h(4000.0), PR=5.00, T=25.0C",
+        "SOEC_Steam_Compressor_2: est power from max_flow_kg_h(4000.0), PR=2.17, T=25.0C",
+        "Stainless Steel 316 required for 250\u00b0C steam"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "MTC-4",
+      "name": "Multistage H2 Compressor (6 stages - SOEC Train)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Compressor_S1",
+        "SOEC_H2_Compressor_S2",
+        "SOEC_H2_Compressor_S3",
+        "SOEC_H2_Compressor_S4",
+        "SOEC_H2_Compressor_S5",
+        "SOEC_H2_Compressor_S6"
+      ],
+      "component_type": "Reciprocating Compressor",
+      "design_capacity": 15271.32,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 1425539.84,
+      "C_BM": 12921261.91,
+      "C_BM_low": 9044883.34,
+      "C_BM_high": 16797640.48,
+      "cost_formula": "log10(Cp0) = 2.0309 + 1.2524*log10(15271.32) + -0.0638*[log10(15271.32)]\u00b2; Cp0 = $1,425,540; C_BM = Cp0 \u00d7 2.15 \u00d7 2.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.0309,
+        "K2": 1.2524,
+        "K3": -0.0638,
+        "F_m": 2.1,
+        "F_m_note": "SS for H2 service",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Compressor_S1: est power from max_flow_kg_h(400.0), PR=200.00, T=25.0C",
+        "SOEC_H2_Compressor_S2: est power from max_flow_kg_h(400.0), PR=200.00, T=25.0C",
+        "SOEC_H2_Compressor_S3: est power from max_flow_kg_h(400.0), PR=200.00, T=25.0C",
+        "SOEC_H2_Compressor_S4: est power from max_flow_kg_h(400.0), PR=200.00, T=25.0C",
+        "SOEC_H2_Compressor_S5: est power from max_flow_kg_h(400.0), PR=200.00, T=25.0C",
+        "SOEC_H2_Compressor_S6: est power from max_flow_kg_h(400.0), PR=41.00, T=25.0C",
+        "Reciprocating type for high pressure ratio",
+        "Alloy steel construction for H2 service"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HP-COMP",
+      "name": "HP Storage Compressor Train (4 stages)",
+      "block": "Storage",
+      "topology_ids": [
+        "HP_Compressor_S2",
+        "HP_Compressor_S3",
+        "HP_Compressor_S4",
+        "HP_Compressor_S5"
+      ],
+      "component_type": "Reciprocating Compressor",
+      "design_capacity": 266.07,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 49292.1,
+      "C_BM": 446789.47,
+      "C_BM_low": 312752.63,
+      "C_BM_high": 580826.31,
+      "cost_formula": "log10(Cp0) = 2.0309 + 1.2524*log10(266.07) + -0.0638*[log10(266.07)]\u00b2; Cp0 = $49,292; C_BM = Cp0 \u00d7 2.15 \u00d7 2.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.0309,
+        "K2": 1.2524,
+        "K3": -0.0638,
+        "F_m": 2.1,
+        "F_m_note": "SS for H2 service",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "HP_Compressor_S2: est power from max_flow_kg_h(720.0), PR=16.67, T=25.0C",
+        "HP_Compressor_S3: est power from max_flow_kg_h(720.0), PR=8.33, T=25.0C",
+        "HP_Compressor_S4: est power from max_flow_kg_h(720.0), PR=4.00, T=25.0C",
+        "HP_Compressor_S5: est power from max_flow_kg_h(720.0), PR=2.00, T=25.0C"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DCL-7",
+      "name": "SOEC H2 Intercoolers (6 units)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Intercooler_1",
+        "SOEC_H2_Intercooler_2",
+        "SOEC_H2_Intercooler_3",
+        "SOEC_H2_Intercooler_4",
+        "SOEC_H2_Intercooler_5",
+        "SOEC_H2_Intercooler_6"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 1080.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 81119.23,
+      "C_BM": 1061039.03,
+      "C_BM_low": 742727.32,
+      "C_BM_high": 1379350.74,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(1080.00) + 0.1634*[log10(1080.00)]\u00b2; Cp0 = $81,119; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.09) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_p": 1.09,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Intercooler_1: TQC Area Only (180.0) [Central Utility]",
+        "SOEC_H2_Intercooler_2: TQC Area Only (180.0) [Central Utility]",
+        "SOEC_H2_Intercooler_3: TQC Area Only (180.0) [Central Utility]",
+        "SOEC_H2_Intercooler_4: TQC Area Only (180.0) [Central Utility]",
+        "SOEC_H2_Intercooler_5: TQC Area Only (180.0) [Central Utility]",
+        "SOEC_H2_Intercooler_6: TQC Area Only (180.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DCL-SOEC-H2",
+      "name": "SOEC H2 Dry Cooler (Pre-Compression)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_DryCooler_1"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 10.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 15314.4,
+      "C_BM": 200587.87,
+      "C_BM_low": 140411.51,
+      "C_BM_high": 260764.23,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(10.00) + 0.1634*[log10(10.00)]\u00b2; Cp0 = $15,314; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.092) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_m_note": "Stainless Steel 316SS tubes",
+        "F_p": 1.092,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "m\u00b2"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_DryCooler_1: TQC Area Only (10.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DCL-SOEC-STEAM",
+      "name": "SOEC Steam Dry Cooler",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Steam_Drycooler"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 10.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 15314.4,
+      "C_BM": 200587.87,
+      "C_BM_low": 140411.51,
+      "C_BM_high": 260764.23,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(10.00) + 0.1634*[log10(10.00)]\u00b2; Cp0 = $15,314; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.092) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_m_note": "Stainless Steel 316SS tubes",
+        "F_p": 1.092,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "m\u00b2"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_Steam_Drycooler: TQC Area Only (10.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "CHL-1",
+      "name": "SOEC H2 Chiller",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Chiller_1"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 37.33,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 10882.1,
+      "C_BM": 150171.09,
+      "C_BM_low": 105119.76,
+      "C_BM_high": 195222.42,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(37.33) + 0.164*[log10(37.33)]\u00b2; Cp0 = $10,882; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.17) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.17,
+        "F_p_note": "40 bar operation",
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Chiller_1: area_m2 = 37.333333333333336"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "KOT-3",
+      "name": "SOEC H2 Knock-Out Drums (2 stages)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_KOD_1",
+        "SOEC_H2_KOD_2"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 1.72,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "calculated (fallback; volume_m3 not in params: volume_m3, V_tank, total_volume_m3, capacity_m3)",
+      "capacity_within_bounds": true,
+      "C_p0": 4058.83,
+      "C_BM": 59371.95,
+      "C_BM_low": 41560.36,
+      "C_BM_high": 77183.54,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(1.72) + 0.1074*[log10(1.72)]\u00b2; Cp0 = $4,059; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.0) \u00d7 1.2 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 2.1,
+        "F_m_note": "SS304 for H2/steam service",
+        "F_p": 1.0,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.2,
+        "F_complex_note": "Demister pad addon",
+        "capacity_min": 0.3,
+        "capacity_max": 520.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_KOD_1: Calc from D=0.8m (Assuming L/D=3.0) -> V=1.21 m\u00b3",
+        "SOEC_H2_KOD_2: Calc from D=0.6m (Assuming L/D=3.0) -> V=0.51 m\u00b3"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "PSA-H2",
+      "name": "H2 PSA Units",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_PSA_1",
+        "PEM_H2_PSA_1"
+      ],
+      "component_type": "PSA Unit",
+      "design_capacity": 0.38,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 2137.33,
+      "C_BM": 80760.35,
+      "C_BM_low": 56532.24,
+      "C_BM_high": 104988.46,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(0.38) + 0.1074*[log10(0.38)]\u00b2; Cp0 = $2,137; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d73.1\u00d72.27) \u00d7 1.25 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 3.1,
+        "F_m_note": "Alloy/Stainless Steel",
+        "F_p": 2.27,
+        "F_p_note": "Adjusted for 40 bar operation (Ref: MCY-2 Line 71)",
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.25,
+        "F_complex_note": "Auxiliary multiplier (C_BM = 1.25 * ...)",
+        "capacity_min": 0.3,
+        "capacity_max": 520.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_PSA_1: volume_m3 = 0.19242238749999996",
+        "PEM_H2_PSA_1: volume_m3 = 0.19242238749999996",
+        "4-bed cycle design",
+        "H2 recovery: 85-90%",
+        "Cost model: Turton Pressure Vessel (Volume)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DEOXO-1",
+      "name": "Catalytic Deoxo Reactor",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Deoxo_1"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.11,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1462.7,
+      "C_BM": 63718.16,
+      "C_BM_low": 44602.71,
+      "C_BM_high": 82833.61,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.449*log10(0.11) + 0.107*[log10(0.11)]\u00b2; Cp0 = $1,463; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d72.25) \u00d7 2.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.449,
+        "K3": 0.107,
+        "F_m": 2.1,
+        "F_m_note": "SS304 for H2 service",
+        "F_p": 2.25,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 2.0,
+        "F_complex_note": "Catalyst/internals addon",
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Deoxo_1: volume_m3 = 0.1098392",
+        "Pd/Al2O3 catalyst bed",
+        "O2 reduction: >20 ppm \u2192 <5 ppm"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "SOEC_Cluster",
+      "name": "SOEC Stack Module (6 modules)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Cluster"
+      ],
+      "component_type": "Electrolyzer SOEC",
+      "design_capacity": 14400.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 24197358.17,
+      "C_BM": 24197358.17,
+      "C_BM_low": 19357886.54,
+      "C_BM_high": 29036829.8,
+      "cost_formula": "Vendor Quote \u20ac24,197,358 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": {
+        "K1": 5.5,
+        "K2": 0.65,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 1.2,
+        "F_BM_note": "Modular factory installation",
+        "F_complex": 1.0,
+        "capacity_min": 100.0,
+        "capacity_max": 100000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 3",
+      "notes": [
+        "SOEC_Cluster: max_power_kw = 14399.999999999998",
+        "ROGER study fixed cost: \u20ac24,197,358",
+        "6 modules \u00d7 2.4 MW each = 11.52 MW",
+        "Cost source: CAPEX_BASE.csv (Direct cost: \u20ac24,197,358.17)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "ATT-1",
+      "name": "Attemperator (Venturi)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Feed_Attemperator"
+      ],
+      "component_type": "Spray Water Attemperator",
+      "design_capacity": 0.05,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 22320.98,
+      "C_BM": 291269.06,
+      "C_BM_low": 203888.34,
+      "C_BM_high": 378649.78,
+      "cost_formula": "log10(Cp0) = 3.6298 + -0.4991*log10(0.05) + 0.0411*[log10(0.05)]\u00b2; Cp0 = $22,321; C_BM = Cp0 \u00d7 6.5 \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.6298,
+        "K2": -0.4991,
+        "K3": 0.0411,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 6.5,
+        "F_complex": 1.0,
+        "capacity_min": 0.05,
+        "capacity_max": 50.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_Feed_Attemperator: volume_m3 = 0.05"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HTX-3",
+      "name": "Electric Process Heaters (SOEC Train)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Boiler",
+        "SOEC_H2_ElectricBoiler_PSA",
+        "SOEC_Steam_Boiler"
+      ],
+      "component_type": "Electric Heater",
+      "design_capacity": 3150.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 663054.85,
+      "C_BM": 3633958.14,
+      "C_BM_low": 2543770.7,
+      "C_BM_high": 4724145.58,
+      "cost_formula": "log10(Cp0) = 2.858 + 0.8209*log10(3150.00) + 0.0075*[log10(3150.00)]\u00b2; Cp0 = $663,055; C_BM = Cp0 \u00d7 1.3 \u00d7 2.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.858,
+        "K2": 0.8209,
+        "K3": 0.0075,
+        "F_m": 2.1,
+        "F_m_note": "SS for H2/steam service",
+        "F_p": 1.0,
+        "F_BM": 1.3,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Boiler: max_power_kw = 100.0",
+        "SOEC_H2_ElectricBoiler_PSA: max_power_kw = 50.0",
+        "SOEC_Steam_Boiler: max_power_kw = 3000.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "CYC-SOEC-VESSEL",
+      "name": "SOEC H2 Cyclone Separators (Vessel)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Cyclone_1",
+        "SOEC_H2_Cyclone_2",
+        "SOEC_H2_Cyclone_3",
+        "SOEC_H2_Cyclone_4",
+        "SOEC_H2_Cyclone_5",
+        "SOEC_H2_Cyclone_6"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.09,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1395.95,
+      "C_BM": 21729.35,
+      "C_BM_low": 15210.54,
+      "C_BM_high": 28248.16,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.449*log10(0.09) + 0.107*[log10(0.09)]\u00b2; Cp0 = $1,396; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.7\u00d71.12) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.449,
+        "K3": 0.107,
+        "F_m": 2.7,
+        "F_p": 1.12,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Cyclone_1: volume_m3 = 0.015",
+        "SOEC_H2_Cyclone_2: volume_m3 = 0.015",
+        "SOEC_H2_Cyclone_3: volume_m3 = 0.015",
+        "SOEC_H2_Cyclone_4: volume_m3 = 0.015",
+        "SOEC_H2_Cyclone_5: volume_m3 = 0.015",
+        "SOEC_H2_Cyclone_6: volume_m3 = 0.015",
+        "Shell cost only. Part 1 of composite cost."
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "CYC-SOEC-INTERNALS",
+      "name": "SOEC H2 Cyclone Separators (Internals)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Cyclone_1",
+        "SOEC_H2_Cyclone_2",
+        "SOEC_H2_Cyclone_3",
+        "SOEC_H2_Cyclone_4",
+        "SOEC_H2_Cyclone_5",
+        "SOEC_H2_Cyclone_6"
+      ],
+      "component_type": "Cyclone Internals",
+      "design_capacity": 0.12,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1046.84,
+      "C_BM": 4623.51,
+      "C_BM_low": 3236.46,
+      "C_BM_high": 6010.56,
+      "cost_formula": "log10(Cp0) = 3.349 + 0.467*log10(0.12) + 0.124*[log10(0.12)]\u00b2; Cp0 = $1,047; C_BM = Cp0 \u00d7 2.2 \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.349,
+        "K2": 0.467,
+        "K3": 0.124,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 2.2,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Cyclone_1: cross_sectional_area_m2 = 0.019191582926775134",
+        "SOEC_H2_Cyclone_2: cross_sectional_area_m2 = 0.019191582926775134",
+        "SOEC_H2_Cyclone_3: cross_sectional_area_m2 = 0.019191582926775134",
+        "SOEC_H2_Cyclone_4: cross_sectional_area_m2 = 0.019191582926775134",
+        "SOEC_H2_Cyclone_5: cross_sectional_area_m2 = 0.019191582926775134",
+        "SOEC_H2_Cyclone_6: cross_sectional_area_m2 = 0.019191582926775134",
+        "Internals cost only. Part 2 of composite cost."
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "PMP-1",
+      "name": "SOEC Feed Pump",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Feed_Pump"
+      ],
+      "component_type": "Centrifugal Pump",
+      "design_capacity": 0.59,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": false,
+      "C_p0": 6386.204889851918,
+      "C_BM": 36108.69488985192,
+      "C_BM_low": 18054.35,
+      "C_BM_high": 54163.04,
+      "cost_formula": "log10(Cp0) = 3.3892 + 0.0536*log10(0.59) + 0.1538*[log10(0.59)]\u00b2; Cp0 = $2,426; C_BM = Cp0 \u00d7 3.3 \u00d7 2.0 \u00d7 CEPCI(2.0076) || + Motor(P_elec=0.7kW): \u20ac3,960 [<=75kW K1=3.3432]",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.3892,
+        "K2": 0.0536,
+        "K3": 0.1538,
+        "F_m": 2.0,
+        "F_p": 1.0,
+        "F_BM": 3.3,
+        "F_complex": 1.0,
+        "capacity_min": 1.0,
+        "capacity_max": 300.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 5",
+      "notes": [
+        "SOEC_Feed_Pump: est pump power from capacity_kg_h(3600.0), \u0394P=4.5 bar"
+      ],
+      "warnings": [
+        "Capacity 0.5932918468515979 outside correlation bounds"
+      ],
+      "errors": []
+    },
+    {
+      "tag": "PMP-DRAIN",
+      "name": "SOEC Drain Pumps (3 units)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_DRAIN_PUMP_1",
+        "SOEC_DRAIN_PUMP_2",
+        "SOEC_Drain_Pump"
+      ],
+      "component_type": "Centrifugal Pump",
+      "design_capacity": 0.03,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 7114.908103775575,
+      "C_BM": 52580.01810377557,
+      "C_BM_low": 36806.01,
+      "C_BM_high": 68354.02,
+      "cost_formula": "log10(Cp0) = 3.3892 + 0.0536*log10(0.03) + 0.1538*[log10(0.03)]\u00b2; Cp0 = $4,875; C_BM = Cp0 \u00d7 (1.89 + 1.35\u00d72.41\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076) || + Motor(P_elec=0.0kW): \u20ac2,240 [<=75kW K1=3.3432]",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.3892,
+        "K2": 0.0536,
+        "K3": 0.1538,
+        "F_m": 2.41,
+        "F_m_note": "SS316 material",
+        "F_p": 1.0,
+        "B1": 1.89,
+        "B2": 1.35,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "\u26a0\ufe0f SOEC_DRAIN_PUMP_1: no power_kw found (tried params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+        "\u26a0\ufe0f SOEC_DRAIN_PUMP_2: no power_kw found (tried params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+        "SOEC_Drain_Pump: est pump power from capacity_kg_h(3600.0), \u0394P=0.2 bar"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "RCT-2",
+      "name": "Rectifier and Transformer (SOEC)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Cluster"
+      ],
+      "component_type": "Power Electronics",
+      "design_capacity": 14400.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 2879999.9999999995,
+      "C_BM": 6191999.999999999,
+      "C_BM_low": 4334400.0,
+      "C_BM_high": 8049600.0,
+      "cost_formula": "IEA Method: 14,400.0 kW * \u20ac200.0 * 2.15",
+      "cost_source": "iea_scaling",
+      "coefficients": {
+        "K1": 200.0,
+        "K2": 0.0,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_Cluster: max_power_kw = 14399.999999999998",
+        "Cp0 = 200 USD/kW (IEA estimate)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "RCT-3",
+      "name": "Rectifier and Transformer (SOEC)",
+      "block": "Other",
+      "topology_ids": [
+        "BOP_Transformer"
+      ],
+      "component_type": "Power Electronics",
+      "design_capacity": 5000.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1000000.0,
+      "C_BM": 2150000.0,
+      "C_BM_low": 1505000.0,
+      "C_BM_high": 2795000.0,
+      "cost_formula": "IEA Method: 5,000.0 kW * \u20ac200.0 * 2.15",
+      "cost_source": "iea_scaling",
+      "coefficients": {
+        "K1": 200.0,
+        "K2": 0.0,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 2.15,
+        "B2": 0.0,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "BOP_Transformer: rated_power_mw = 5000.0",
+        "Cp0 = 200 USD/kW (IEA estimate)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "UTL-DC-BANK",
+      "name": "Central Dry Cooler Bank (Glycol)",
+      "block": "Utilities",
+      "topology_ids": [
+        "cooling_manager"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 1000.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter [Modular Split]",
+      "capacity_within_bounds": true,
+      "C_p0": 762377.4,
+      "C_BM": 3321219.3,
+      "C_BM_low": 2324853.51,
+      "C_BM_high": 4317585.09,
+      "cost_formula": "5 x (log10(Cp0) = 4.0336 + 0.2341*log10(1000.00) + 0.0497*[log10(1000.00)]\u00b2; Cp0 = $152,475; C_BM = Cp0 \u00d7 (0.96 + 1.21\u00d71.0\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076))",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.0336,
+        "K2": 0.2341,
+        "K3": 0.0497,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 0.96,
+        "B2": 1.21,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "cooling_manager: dc_total_area_m2 = 5000.0",
+        "MODULAR: Using fixed 5 x 1000.000 m\u00b2 units"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "UTL-CT-01",
+      "name": "Central Cooling Tower (Evaporative)",
+      "block": "Utilities",
+      "topology_ids": [
+        "cooling_manager"
+      ],
+      "component_type": "Cooling Tower",
+      "design_capacity": 300.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 95870.34,
+      "C_BM": 288697.73,
+      "C_BM_low": 202088.41,
+      "C_BM_high": 375307.05,
+      "cost_formula": "log10(Cp0) = 4.8509 + -0.3698*log10(300.00) + 0.1706*[log10(300.00)]\u00b2; Cp0 = $95,870; C_BM = Cp0 \u00d7 1.5 \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.8509,
+        "K2": -0.3698,
+        "K3": 0.1706,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 1.5,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "cooling_manager: tower_design_load_kw = 300.0",
+        "Assumes 10K delta-T. 50MW load \u2248 1200 L/s water flow.",
+        "Correlation is flow-based; verify kW-to-L/s conversion if used directly."
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "UTL-PUMP-GLY",
+      "name": "Central Glycol Circulation Pumps",
+      "block": "Utilities",
+      "topology_ids": [
+        "cooling_manager"
+      ],
+      "component_type": "Centrifugal Pump",
+      "design_capacity": 0.0,
+      "capacity_unit": "kW",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": false,
+      "C_p0": 0.0,
+      "C_BM": 0.0,
+      "C_BM_low": null,
+      "C_BM_high": null,
+      "cost_formula": "No valid vendor quote provided || + Motor(P_elec=0kW): skipped",
+      "cost_source": "vendor_quote",
+      "coefficients": {
+        "K1": 3.3892,
+        "K2": 0.0536,
+        "K3": 0.1538,
+        "F_m": 2.0,
+        "F_p": 1.0,
+        "F_BM": 3.3,
+        "F_complex": 1.0,
+        "capacity_min": 1.0,
+        "capacity_max": 300.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 5",
+      "notes": [
+        "\u26a0\ufe0f cooling_manager: no power_kw found (tried params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+        "\u274c No capacity data found for power_kw",
+        "Fixed estimate for 500 kW pump skid (update when pump sizing is defined)."
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "CHL-2",
+      "name": "SOEC H2 Chiller (Post-Deoxo)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Chiller_2"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 16.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 11593.13,
+      "C_BM": 159983.2,
+      "C_BM_low": 111988.24,
+      "C_BM_high": 207978.16,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(16.00) + 0.164*[log10(16.00)]\u00b2; Cp0 = $11,593; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.17) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.17,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Chiller_2: area_m2 = 16.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "COA-SOEC",
+      "name": "SOEC H2 Coalescer",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Coalescer"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.07,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1329.01,
+      "C_BM": 25094.26,
+      "C_BM_low": 17565.98,
+      "C_BM_high": 32622.54,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(0.07) + 0.1074*[log10(0.07)]\u00b2; Cp0 = $1,329; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.38) \u00d7 1.25 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 2.1,
+        "F_p": 1.38,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.25,
+        "F_complex_note": "Coalescer internals addon",
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Coalescer: volume_m3 = 0.07068583470577035"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HEX-SOEC-H2",
+      "name": "SOEC H2 Interchanger",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_H2_Interchanger_1"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 100.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 11497.41,
+      "C_BM": 141075.36,
+      "C_BM_low": 98752.75,
+      "C_BM_high": 183397.97,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(100.00) + 0.164*[log10(100.00)]\u00b2; Cp0 = $11,497; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.0,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_H2_Interchanger_1: area_m2 = 100.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HEX-SOEC-O2",
+      "name": "SOEC O2 Interchanger",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_O2_Interchanger_1"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 100.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 11497.41,
+      "C_BM": 141075.36,
+      "C_BM_low": 98752.75,
+      "C_BM_high": 183397.97,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(100.00) + 0.164*[log10(100.00)]\u00b2; Cp0 = $11,497; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.0,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_O2_Interchanger_1: area_m2 = 100.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "PEM_Electrolyzer",
+      "name": "PEM Electrolyzer Stack",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_Electrolyzer"
+      ],
+      "component_type": "Electrolyzer PEM",
+      "design_capacity": 5350.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 4403091.58,
+      "C_BM": 4403091.58,
+      "C_BM_low": 3522473.26,
+      "C_BM_high": 5283709.9,
+      "cost_formula": "Vendor Quote \u20ac4,403,092 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": {
+        "K1": 5.3,
+        "K2": 0.7,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 1.2,
+        "F_complex": 1.0,
+        "capacity_min": 100.0,
+        "capacity_max": 50000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 3",
+      "notes": [
+        "PEM_Electrolyzer: max_power_kw = 5350.0",
+        "5 MW rated, 1100 USD/kW (2026 projection)",
+        "Cost source: CAPEX_BASE.csv (Direct cost: \u20ac4,403,091.58)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "RCT-1",
+      "name": "Rectifier and Transformer (PEM)",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_Electrolyzer"
+      ],
+      "component_type": "Power Electronics",
+      "design_capacity": 5350.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1070000.0,
+      "C_BM": 2300500.0,
+      "C_BM_low": 1610350.0,
+      "C_BM_high": 2990650.0,
+      "cost_formula": "IEA Method: 5,350.0 kW * \u20ac200.0 * 2.15",
+      "cost_source": "iea_scaling",
+      "coefficients": {
+        "K1": 200.0,
+        "K2": 0.0,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_Electrolyzer: max_power_kw = 5350.0",
+        "Cp0 = 200 USD/kW"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "KOT-PEM",
+      "name": "PEM Knock-Out Drums (H2 + O2)",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_KOD_1",
+        "PEM_O2_KOD_1"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.59,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "calculated (fallback; volume_m3 not in params: volume_m3, V_tank, total_volume_m3, capacity_m3)",
+      "capacity_within_bounds": true,
+      "C_p0": 2511.81,
+      "C_BM": 47755.43,
+      "C_BM_low": 33428.8,
+      "C_BM_high": 62082.06,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(0.59) + 0.1074*[log10(0.59)]\u00b2; Cp0 = $2,512; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d73.1\u00d71.0) \u00d7 1.2 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 3.1,
+        "F_p": 1.0,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.2,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_KOD_1: Calc from D=0.5m (Assuming L/D=3.0) -> V=0.29 m\u00b3",
+        "PEM_O2_KOD_1: Calc from D=0.5m (Assuming L/D=3.0) -> V=0.29 m\u00b3"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "COA-PEM",
+      "name": "PEM Coalescers (H2 + O2)",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_Coalescer_1",
+        "PEM_H2_Coalescer_2",
+        "PEM_O2_Coalescer_1"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.24,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1825.61,
+      "C_BM": 34471.04,
+      "C_BM_low": 24129.73,
+      "C_BM_high": 44812.35,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(0.24) + 0.1074*[log10(0.24)]\u00b2; Cp0 = $1,826; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.38) \u00d7 1.25 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 2.1,
+        "F_p": 1.38,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.25,
+        "F_complex_note": "Coalescer internals addon",
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_Coalescer_1: volume_m3 = 0.0804247719318987",
+        "PEM_H2_Coalescer_2: volume_m3 = 0.0804247719318987",
+        "PEM_O2_Coalescer_1: volume_m3 = 0.0804247719318987"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HTR-PEM",
+      "name": "PEM Electric Heaters",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_ElectricBoiler_1",
+        "PEM_H2_ElectricBoiler_2",
+        "PEM_O2_ElectricBoiler"
+      ],
+      "component_type": "Electric Heater",
+      "design_capacity": 75.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 26522.03,
+      "C_BM": 145357.41,
+      "C_BM_low": 101750.19,
+      "C_BM_high": 188964.63,
+      "cost_formula": "log10(Cp0) = 2.858 + 0.8209*log10(75.00) + 0.0075*[log10(75.00)]\u00b2; Cp0 = $26,522; C_BM = Cp0 \u00d7 1.3 \u00d7 2.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.858,
+        "K2": 0.8209,
+        "K3": 0.0075,
+        "F_m": 2.1,
+        "F_m_note": "SS for H2/O2 service",
+        "F_p": 1.0,
+        "F_BM": 1.3,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_ElectricBoiler_1: max_power_kw = 25.0",
+        "PEM_H2_ElectricBoiler_2: max_power_kw = 25.0",
+        "PEM_O2_ElectricBoiler: max_power_kw = 25.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "CHL-PEM",
+      "name": "PEM Chillers (H2 + O2)",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_Chiller_1",
+        "PEM_H2_Chiller_2",
+        "PEM_O2_Chiller_1"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 14.67,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 11736.49,
+      "C_BM": 161961.52,
+      "C_BM_low": 113373.06,
+      "C_BM_high": 210549.98,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(14.67) + 0.164*[log10(14.67)]\u00b2; Cp0 = $11,736; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.17) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.17,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_Chiller_1: area_m2 = 5.333333333333333",
+        "PEM_H2_Chiller_2: area_m2 = 5.333333333333333",
+        "PEM_O2_Chiller_1: area_m2 = 4.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DCL-PEM",
+      "name": "PEM Dry Coolers",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_DryCooler_1",
+        "PEM_O2_Drycooler_1"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 15.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 15644.36,
+      "C_BM": 204628.1,
+      "C_BM_low": 143239.67,
+      "C_BM_high": 266016.53,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(15.00) + 0.1634*[log10(15.00)]\u00b2; Cp0 = $15,644; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.09) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_p": 1.09,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_DryCooler_1: TQC Area Only (10.0) [Central Utility]",
+        "PEM_O2_Drycooler_1: TQC Area Only (5.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "MCY-PEM",
+      "name": "PEM Cyclone Separators",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_Cyclone_1",
+        "PEM_H2_Cyclone_2",
+        "PEM_O2_Cyclone_1"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.3,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter [Modular Split]",
+      "capacity_within_bounds": true,
+      "C_p0": 1959.98,
+      "C_BM": 31053.26,
+      "C_BM_low": 21737.28,
+      "C_BM_high": 40369.24,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(0.30) + 0.1074*[log10(0.30)]\u00b2; Cp0 = $1,960; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d73.1\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 3.1,
+        "F_m_note": "SS316 for H2/process",
+        "F_p": 1.0,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.0,
+        "capacity_min": 0.3,
+        "capacity_max": 520.0,
+        "capacity_unit": "m\u00b3"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_Cyclone_1: volume_m3 = 0.015",
+        "PEM_H2_Cyclone_2: volume_m3 = 0.015",
+        "PEM_O2_Cyclone_1: volume_m3 = 0.015",
+        "MODULAR: Split 0.300 m\u00b3 into 1 x 0.300 m\u00b3 units"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DGS-PEM",
+      "name": "PEM Degasser Tanks",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_Degasser_1",
+        "PEM_Degasser_2"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 3.0,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 5442.99,
+      "C_BM": 72984.42,
+      "C_BM_low": 51089.09,
+      "C_BM_high": 94879.75,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(3.00) + 0.1074*[log10(3.00)]\u00b2; Cp0 = $5,443; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.0) \u00d7 1.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 2.1,
+        "F_p": 1.0,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.1,
+        "F_complex_note": "Degasser internals addon",
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_Degasser_1: volume_m3 = 2.0",
+        "PEM_Degasser_2: volume_m3 = 1.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "VAL-PEM",
+      "name": "PEM Control Valves",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_Water_Return_Valve_1",
+        "PEM_Water_Return_Valve_2",
+        "PEM_O2_Valve"
+      ],
+      "component_type": "Ball Valve",
+      "design_capacity": 0.0,
+      "capacity_unit": "inches",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 0.0,
+      "C_BM": 0.0,
+      "C_BM_low": null,
+      "C_BM_high": null,
+      "cost_formula": "Excluded",
+      "cost_source": "excluded",
+      "coefficients": {
+        "K1": 3.1491,
+        "K2": 0.5841,
+        "K3": -0.0125,
+        "F_m": 2.4,
+        "F_p": 1.0,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 5",
+      "notes": [
+        "\u26a0\ufe0f PEM_Water_Return_Valve_1: no unknown found (tried params: unknown)",
+        "\u26a0\ufe0f PEM_Water_Return_Valve_2: no unknown found (tried params: unknown)",
+        "\u26a0\ufe0f PEM_O2_Valve: no unknown found (tried params: unknown)",
+        "\u274c No capacity data found for unknown"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DEOXO-PEM",
+      "name": "PEM H2 Deoxidizer",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_H2_Deoxo_1"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.11,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1462.7,
+      "C_BM": 63718.16,
+      "C_BM_low": 44602.71,
+      "C_BM_high": 82833.61,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.449*log10(0.11) + 0.107*[log10(0.11)]\u00b2; Cp0 = $1,463; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d72.25) \u00d7 2.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.449,
+        "K3": 0.107,
+        "F_m": 2.1,
+        "F_m_note": "SS304 for H2 service",
+        "F_p": 2.25,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 2.0,
+        "F_complex_note": "Catalyst/internals addon",
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_H2_Deoxo_1: volume_m3 = 0.1098392"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "PMP-PEM",
+      "name": "PEM Water Pump",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_Water_Pump"
+      ],
+      "component_type": "Centrifugal Pump",
+      "design_capacity": 5.71,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 11283.494930191033,
+      "C_BM": 51648.66493019104,
+      "C_BM_low": 36154.07,
+      "C_BM_high": 67143.26,
+      "cost_formula": "log10(Cp0) = 3.3892 + 0.0536*log10(5.71) + 0.1538*[log10(5.71)]\u00b2; Cp0 = $3,295; C_BM = Cp0 \u00d7 3.3 \u00d7 2.0 \u00d7 CEPCI(2.0076) || + Motor(P_elec=6.3kW): \u20ac7,988 [<=75kW K1=3.3432]",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.3892,
+        "K2": 0.0536,
+        "K3": 0.1538,
+        "F_m": 2.0,
+        "F_p": 1.0,
+        "F_BM": 3.3,
+        "F_complex": 1.0,
+        "capacity_min": 1.0,
+        "capacity_max": 300.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_Water_Pump: est pump power from capacity_kg_h(4000.0), \u0394P=39.0 bar"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "ATR",
+      "name": "Autothermal Reformer Reactor",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Plant"
+      ],
+      "component_type": "Process Reactor",
+      "design_capacity": 0.0,
+      "capacity_unit": "-",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 3118657.0,
+      "C_BM": 3118657.0,
+      "C_BM_low": 2494925.6,
+      "C_BM_high": 3742388.4,
+      "cost_formula": "Vendor Quote \u20ac3,118,657 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": null,
+      "cost_class": "Class 3",
+      "notes": [
+        "\u26a0\ufe0f ATR_Plant: no unknown found (tried params: unknown)",
+        "\u274c No capacity data found for unknown",
+        "Fixed cost from Carlini, G. (2025): \u20ac3,118,657"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HT-WGS",
+      "name": "High Temperature Water-Gas Shift Reactor",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Plant"
+      ],
+      "component_type": "Process Reactor",
+      "design_capacity": 0.0,
+      "capacity_unit": "-",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 436612.0,
+      "C_BM": 436612.0,
+      "C_BM_low": 349289.6,
+      "C_BM_high": 523934.4,
+      "cost_formula": "Vendor Quote \u20ac436,612 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": null,
+      "cost_class": "Class 3",
+      "notes": [
+        "\u26a0\ufe0f ATR_Plant: no unknown found (tried params: unknown)",
+        "\u274c No capacity data found for unknown",
+        "Fixed cost from Carlini: \u20ac436,612"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "LT-WGS",
+      "name": "Low Temperature Water-Gas Shift Reactor",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Plant"
+      ],
+      "component_type": "Process Reactor",
+      "design_capacity": 0.0,
+      "capacity_unit": "-",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 436612.0,
+      "C_BM": 436612.0,
+      "C_BM_low": 349289.6,
+      "C_BM_high": 523934.4,
+      "cost_formula": "Vendor Quote \u20ac436,612 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": null,
+      "cost_class": "Class 3",
+      "notes": [
+        "\u26a0\ufe0f ATR_Plant: no unknown found (tried params: unknown)",
+        "\u274c No capacity data found for unknown",
+        "Fixed cost from Carlini: \u20ac436,612"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "MTC-6",
+      "name": "Biogas Compressor (3 stages)",
+      "block": "ATR",
+      "topology_ids": [
+        "Biogas_Compressor_1",
+        "Biogas_Compressor_2",
+        "Biogas_Compressor_3"
+      ],
+      "component_type": "Reciprocating Compressor",
+      "design_capacity": 117.22,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 22335.64,
+      "C_BM": 144609.22,
+      "C_BM_low": 101226.45,
+      "C_BM_high": 187991.99,
+      "cost_formula": "log10(Cp0) = 2.0309 + 1.2524*log10(117.22) + -0.0638*[log10(117.22)]\u00b2; Cp0 = $22,336; C_BM = Cp0 \u00d7 2.15 \u00d7 1.5 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.0309,
+        "K2": 1.2524,
+        "K3": -0.0638,
+        "F_m": 1.5,
+        "F_m_note": "Carbon steel + upgraded internals for biogas",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "Biogas_Compressor_1: est power from max_flow_kg_h(2000.0), PR=1.73, T=25.0C",
+        "Biogas_Compressor_2: est power from max_flow_kg_h(2000.0), PR=1.73, T=25.0C",
+        "Biogas_Compressor_3: est power from max_flow_kg_h(2000.0), PR=1.72, T=25.0C"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DCL-BG",
+      "name": "Biogas Intercoolers",
+      "block": "ATR",
+      "topology_ids": [
+        "Biogas_Intercooler_1",
+        "Biogas_Intercooler_2"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 10.5,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 15334.78,
+      "C_BM": 200854.86,
+      "C_BM_low": 140598.4,
+      "C_BM_high": 261111.32,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(10.50) + 0.1634*[log10(10.50)]\u00b2; Cp0 = $15,335; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.092) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_m_note": "Stainless Steel 316SS tubes",
+        "F_p": 1.092,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "m\u00b2"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "Biogas_Intercooler_1: TQC Area Only (10.0) [Central Utility]",
+        "Biogas_Intercooler_2: TQC Area Only (0.5) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "ATR-O2-COMP",
+      "name": "ATR O2 Compressor",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_O2_Compressor"
+      ],
+      "component_type": "Centrifugal Compressor",
+      "design_capacity": 92.83,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 37010.29,
+      "C_BM": 495211.22,
+      "C_BM_low": 346647.85,
+      "C_BM_high": 643774.59,
+      "cost_formula": "log10(Cp0) = 2.2891 + 1.3604*log10(92.83) + -0.1027*[log10(92.83)]\u00b2; Cp0 = $37,010; C_BM = Cp0 \u00d7 2.15 \u00d7 3.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.2891,
+        "K2": 1.3604,
+        "K3": -0.1027,
+        "F_m": 3.1,
+        "F_m_note": "SS316 for O2 service",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_O2_Compressor: est power from max_flow_kg_h(760.0), PR=15.00, T=25.0C"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "MCT-7",
+      "name": "ATR H2 Compressor (2 stages)",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_H2_Compressor_1",
+        "ATR_H2_Compressor_2"
+      ],
+      "component_type": "Reciprocating Compressor",
+      "design_capacity": 10816.67,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 1108978.93,
+      "C_BM": 10051916.32,
+      "C_BM_low": 7036341.42,
+      "C_BM_high": 13067491.22,
+      "cost_formula": "log10(Cp0) = 2.0309 + 1.2524*log10(10816.67) + -0.0638*[log10(10816.67)]\u00b2; Cp0 = $1,108,979; C_BM = Cp0 \u00d7 2.15 \u00d7 2.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.0309,
+        "K2": 1.2524,
+        "K3": -0.0638,
+        "F_m": 2.1,
+        "F_m_note": "SS for H2 service",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_H2_Compressor_1: est power from max_flow_kg_h(1500.0), PR=39.64, T=25.0C",
+        "ATR_H2_Compressor_2: est power from max_flow_kg_h(1500.0), PR=39.64, T=25.0C"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "DCL-ATR",
+      "name": "ATR Dry Coolers",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_DryCooler",
+        "ATR_H2_Drycooler"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 60.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 20070.67,
+      "C_BM": 262885.44,
+      "C_BM_low": 184019.81,
+      "C_BM_high": 341751.07,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(60.00) + 0.1634*[log10(60.00)]\u00b2; Cp0 = $20,071; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.092) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_m_note": "Stainless Steel 316SS tubes",
+        "F_p": 1.092,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "m\u00b2"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_DryCooler: TQC Area Only (10.0) [Central Utility]",
+        "ATR_H2_Drycooler: TQC Area Only (50.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "CHL-ATR",
+      "name": "ATR Chiller",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Chiller_1"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 16.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 11593.13,
+      "C_BM": 146422.44,
+      "C_BM_low": 102495.71,
+      "C_BM_high": 190349.17,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(16.00) + 0.164*[log10(16.00)]\u00b2; Cp0 = $11,593; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.04) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.04,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_Chiller_1: area_m2 = 16.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "MCY-ATR",
+      "name": "ATR Cyclone Separators",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Cyclone_1",
+        "ATR_Cyclone_2"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.3,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter [Modular Split]",
+      "capacity_within_bounds": true,
+      "C_p0": 1959.98,
+      "C_BM": 31053.26,
+      "C_BM_low": 21737.28,
+      "C_BM_high": 40369.24,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(0.30) + 0.1074*[log10(0.30)]\u00b2; Cp0 = $1,960; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d73.1\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 3.1,
+        "F_m_note": "SS316 for H2/process",
+        "F_p": 1.0,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.0,
+        "capacity_min": 0.3,
+        "capacity_max": 520.0,
+        "capacity_unit": "m\u00b3"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_Cyclone_1: volume_m3 = 0.015",
+        "ATR_Cyclone_2: volume_m3 = 0.015",
+        "MODULAR: Split 0.300 m\u00b3 into 1 x 0.300 m\u00b3 units"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "COA-ATR",
+      "name": "ATR Coalescer",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Coalescer_1"
+      ],
+      "component_type": "Vertical Pressure Vessel",
+      "design_capacity": 0.11,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter [Modular Split]",
+      "capacity_within_bounds": true,
+      "C_p0": 43594.5,
+      "C_BM": 747889.5,
+      "C_BM_low": 523522.65,
+      "C_BM_high": 972256.35,
+      "cost_formula": "30 x (log10(Cp0) = 3.4974 + 0.4485*log10(0.11) + 0.1074*[log10(0.11)]\u00b2; Cp0 = $1,453; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.2) \u00d7 1.25 \u00d7 CEPCI(2.0076))",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 2.1,
+        "F_p": 1.2,
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.25,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_Coalescer_1: volume_m3 = 3.141592653589793",
+        "MODULAR: Split 3.14 m3 into 30 x 0.106 m3 units (D=0.3m)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "PSA-ATR",
+      "name": "ATR PSA Unit",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_PSA_1"
+      ],
+      "component_type": "PSA Unit",
+      "design_capacity": 7.85,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 9658.18,
+      "C_BM": 219041.55,
+      "C_BM_low": 153329.08,
+      "C_BM_high": 284754.02,
+      "cost_formula": "log10(Cp0) = 3.4974 + 0.4485*log10(7.85) + 0.1074*[log10(7.85)]\u00b2; Cp0 = $9,658; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.15) \u00d7 1.7 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.4974,
+        "K2": 0.4485,
+        "K3": 0.1074,
+        "F_m": 2.1,
+        "F_m_note": "SS for cyclic adsorption service",
+        "F_p": 1.15,
+        "F_p_note": "~25-30 bar PSA operation",
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.7,
+        "F_complex_note": "2 pairs of valves + automation",
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_PSA_1: volume_m3 = 7.853981633974483"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HTX-ATR",
+      "name": "ATR Electric Heaters",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_H01_Boiler",
+        "ATR_H02_Boiler",
+        "ATR_H04_Boiler"
+      ],
+      "component_type": "Electric Heater",
+      "design_capacity": 1000.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter [Modular Split]",
+      "capacity_within_bounds": true,
+      "C_p0": 488911.22,
+      "C_BM": 1275972.06,
+      "C_BM_low": 893180.44,
+      "C_BM_high": 1658763.68,
+      "cost_formula": "2 x (log10(Cp0) = 2.858 + 0.8209*log10(1000.00) + 0.0075*[log10(1000.00)]\u00b2; Cp0 = $244,456; C_BM = Cp0 \u00d7 1.3 \u00d7 1.0 \u00d7 CEPCI(2.0076))",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.858,
+        "K2": 0.8209,
+        "K3": 0.0075,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 1.3,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_H01_Boiler: max_power_kw = 500.0",
+        "ATR_H02_Boiler: max_power_kw = 500.0",
+        "ATR_H04_Boiler: max_power_kw = 500.0",
+        "MODULAR: Split 2000.000 kW into 2 x 1000.000 kW units"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "PMP-ATR",
+      "name": "ATR Feed/Drain Pumps",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Feed_Pump",
+        "ATR_Drain_Pump_1",
+        "ATR_Drain_Pump_2"
+      ],
+      "component_type": "Centrifugal Pump",
+      "design_capacity": 1.49,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 7641.97724272856,
+      "C_BM": 38625.48724272856,
+      "C_BM_low": 27037.84,
+      "C_BM_high": 50213.13,
+      "cost_formula": "log10(Cp0) = 3.3892 + 0.0536*log10(1.49) + 0.1538*[log10(1.49)]\u00b2; Cp0 = $2,529; C_BM = Cp0 \u00d7 3.3 \u00d7 2.0 \u00d7 CEPCI(2.0076) || + Motor(P_elec=1.7kW): \u20ac5,113 [<=75kW K1=3.3432]",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.3892,
+        "K2": 0.0536,
+        "K3": 0.1538,
+        "F_m": 2.0,
+        "F_p": 1.0,
+        "F_BM": 3.3,
+        "F_complex": 1.0,
+        "capacity_min": 1.0,
+        "capacity_max": 300.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_Feed_Pump: est pump power from capacity_kg_h(2500.0), \u0394P=14.0 bar",
+        "ATR_Drain_Pump_1: est pump power from capacity_kg_h(200.0), \u0394P=14.0 bar",
+        "ATR_Drain_Pump_2: est pump power from capacity_kg_h(200.0), \u0394P=14.0 bar"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "SYNGAS-CLR",
+      "name": "ATR Syngas Cooler",
+      "block": "ATR",
+      "topology_ids": [
+        "ATR_Syngas_Cooler"
+      ],
+      "component_type": "Shell and Tube Heat Exchanger",
+      "design_capacity": 100.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 11497.41,
+      "C_BM": 145213.45,
+      "C_BM_low": 101649.42,
+      "C_BM_high": 188777.48,
+      "cost_formula": "log10(Cp0) = 4.4646 + -0.53*log10(100.00) + 0.164*[log10(100.00)]\u00b2; Cp0 = $11,497; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.04) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.4646,
+        "K2": -0.53,
+        "K3": 0.164,
+        "F_m": 2.7,
+        "F_p": 1.04,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "ATR_Syngas_Cooler: area_m2 = 100.0"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "FST",
+      "name": "Filling Loading Docks (5 stations)",
+      "block": "Storage",
+      "topology_ids": [
+        "Truck_Station_1"
+      ],
+      "component_type": "Dispensing Station",
+      "design_capacity": 0.0,
+      "capacity_unit": "-",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 1931019.0,
+      "C_BM": 1931019.0,
+      "C_BM_low": 1544815.2,
+      "C_BM_high": 2317222.8,
+      "cost_formula": "Vendor Quote \u20ac1,931,019 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": null,
+      "cost_class": "Class 3",
+      "notes": [
+        "\u26a0\ufe0f Truck_Station_1: no unknown found (tried params: unknown)",
+        "\u274c No capacity data found for unknown",
+        "ROGER fixed cost: \u20ac1,931,019"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HBT",
+      "name": "Underground H2 Storage",
+      "block": "Storage",
+      "topology_ids": [
+        "LP_Storage_Tank"
+      ],
+      "component_type": "Underground Storage",
+      "design_capacity": 0.0,
+      "capacity_unit": "-",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 6736268.0,
+      "C_BM": 6736268.0,
+      "C_BM_low": 5389014.4,
+      "C_BM_high": 8083521.6,
+      "cost_formula": "Vendor Quote \u20ac6,736,268 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": null,
+      "cost_class": "Class 3",
+      "notes": [
+        "\u26a0\ufe0f LP_Storage_Tank: no unknown found (tried params: unknown)",
+        "\u274c No capacity data found for unknown",
+        "ROGER fixed cost: \u20ac6,736,268"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "LP-COMP",
+      "name": "LP Compressor (to Tank)",
+      "block": "Storage",
+      "topology_ids": [
+        "LP_Compressor_S1"
+      ],
+      "component_type": "Reciprocating Compressor",
+      "design_capacity": 12.02,
+      "capacity_unit": "kW",
+      "capacity_source": "calculated (fallback; power_kw not in params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+      "capacity_within_bounds": true,
+      "C_p0": 2036.9,
+      "C_BM": 18462.71,
+      "C_BM_low": 12923.9,
+      "C_BM_high": 24001.52,
+      "cost_formula": "log10(Cp0) = 2.0309 + 1.2524*log10(12.02) + -0.0638*[log10(12.02)]\u00b2; Cp0 = $2,037; C_BM = Cp0 \u00d7 2.15 \u00d7 2.1 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 2.0309,
+        "K2": 1.2524,
+        "K3": -0.0638,
+        "F_m": 2.1,
+        "F_m_note": "SS for H2 service",
+        "F_p": 1.0,
+        "F_BM": 2.15,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "LP_Compressor_S1: est power from max_flow_kg_h(520.0), PR=1.75, T=25.0C"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "LP-ICL",
+      "name": "LP Compressor Intercooler",
+      "block": "Storage",
+      "topology_ids": [
+        "LP_Intercooler_1"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 50.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 19123.44,
+      "C_BM": 250134.5,
+      "C_BM_low": 175094.15,
+      "C_BM_high": 325174.85,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(50.00) + 0.1634*[log10(50.00)]\u00b2; Cp0 = $19,123; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.09) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_p": 1.09,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "LP_Intercooler_1: TQC Area Only (50.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "HP-ICL",
+      "name": "HP Compressor Intercoolers",
+      "block": "Storage",
+      "topology_ids": [
+        "HP_Intercooler_2",
+        "HP_Intercooler_3",
+        "HP_Intercooler_4"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 400.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 43914.79,
+      "C_BM": 574405.27,
+      "C_BM_low": 402083.69,
+      "C_BM_high": 746726.85,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(400.00) + 0.1634*[log10(400.00)]\u00b2; Cp0 = $43,915; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.09) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_p": 1.09,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "HP_Intercooler_2: TQC Area Only (50.0) [Central Utility]",
+        "HP_Intercooler_3: TQC Area Only (150.0) [Central Utility]",
+        "HP_Intercooler_4: TQC Area Only (200.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "WTR-SRC",
+      "name": "Water Source/Supply",
+      "block": "Water_Treatment",
+      "topology_ids": [
+        "Water_Source"
+      ],
+      "component_type": "Utility System",
+      "design_capacity": 12000.0,
+      "capacity_unit": "kg/h",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 0.0,
+      "C_BM": 0.0,
+      "C_BM_low": null,
+      "C_BM_high": null,
+      "cost_formula": "Excluded",
+      "cost_source": "excluded",
+      "coefficients": null,
+      "cost_class": "Class 5",
+      "notes": [
+        "Water_Source: max_flow_kg_h = 12000.0",
+        "Included in BOP/installation costs",
+        "Not quantified as discrete equipment per CAPEX_BASE methodology"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "WTR-PUR",
+      "name": "Water Purifier (UltraPure)",
+      "block": "Water_Treatment",
+      "topology_ids": [
+        "Water_Purifier"
+      ],
+      "component_type": "Water Treatment",
+      "design_capacity": 12000.0,
+      "capacity_unit": "kg/h",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1288210.7,
+      "C_BM": 1288210.7,
+      "C_BM_low": 1030568.56,
+      "C_BM_high": 1545852.84,
+      "cost_formula": "Vendor Quote \u20ac1,288,211 (direct)",
+      "cost_source": "vendor_quote",
+      "coefficients": null,
+      "cost_class": "Class 3",
+      "notes": [
+        "Water_Purifier: max_flow_kg_h = 12000.0",
+        "Direct cost from Roger: \u20ac1,288,210.70"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "WTR-TANK",
+      "name": "UltraPure Water Tank",
+      "block": "Water_Treatment",
+      "topology_ids": [
+        "UltraPure_Tank"
+      ],
+      "component_type": "Atmospheric Tank",
+      "design_capacity": 20.0,
+      "capacity_unit": "m\u00b3",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 15883.87,
+      "C_BM": 193622.56,
+      "C_BM_low": 135535.79,
+      "C_BM_high": 251709.33,
+      "cost_formula": "log10(Cp0) = 3.5565 + 0.3776*log10(20.00) + 0.0905*[log10(20.00)]\u00b2; Cp0 = $15,884; C_BM = Cp0 \u00d7 (2.25 + 1.82\u00d72.1\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 3.5565,
+        "K2": 0.3776,
+        "K3": 0.0905,
+        "F_m": 2.1,
+        "F_m_note": "SS304 for demineralized/ultrapure water service",
+        "F_p": 1.0,
+        "F_p_note": "Atmospheric pressure",
+        "B1": 2.25,
+        "B2": 1.82,
+        "F_complex": 1.0,
+        "capacity_min": 0.3,
+        "capacity_max": 520.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "UltraPure_Tank: volume_m3 = 20.0",
+        "Turton coefficients for atmospheric tank"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "H2-MIX",
+      "name": "H2 Production Mixer",
+      "block": "General",
+      "topology_ids": [
+        "H2_Production_Mixer"
+      ],
+      "component_type": "Flow Mixer",
+      "design_capacity": 0.0,
+      "capacity_unit": "kg/h",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": true,
+      "C_p0": 0.0,
+      "C_BM": 0.0,
+      "C_BM_low": null,
+      "C_BM_high": null,
+      "cost_formula": "Excluded",
+      "cost_source": "excluded",
+      "coefficients": null,
+      "cost_class": "Class 5",
+      "notes": [
+        "\u26a0\ufe0f H2_Production_Mixer: no flow_kg_h found (tried params: max_flow_kg_h, design_flow_kg_h, capacity_kg_h, rated_flow_kg_h)",
+        "\u274c No capacity data found for flow_kg_h",
+        "Flow Mixers are NOT discrete equipment per CAPEX_BASE",
+        "Included in piping installation percentages (15-20% of block cost)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "H2-CLR",
+      "name": "H2 Production Cooler",
+      "block": "General",
+      "topology_ids": [
+        "H2_Production_Cooler"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 10.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "calculated (fallback; area_m2 not in params: area_m2, heat_transfer_area_m2, A_hx, exchange_area_m2)",
+      "capacity_within_bounds": true,
+      "C_p0": 15314.4,
+      "C_BM": 200312.28,
+      "C_BM_low": 140218.6,
+      "C_BM_high": 260405.96,
+      "cost_formula": "log10(Cp0) = 4.3247 + -0.303*log10(10.00) + 0.1634*[log10(10.00)]\u00b2; Cp0 = $15,314; C_BM = Cp0 \u00d7 (1.63 + 1.66\u00d72.7\u00d71.09) \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.3247,
+        "K2": -0.303,
+        "K3": 0.1634,
+        "F_m": 2.7,
+        "F_p": 1.09,
+        "B1": 1.63,
+        "B2": 1.66,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "H2_Production_Cooler: TQC Area Only (10.0) [Central Utility]"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "RCT-1",
+      "name": "Rectifier and Transformer (PEM)",
+      "block": "PEM",
+      "topology_ids": [
+        "PEM_Transformer"
+      ],
+      "component_type": "Power Electronics",
+      "design_capacity": 5570.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1114000.0,
+      "C_BM": 2395100.0,
+      "C_BM_low": 1676570.0,
+      "C_BM_high": 3113630.0,
+      "cost_formula": "IEA Method: 5,570.0 kW * \u20ac200.0 * 2.15",
+      "cost_source": "iea_scaling",
+      "coefficients": {
+        "K1": 200.0,
+        "K2": 0.0,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 2.15,
+        "B2": 0.0,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "PEM_Transformer: rated_power_mw = 5570.0",
+        "Cp0 = 200 USD/kW"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "RCT-2",
+      "name": "Rectifier and Transformer (SOEC)",
+      "block": "SOEC",
+      "topology_ids": [
+        "SOEC_Transformer"
+      ],
+      "component_type": "Power Electronics",
+      "design_capacity": 15250.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 3050000.0,
+      "C_BM": 6557500.0,
+      "C_BM_low": 4590250.0,
+      "C_BM_high": 8524750.0,
+      "cost_formula": "IEA Method: 15,250.0 kW * \u20ac200.0 * 2.15",
+      "cost_source": "iea_scaling",
+      "coefficients": {
+        "K1": 200.0,
+        "K2": 0.0,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 2.15,
+        "B2": 0.0,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "SOEC_Transformer: rated_power_mw = 15250.0",
+        "Cp0 = 200 USD/kW (IEA estimate)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "RCT-3",
+      "name": "Rectifier and Transformer (BOP)",
+      "block": "Other",
+      "topology_ids": [
+        "BOP_Transformer"
+      ],
+      "component_type": "Power Electronics",
+      "design_capacity": 5000.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 1000000.0,
+      "C_BM": 2150000.0,
+      "C_BM_low": 1505000.0,
+      "C_BM_high": 2795000.0,
+      "cost_formula": "IEA Method: 5,000.0 kW * \u20ac200.0 * 2.15",
+      "cost_source": "iea_scaling",
+      "coefficients": {
+        "K1": 200.0,
+        "K2": 0.0,
+        "K3": 0.0,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 2.15,
+        "B2": 0.0,
+        "F_complex": 1.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "BOP_Transformer: rated_power_mw = 5000.0",
+        "Cp0 = 200 USD/kW (IEA estimate)"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "UTL-DC-BANK",
+      "name": "Central Dry Cooler Bank (Glycol)",
+      "block": "Utilities",
+      "topology_ids": [
+        "cooling_manager"
+      ],
+      "component_type": "Air-Cooled Heat Exchanger",
+      "design_capacity": 1000.0,
+      "capacity_unit": "m\u00b2",
+      "capacity_source": "component_parameter [Modular Split]",
+      "capacity_within_bounds": true,
+      "C_p0": 762377.4,
+      "C_BM": 3321219.3,
+      "C_BM_low": 2324853.51,
+      "C_BM_high": 4317585.09,
+      "cost_formula": "5 x (log10(Cp0) = 4.0336 + 0.2341*log10(1000.00) + 0.0497*[log10(1000.00)]\u00b2; Cp0 = $152,475; C_BM = Cp0 \u00d7 (0.96 + 1.21\u00d71.0\u00d71.0) \u00d7 1.0 \u00d7 CEPCI(2.0076))",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.0336,
+        "K2": 0.2341,
+        "K3": 0.0497,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "B1": 0.96,
+        "B2": 1.21,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 1000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "cooling_manager: dc_total_area_m2 = 5000.0",
+        "MODULAR: Using fixed 5 x 1000.000 m\u00b2 units"
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "UTL-CT-01",
+      "name": "Central Cooling Tower (Evaporative)",
+      "block": "Utilities",
+      "topology_ids": [
+        "cooling_manager"
+      ],
+      "component_type": "Cooling Tower",
+      "design_capacity": 300.0,
+      "capacity_unit": "kW",
+      "capacity_source": "component_parameter",
+      "capacity_within_bounds": true,
+      "C_p0": 95870.34,
+      "C_BM": 288697.73,
+      "C_BM_low": 202088.41,
+      "C_BM_high": 375307.05,
+      "cost_formula": "log10(Cp0) = 4.8509 + -0.3698*log10(300.00) + 0.1706*[log10(300.00)]\u00b2; Cp0 = $95,870; C_BM = Cp0 \u00d7 1.5 \u00d7 1.0 \u00d7 CEPCI(2.0076)",
+      "cost_source": "turton",
+      "coefficients": {
+        "K1": 4.8509,
+        "K2": -0.3698,
+        "K3": 0.1706,
+        "F_m": 1.0,
+        "F_p": 1.0,
+        "F_BM": 1.5,
+        "F_complex": 1.0,
+        "capacity_min": 10.0,
+        "capacity_max": 10000.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 4",
+      "notes": [
+        "cooling_manager: tower_design_load_kw = 300.0",
+        "Assumes 10K delta-T. 50MW load \u2248 1200 L/s water flow.",
+        "Correlation is flow-based; verify kW-to-L/s conversion if used directly."
+      ],
+      "warnings": [],
+      "errors": []
+    },
+    {
+      "tag": "UTL-PUMP-GLY",
+      "name": "Central Glycol Circulation Pumps",
+      "block": "Utilities",
+      "topology_ids": [
+        "cooling_manager"
+      ],
+      "component_type": "Centrifugal Pump",
+      "design_capacity": 0.0,
+      "capacity_unit": "kW",
+      "capacity_source": "not_found",
+      "capacity_within_bounds": false,
+      "C_p0": 128595.0,
+      "C_BM": 128595.0,
+      "C_BM_low": 102876.0,
+      "C_BM_high": 154314.0,
+      "cost_formula": "Vendor Quote \u20ac128,595 (direct) || + Motor(P_elec=0kW): skipped",
+      "cost_source": "vendor_quote",
+      "coefficients": {
+        "K1": 3.3892,
+        "K2": 0.0536,
+        "K3": 0.1538,
+        "F_m": 2.0,
+        "F_p": 1.0,
+        "F_BM": 3.3,
+        "F_complex": 1.0,
+        "capacity_min": 1.0,
+        "capacity_max": 300.0,
+        "capacity_unit": "kW"
+      },
+      "cost_class": "Class 3",
+      "notes": [
+        "\u26a0\ufe0f cooling_manager: no power_kw found (tried params: max_power_kw, rated_power_kw, power_kw, P_max, rated_power_mw, max_power_mw, max_power_nominal_mw)",
+        "\u274c No capacity data found for power_kw",
+        "Fixed estimate for 500 kW pump skid (update when pump sizing is defined)."
+      ],
+      "warnings": [],
+      "errors": []
+    }
+  ],
+  "block_summaries": [
+    {
+      "block_name": "SOEC",
+      "equipment_tags": [
+        "MTC-1",
+        "MTC-4",
+        "DCL-7",
+        "DCL-SOEC-H2",
+        "DCL-SOEC-STEAM",
+        "CHL-1",
+        "KOT-3",
+        "PSA-H2",
+        "DEOXO-1",
+        "SOEC_Cluster",
+        "ATT-1",
+        "HTX-3",
+        "CYC-SOEC-VESSEL",
+        "CYC-SOEC-INTERNALS",
+        "PMP-1",
+        "PMP-DRAIN",
+        "RCT-2",
+        "CHL-2",
+        "COA-SOEC",
+        "HEX-SOEC-H2",
+        "HEX-SOEC-O2",
+        "RCT-2"
+      ],
+      "equipment_total": 58475565.94299363,
+      "installation_costs": {
+        "electrical": 29237782.97,
+        "instrumentation": 11695113.19,
+        "piping": 8771334.89
+      },
+      "installation_total": 49704231.05,
+      "total_installed_cost": 108179796.99299362
+    },
+    {
+      "block_name": "Storage",
+      "equipment_tags": [
+        "HP-COMP",
+        "FST",
+        "HBT",
+        "LP-COMP",
+        "LP-ICL",
+        "HP-ICL"
+      ],
+      "equipment_total": 9957078.95,
+      "installation_costs": {
+        "piping": 1493561.84,
+        "civil_foundations": 995707.9
+      },
+      "installation_total": 2489269.74,
+      "total_installed_cost": 12446348.69
+    },
+    {
+      "block_name": "Other",
+      "equipment_tags": [
+        "RCT-3",
+        "RCT-3"
+      ],
+      "equipment_total": 4300000.0,
+      "installation_costs": {},
+      "installation_total": 0,
+      "total_installed_cost": 4300000.0
+    },
+    {
+      "block_name": "Utilities",
+      "equipment_tags": [
+        "UTL-DC-BANK",
+        "UTL-CT-01",
+        "UTL-PUMP-GLY",
+        "UTL-DC-BANK",
+        "UTL-CT-01",
+        "UTL-PUMP-GLY"
+      ],
+      "equipment_total": 7348429.0600000005,
+      "installation_costs": {},
+      "installation_total": 0,
+      "total_installed_cost": 7348429.0600000005
+    },
+    {
+      "block_name": "PEM",
+      "equipment_tags": [
+        "PEM_Electrolyzer",
+        "RCT-1",
+        "KOT-PEM",
+        "COA-PEM",
+        "HTR-PEM",
+        "CHL-PEM",
+        "DCL-PEM",
+        "MCY-PEM",
+        "DGS-PEM",
+        "VAL-PEM",
+        "DEOXO-PEM",
+        "PMP-PEM",
+        "RCT-1"
+      ],
+      "equipment_total": 9912269.584930189,
+      "installation_costs": {
+        "electrical": 4956134.79,
+        "instrumentation": 1982453.92,
+        "piping": 1486840.44
+      },
+      "installation_total": 8425429.15,
+      "total_installed_cost": 18337698.734930187
+    },
+    {
+      "block_name": "ATR",
+      "equipment_tags": [
+        "ATR",
+        "HT-WGS",
+        "LT-WGS",
+        "MTC-6",
+        "DCL-BG",
+        "ATR-O2-COMP",
+        "MCT-7",
+        "DCL-ATR",
+        "CHL-ATR",
+        "MCY-ATR",
+        "COA-ATR",
+        "PSA-ATR",
+        "HTX-ATR",
+        "PMP-ATR",
+        "SYNGAS-CLR"
+      ],
+      "equipment_total": 17751575.80724273,
+      "installation_costs": {
+        "piping": 11538524.27,
+        "civil_foundations": 4437893.95,
+        "insulation": 1775157.58
+      },
+      "installation_total": 17751575.799999997,
+      "total_installed_cost": 35503151.607242726
+    },
+    {
+      "block_name": "Water_Treatment",
+      "equipment_tags": [
+        "WTR-SRC",
+        "WTR-PUR",
+        "WTR-TANK"
+      ],
+      "equipment_total": 1481833.26,
+      "installation_costs": {
+        "piping": 148183.33
+      },
+      "installation_total": 148183.33,
+      "total_installed_cost": 1630016.59
+    },
+    {
+      "block_name": "General",
+      "equipment_tags": [
+        "H2-MIX",
+        "H2-CLR"
+      ],
+      "equipment_total": 200312.28,
+      "installation_costs": {
+        "engineering_supervision": 66103.05,
+        "construction_expenses": 30046.84,
+        "contingency": 30046.84
+      },
+      "installation_total": 126196.73,
+      "total_installed_cost": 326509.01
+    }
+  ],
+  "total_C_BM": 109427064.88516656,
+  "total_C_BM_low": 80859365.99000002,
+  "total_C_BM_high": 137994763.76999998,
+  "total_installation": 78644885.8,
+  "total_installed_cost": 188071950.68516654,
+  "entries_with_cost": 65,
+  "entries_without_cost": 4,
+  "entries_out_of_bounds": 3
+}

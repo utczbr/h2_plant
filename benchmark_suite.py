@@ -34,7 +34,7 @@ def get_memory_usage_mb():
     process = psutil.Process(os.getpid())
     return process.memory_info().rss / (1024 * 1024)
 
-def run_benchmark(scenarios_dir: str, hours: int, output_dir: Path):
+def run_benchmark(scenarios_dir: str, hours: int, output_dir: Path, enable_profiling: bool = True):
     """
     Run detailed benchmark of the simulation.
     
@@ -158,8 +158,10 @@ def run_benchmark(scenarios_dir: str, hours: int, output_dir: Path):
     engine.is_running = True
     engine.steps_run = 0
     
-    profiler = cProfile.Profile()
-    profiler.enable()  # START PROFILING
+    profiler = None
+    if enable_profiling:
+        profiler = cProfile.Profile()
+        profiler.enable()  # START PROFILING
     
     loop_start_time = time.perf_counter()
     
@@ -255,7 +257,8 @@ def run_benchmark(scenarios_dir: str, hours: int, output_dir: Path):
         logger.error(f"Simulation crashed at step {current_step}: {e}", exc_info=True)
         raise
 
-    profiler.disable()  # STOP PROFILING
+    if profiler:
+        profiler.disable()  # STOP PROFILING
     engine.is_running = False
     flow_tracker.flush(
         output_dir / "flows.jsonl",
@@ -280,7 +283,8 @@ def run_benchmark(scenarios_dir: str, hours: int, output_dir: Path):
     
     # 1. Save Profile Stats
     stats_path = output_dir / "profile.stats"
-    profiler.dump_stats(stats_path)
+    if profiler:
+        profiler.dump_stats(stats_path)
     
     txt_report_path = output_dir / "benchmark_report.txt"
     with open(txt_report_path, 'w') as f:
@@ -298,13 +302,16 @@ def run_benchmark(scenarios_dir: str, hours: int, output_dir: Path):
         f.write(f"Average Step Time: {np.mean(step_timings)*1000:.3f} ms\n")
         f.write(f"Max Step Time: {np.max(step_timings)*1000:.3f} ms\n\n")
         
-        f.write("TOP 50 BOTTLENECKS (Cumulative Time in Loop):\n")
-        f.write("-" * 60 + "\n")
-        
-        s = StringIO()
-        ps = pstats.Stats(profiler, stream=s).sort_stats('cumtime')
-        ps.print_stats(50)
-        f.write(s.getvalue())
+        if profiler:
+            f.write("TOP 50 BOTTLENECKS (Cumulative Time in Loop):\n")
+            f.write("-" * 60 + "\n")
+
+            s = StringIO()
+            ps = pstats.Stats(profiler, stream=s).sort_stats('cumtime')
+            ps.print_stats(50)
+            f.write(s.getvalue())
+        else:
+            f.write("(Profiling disabled - run without --no-profile for hotspot analysis)\n")
     
     print(f"\nReport saved to: {txt_report_path}")
     
@@ -320,8 +327,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Detailed Simulation Benchmark")
     parser.add_argument("--hours", type=int, default=168, help="Simulation duration (default: 168 hours = 1 week)")
     parser.add_argument("--scenarios", type=str, default="scenarios", help="Scenarios directory")
+    parser.add_argument("--no-profile", action="store_true", help="Disable cProfile for accurate absolute timing (5-15%% overhead removed)")
     args = parser.parse_args()
-    
+
     output_dir = Path("benchmark_output")
-    
-    run_benchmark(args.scenarios, args.hours, output_dir)
+
+    run_benchmark(args.scenarios, args.hours, output_dir, enable_profiling=not args.no_profile)
