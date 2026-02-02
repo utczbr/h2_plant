@@ -111,6 +111,14 @@ class EquipmentMapping(BaseModel):
     
     # Modular Design
     modular_design: bool = Field(False, description="Whether to split capacity into modular units")
+    module_capacity: Optional[float] = Field(
+        None,
+        description="Capacity per modular unit (same unit as capacity_variable)"
+    )
+    module_count: Optional[int] = Field(
+        None,
+        description="Fixed number of modular units (overrides auto split)"
+    )
     module_d_shell: Optional[float] = Field(None, description="Diameter of single module shell (m)")
     modular_note: Optional[str] = Field(None, description="Note on modular design strategy")
     

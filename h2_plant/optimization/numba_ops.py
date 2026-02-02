@@ -3286,3 +3286,237 @@ def batch_pressure_update_vector_T(
             pressures[i] = density * gas_constant * temperatures[i]
         else:
             pressures[i] = 0.0
+
+
+# =============================================================================
+# JIT WARMUP — Pre-compile all kernels with production-matching type signatures
+# =============================================================================
+
+def warmup_jit_kernels(lut_mgr=None):
+    """
+    Pre-warm all @njit functions to avoid JIT compilation inside the timed loop.
+
+    Calls each function once with representative inputs matching production
+    types (float64 arrays, correct shapes and contiguity). If Numba's on-disk
+    cache (.nbi files) is already populated, each call returns instantly.
+
+    Args:
+        lut_mgr: Optional LUTManager instance. If provided, uses real LUT arrays
+                 to ensure exact dtype/contiguity/shape match. If None, uses
+                 small synthetic arrays (sufficient for cache-hit warmup).
+    """
+    # --- Grid arrays (float64, C-contiguous) ---
+    if lut_mgr is not None:
+        P_grid = lut_mgr._pressure_grid
+        T_grid = lut_mgr._temperature_grid
+        stacked_H = lut_mgr.stacked_H
+        stacked_S = lut_mgr.stacked_S
+        stacked_C = lut_mgr.stacked_C
+        stacked_D = lut_mgr.stacked_D
+        n_fluids = stacked_H.shape[0]
+    else:
+        n_fluids = 7
+        P_grid = np.linspace(1e5, 1000e5, 10)
+        T_grid = np.linspace(273.15, 1200.0, 10)
+        stacked_H = np.ones((n_fluids, 10, 10), dtype=np.float64)
+        stacked_S = np.ones((n_fluids, 10, 10), dtype=np.float64)
+        stacked_C = np.ones((n_fluids, 10, 10), dtype=np.float64)
+        stacked_D = np.ones((n_fluids, 10, 10), dtype=np.float64)
+
+    n_p = len(P_grid)
+    n_t = len(T_grid)
+    P_val = 30e5
+    T_val = 400.0
+
+    # 2D single-fluid LUT slices
+    H_lut_2d = stacked_H[0]
+    C_lut_2d = stacked_C[0]
+    S_lut_2d = stacked_S[0]
+
+    # Mass/mole fraction arrays
+    mass_fracs_7 = np.zeros(n_fluids, dtype=np.float64)
+    mass_fracs_7[0] = 0.9; mass_fracs_7[5] = 0.1
+    mole_fracs_7 = np.zeros(n_fluids, dtype=np.float64)
+    mole_fracs_7[0] = 0.95; mole_fracs_7[5] = 0.05
+    mass_fracs_6 = np.array([0.9, 0.0, 0.0, 0.0, 0.0, 0.1], dtype=np.float64)
+    mole_fracs_6 = np.array([0.5, 0.0, 0.0, 0.0, 0.0, 0.5], dtype=np.float64)
+
+    # Tank arrays
+    n_tanks = 4
+    states_i32 = np.zeros(n_tanks, dtype=np.int32)
+    masses_f64 = np.ones(n_tanks, dtype=np.float64) * 100.0
+    capacities_f64 = np.ones(n_tanks, dtype=np.float64) * 1000.0
+    volumes_f64 = np.ones(n_tanks, dtype=np.float64) * 50.0
+    pressures_f64 = np.ones(n_tanks, dtype=np.float64) * 30e5
+    temperatures_f64 = np.ones(n_tanks, dtype=np.float64) * 300.0
+
+    # Cp polynomial coefficients (6 species x 5 coefficients)
+    cp_coeffs = np.ones((6, 5), dtype=np.float64) * 0.01
+    h_formations = np.zeros(6, dtype=np.float64)
+
+    # Deoxo zone arrays
+    L_zones = np.array([0.5, 0.5], dtype=np.float64)
+    k0_zones = np.array([1e6, 1e6], dtype=np.float64)
+    Ua_zones = np.array([100.0, 100.0], dtype=np.float64)
+
+    # Spline arrays
+    breaks = np.array([0.0, 1.0, 2.0], dtype=np.float64)
+    coeffs_spline = np.ones((2, 4), dtype=np.float64)
+
+    # Production/degradation arrays
+    powers_mw = np.array([1.0, 2.0], dtype=np.float64)
+    deg_factors = np.array([1.0, 1.01], dtype=np.float64)
+
+    # Saturation arrays
+    P_sat_grid = np.linspace(1e5, 100e5, 10)
+    T_sat_grid = np.linspace(373.0, 600.0, 10)
+    H_liq_sat = np.ones(10, dtype=np.float64) * 4e5
+    H_vap_sat = np.ones(10, dtype=np.float64) * 2.7e6
+
+    # Boiler batch arrays
+    h_in_arr = np.array([1e5], dtype=np.float64)
+    flow_arr = np.array([1.0], dtype=np.float64)
+    power_arr = np.array([1e6], dtype=np.float64)
+    pressure_arr = np.array([5e5], dtype=np.float64)
+    T_in_arr = np.array([400.0], dtype=np.float64)
+
+    # SOEC arrays
+    real_powers = np.array([1.0, 2.0], dtype=np.float64)
+    real_states = np.array([1, 1], dtype=np.int32)
+    real_limits = np.array([5.0, 5.0], dtype=np.float64)
+    virtual_map = np.array([0, 1], dtype=np.int32)
+
+    # Storage MPC arrays
+    prod_profile = np.ones(24, dtype=np.float64)
+    demand_profile = np.ones(24, dtype=np.float64) * 0.5
+
+    # Vectorized interp arrays
+    x_arr = np.array([P_val], dtype=np.float64)
+    y_arr = np.array([T_val], dtype=np.float64)
+
+    # H_from_PS LUT
+    if lut_mgr is not None and hasattr(lut_mgr, 'stacked_H_from_PS'):
+        H_from_PS = lut_mgr.stacked_H_from_PS
+    else:
+        H_from_PS = np.ones((n_p, n_t), dtype=np.float64)
+
+    R_const = 8.314
+    F_const = 96485.0
+
+    # --- Call every @njit function once to trigger compilation ---
+
+    # Scalar thermodynamics
+    calculate_dissolved_gas_mg_kg_jit(T_val, 1e5, 1282.0, 500.0, 0.002016)
+    fast_composition_properties(mass_fracs_7)
+    calculate_stream_enthalpy_jit(T_val, mass_fracs_6, 0.0)
+    calculate_water_psat_jit(T_val)
+    solve_water_T_from_H_jit(5e5, P_val, T_val)
+    solve_rachford_rice_single_condensable(0.05, 0.5)
+    calculate_mixture_enthalpy(T_val, mole_fracs_6, h_formations, cp_coeffs, 298.15)
+    calculate_mixture_cp(T_val, mole_fracs_6, cp_coeffs, 298.15)
+    calc_boiler_outlet_enthalpy(1e5, 1.0, 1e6, 0.95)
+
+    # Tank operations
+    find_available_tank(states_i32, masses_f64, capacities_f64, 0.0)
+    find_fullest_tank(states_i32, masses_f64, 0.0)
+    batch_pressure_update(masses_f64, volumes_f64, pressures_f64.copy(), T_val, 4124.0)
+    calculate_compression_work(30e5, 60e5, 1.0, 300.0, 0.85, 1.4, 4124.0)
+    distribute_mass_to_tanks(10.0, states_i32.copy(), masses_f64.copy(), capacities_f64)
+    calculate_total_mass_by_state(states_i32, masses_f64, 0)
+    simulate_filling_timestep(1.0, 60.0, states_i32.copy(), masses_f64.copy(), capacities_f64)
+    distribute_mass_and_energy(10.0, 300.0, states_i32.copy(), masses_f64.copy(),
+                               temperatures_f64.copy(), capacities_f64, 1.4)
+    apply_heat_loss_batch(temperatures_f64.copy(), masses_f64, 293.0, 60.0, 10.0, 10200.0)
+    batch_pressure_update_vector_T(masses_f64, volumes_f64, pressures_f64.copy(),
+                                   temperatures_f64, 4124.0)
+
+    # Storage MPC
+    calculate_storage_mpc_factor(0.5, 1000.0, prod_profile, demand_profile, 1.0, 0.95, 24)
+
+    # Interpolation
+    bilinear_interp_jit(P_grid, T_grid, H_lut_2d, P_val, T_val)
+    get_mixture_enthalpy_fast(stacked_H, P_grid, T_grid, mass_fracs_7, P_val, T_val)
+    try:
+        batch_bilinear_interp_jit(P_grid, T_grid, H_lut_2d, x_arr, y_arr)
+    except Exception:
+        pass  # parallel=True with internal prange import may fail on some Numba versions
+    bilinear_interp_liquid(P_grid, T_grid, H_lut_2d, 5e5, 350.0)
+
+    # Mixture thermodynamics (pre-calculated weights path)
+    ix, iy, wx, wy = get_interp_weights_jit(P_grid, T_grid, P_val, T_val)
+    interp_from_weights_jit(H_lut_2d, ix, iy, wx, wy)
+    get_mix_cp_jit(P_grid, T_grid, stacked_C, mass_fracs_7, ix, iy, wx, wy)
+    get_mix_enthalpy_fast_jit(stacked_H, mass_fracs_7, ix, iy, wx, wy)
+    get_mix_density_jit(stacked_D, mass_fracs_7, ix, iy, wx, wy)
+    calculate_mixture_density_jit(P_val, T_val, P_grid, T_grid, stacked_D, mass_fracs_7)
+    get_mix_entropy_fast_jit(stacked_S, mass_fracs_7, mole_fracs_7, 0.01, -0.1,
+                             ix, iy, wx, wy)
+
+    # Compression
+    calculate_mixture_compression_jit(
+        30e5, 60e5, 300.0, 0.85, P_grid, T_grid,
+        stacked_H, stacked_S, stacked_C,
+        mass_fracs_7, mole_fracs_7, 0.01, -0.1)
+    solve_temp_limited_pressure_jit(
+        30e5, 60e5, 300.0, 450.0, 0.85, P_grid, T_grid,
+        stacked_H, stacked_S, stacked_C,
+        mass_fracs_7, mole_fracs_7, 0.01, -0.1)
+
+    # Single-fluid solvers
+    solve_temperature_from_enthalpy_jit(5e5, P_val, T_val, P_grid, T_grid,
+                                        H_lut_2d, C_lut_2d)
+    calc_boiler_flash_jit(2.8e6, 5e5, 400.0, P_sat_grid, T_sat_grid,
+                          H_liq_sat, H_vap_sat, P_grid, T_grid, H_lut_2d, C_lut_2d)
+
+    # Real-gas compression (requires separate S_grid and H_from_PS(P,S) LUT)
+    S_grid_synthetic = np.linspace(100.0, 50000.0, n_p)
+    H_from_PS_2d = np.ones((n_p, n_p), dtype=np.float64)
+    calculate_compression_realgas_jit(
+        30e5, 60e5, 300.0, 0.85, P_grid, T_grid,
+        S_grid_synthetic, H_lut_2d, S_lut_2d, C_lut_2d, H_from_PS_2d)
+
+    # Boiler batch
+    calc_boiler_batch_scenario(h_in_arr, flow_arr, power_arr, 0.95)
+    try:
+        calc_boiler_batch_full(h_in_arr, flow_arr, power_arr, pressure_arr, T_in_arr,
+                               0.95, True, P_grid, T_grid, H_lut_2d, C_lut_2d,
+                               P_sat_grid, T_sat_grid, H_liq_sat, H_vap_sat, 2000.0)
+    except Exception:
+        pass  # parallel=True may fail on some Numba versions
+
+    # PEM
+    calculate_pem_voltage_jit(100.0, 353.0, 30e5, R_const, F_const, 2,
+                              0.5, 1e-3, 20000.0, 0.000183, 10.0, 1e5)
+    solve_pem_j_jit(1e6, 353.0, 30e5, 100.0, 5000.0, 0.1, 100.0,
+                    R_const, F_const, 2, 0.5, 1e-3, 20000.0, 0.000183, 10.0, 1e5, 50, 1e-4)
+
+    # SOEC
+    simulate_soec_step_jit(5.0, real_powers, real_states, real_limits,
+                           virtual_map, 5.0, 0.01, 0.5, 0.1, 0.5)
+
+    # Spline / H2 production
+    eval_cubic_spline(1.5, breaks, coeffs_spline)
+    calculate_h2_production_dynamic(powers_mw, 2.0, breaks, coeffs_spline,
+                                    deg_factors, 1.0)
+
+    # Heat transfer correlations
+    dry_cooler_ntu_effectiveness(2.0, 0.5)
+    counter_flow_ntu_effectiveness(2.0, 0.5)
+    calculate_reynolds_flux(1.0, 0.01, 0.02, 1.8e-5)
+    calculate_nusselt_dittus_boelter(10000.0, 0.7, True)
+    calculate_nusselt_crossflow(10000.0, 0.7)
+    calculate_dynamic_u_fouled(500.0, 200.0, 0.025, 0.03, 50.0, 0.0001, 0.0002)
+
+    # Cyclone
+    solve_cyclone_mechanics(0.5, 1.0, 1000.0, 1.8e-5, 0.05, 0.785, 10)
+
+    # Deoxo
+    solve_deoxo_pfr_step(1.0, 50, 400.0, 30e5, 100.0, 0.001, 1e6, 50000.0,
+                         R_const, -250000.0, 100.0, 350.0, 0.01, 14000.0)
+    solve_deoxo_multizone_jit(L_zones, k0_zones, Ua_zones, 400.0, 30e5, 100.0,
+                              0.001, 50000.0, R_const, -250000.0, 350.0, 0.01,
+                              14000.0, 0.0, 50)
+
+    # UV Flash
+    solve_uv_flash(1e5, 1.0, 10.0, mole_fracs_6, h_formations, cp_coeffs,
+                   400.0, R_const)

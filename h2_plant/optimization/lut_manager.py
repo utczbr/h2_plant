@@ -680,19 +680,45 @@ class LUTManager(Component):
     def _in_bounds(self, pressure: float, temperature: float) -> bool:
         """
         Check if pressure and temperature are within LUT bounds.
-
-        Args:
-            pressure (float): Pressure in Pa.
-            temperature (float): Temperature in K.
-
-        Returns:
-            bool: True if within bounds.
         """
-        # PERFORMANCE: Use cached bounds (avoids config attribute chain)
         return (
             self._p_min <= pressure <= self._p_max and
             self._t_min <= temperature <= self._t_max
         )
+
+    def bind_lookup(self, fluid: str, property_type: PropertyType):
+        """
+        Return a fast callable for repeated lookups of the same fluid/property.
+
+        Eliminates per-call dict navigation and validation overhead.
+        Falls back to full lookup() for out-of-bounds queries.
+
+        Args:
+            fluid: Fluid name (e.g. 'H2').
+            property_type: Property code (e.g. 'H').
+
+        Returns:
+            Callable[[float, float], float]: lookup_fast(pressure_pa, temperature_k)
+        """
+        if not self._initialized:
+            self.initialize()
+
+        lut = self._luts[fluid][property_type]
+        p_grid = self._pressure_grid
+        t_grid = self._temperature_grid
+        p_min = self._p_min
+        p_max = self._p_max
+        t_min = self._t_min
+        t_max = self._t_max
+        fallback = self._fallback_coolprop
+
+        def lookup_fast(pressure: float, temperature: float) -> float:
+            if not (p_min <= pressure <= p_max and t_min <= temperature <= t_max):
+                return fallback(fluid, property_type, pressure, temperature)
+            ix, iy, wx, wy = get_interp_weights_jit(p_grid, t_grid, pressure, temperature)
+            return float(interp_from_weights_jit(lut, ix, iy, wx, wy))
+
+        return lookup_fast
 
     def _generate_saturation_lut(self) -> None:
         """
@@ -777,49 +803,47 @@ class LUTManager(Component):
         w = (temperature_k - T0) / (T1 - T0) if T1 != T0 else 0.0
         return float(P0 * (1 - w) + P1 * w)
 
+    # Memoization cache for saturation properties (pressure -> result)
+    _sat_cache_pressure: float = -1.0
+    _sat_cache_result: Optional[Dict[str, float]] = None
+
     def get_saturation_properties(self, pressure_pa: float) -> Dict[str, float]:
         """
         Retrieves saturation data by inverting the P_sat(T) relationship.
-
-        Since the Saturation LUT is indexed by Temperature (T -> P_sat), this function
-        performs an inverse interpolation to find T_sat(P). It then looks up 
-        enthalpies at that calculated saturation temperature.
-
-        Approximation:
-        Inverse linear interpolation is accurate because the saturation curve 
-        is monotonic. This avoids the need for a separate pressure-indexed saturation LUT.
+        Results are memoized by exact pressure for O(1) repeated lookups.
 
         Args:
             pressure_pa (float): System pressure (Pa).
 
         Returns:
-            Dict[str, float]: Saturation properties:
-                - 'T_sat_K': Saturation temperature.
-                - 'h_f_Jkg': Saturated liquid enthalpy.
-                - 'h_g_Jkg': Saturated vapor enthalpy.
-                
-        Note:
-            Returns standard atmospheric values (1 atm) if pressure is out of range 
-            or LUT is unavailable, preventing crash during initialization transients.
+            Dict with 'T_sat_K', 'h_f_Jkg', 'h_g_Jkg'.
         """
-        # Fallback constants (1 atm saturation)
+        # Fast path: exact pressure match (most components hold constant P within a step)
+        if pressure_pa == self._sat_cache_pressure and self._sat_cache_result is not None:
+            return self._sat_cache_result
+
+        result = self._compute_saturation_properties(pressure_pa)
+        self._sat_cache_pressure = pressure_pa
+        self._sat_cache_result = result
+        return result
+
+    def _compute_saturation_properties(self, pressure_pa: float) -> Dict[str, float]:
+        """Core computation for saturation properties (uncached)."""
         default = {'T_sat_K': 373.15, 'h_f_Jkg': 419000.0, 'h_g_Jkg': 2676000.0}
-        
-        if (self._saturation_temp_grid is None or 
+
+        if (self._saturation_temp_grid is None or
             'P_sat' not in self._saturation_lut or
             'H_liq' not in self._saturation_lut or
             'H_vap' not in self._saturation_lut):
             return default
-        
+
         T_grid = self._saturation_temp_grid
         P_sat = self._saturation_lut['P_sat']
         H_liq = self._saturation_lut['H_liq']
         H_vap = self._saturation_lut['H_vap']
-        
-        # Check bounds (P_sat is monotonically increasing with T)
+
         P_min, P_max = P_sat[0], P_sat[-1]
         if pressure_pa < P_min or pressure_pa > P_max:
-            # Out of bounds - use CoolProp if available
             if CP:
                 try:
                     t_sat = CP.PropsSI('T', 'P', pressure_pa, 'Q', 0, 'Water')
@@ -829,15 +853,11 @@ class LUTManager(Component):
                 except Exception:
                     return default
             return default
-        
-        # Inverse interpolation: P → T_sat
-        # P_sat array is monotonic (increasing with T), so np.interp works
+
         t_sat = float(np.interp(pressure_pa, P_sat, T_grid))
-        
-        # Interpolate enthalpies at T_sat
         h_liq = float(np.interp(t_sat, T_grid, H_liq))
         h_vap = float(np.interp(t_sat, T_grid, H_vap))
-        
+
         return {'T_sat_K': t_sat, 'h_f_Jkg': h_liq, 'h_g_Jkg': h_vap}
 
     def _fallback_coolprop(

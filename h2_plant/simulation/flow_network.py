@@ -94,7 +94,9 @@ class FlowNetwork:
             'electricity': 'ELECTRICAL_ENERGY',
             'heat': 'THERMAL_ENERGY',
             'natural_gas': 'NATURAL_GAS_MASS',
-            'work': 'COMPRESSION_WORK'
+            'work': 'COMPRESSION_WORK',
+            'stream': 'STREAM_MASS',
+            'gas': 'STREAM_MASS',
         }
 
     def initialize(self) -> None:
@@ -112,34 +114,38 @@ class FlowNetwork:
             f"and {len(self._indexed_connections)} indexed connections"
         )
         self._validate_connections()
-        
+
         # PERFORMANCE: Pre-resolve component objects for O(1) access during simulation
-        # Eliminates ~2M registry.get() dict lookups per 480h simulation
         self._source_cache: Dict[str, Any] = {}
         self._target_cache: Dict[str, Any] = {}
-        
+
         for conn in self._connections:
             self._source_cache[conn.source_id] = self.registry.get(conn.source_id)
             self._target_cache[conn.target_id] = self.registry.get(conn.target_id)
-            
+
         for conn in self._indexed_connections:
             src_id = self._resolve_component_id(conn.source_name, conn.source_index)
             tgt_id = self._resolve_component_id(conn.target_name, conn.target_index)
             self._source_cache[src_id] = self.registry.get(src_id)
             self._target_cache[tgt_id] = self.registry.get(tgt_id)
 
+        # PERFORMANCE: Split connections into signal vs non-signal at init
+        self._signal_connections = [c for c in self._connections if c.resource_type == 'signal']
+        self._flow_connections = [c for c in self._connections if c.resource_type != 'signal']
+
+        # PERFORMANCE: Pre-map resource_type -> (flow_type_str, unit_str) per connection
+        self._conn_flow_meta = {}
+        for conn in self._flow_connections:
+            ft = self._resource_map.get(conn.resource_type.lower(),
+                                        f"{conn.resource_type.upper()}_MASS")
+            unit = 'kg' if 'mass' in ft.lower() else 'kWh'
+            self._conn_flow_meta[id(conn)] = (ft, unit)
+
     def execute_flows(self, t: float) -> None:
         """
-        Execute all flows for the current timestep.
-
-        Iterates through all connections, pulling output from source
-        and pushing to target. Flow execution continues even if
-        individual connections fail (error is logged).
-
-        Args:
-            t (float): Current simulation time in hours.
+        Execute all non-signal flows for the current timestep.
         """
-        for conn in self._connections:
+        for conn in self._flow_connections:
             try:
                 self._execute_single_flow(conn, t)
             except Exception as e:
@@ -157,90 +163,70 @@ class FlowNetwork:
     def execute_signals(self, t: float) -> None:
         """
         Execute ONLY signal connections (pre-physics pass).
-
-        This method propagates control/demand signals between components
-        BEFORE the physics step, ensuring that downstream components
-        have current demand information for their step() calculation.
-        
-        Called from SimulationEngine BEFORE component.step() loop.
-
-        Args:
-            t (float): Current simulation time in hours.
         """
-        for conn in self._connections:
-            if conn.resource_type == 'signal':
-                try:
-                    self._execute_single_flow(conn, t)
-                except Exception as e:
-                    logger.error(f"Signal execution failed for {conn.source_id}->{conn.target_id}: {e}")
+        for conn in self._signal_connections:
+            try:
+                self._execute_single_flow(conn, t)
+            except Exception as e:
+                logger.error(f"Signal execution failed for {conn.source_id}->{conn.target_id}: {e}")
 
     def _execute_single_flow(self, conn: ConnectionConfig, t: float) -> None:
         """
         Execute a single legacy connection flow.
-
-        Flow Pattern:
-            1. Get output from source port.
-            2. Check if flow exists (mass > 0 or energy > 0).
-               EXCEPTION: Signals are always transferred regardless of value.
-            3. Push to target via receive_input().
-            4. Notify source of extraction via extract_output().
-
-        Args:
-            conn (ConnectionConfig): Connection configuration.
-            t (float): Current simulation time.
         """
         source = self._source_cache[conn.source_id]
         target = self._target_cache[conn.target_id]
 
         output_value = source.get_output(conn.source_port)
 
-        # Check for valid flow
-        # IMPORTANT: Signal connections must ALWAYS be transferred, even with 0 value
-        # (0 = "Stop" command from tank control zone C)
+        # Signal connections always transfer (0 = "Stop" command)
         is_signal = conn.resource_type == 'signal'
-        
+
         if isinstance(output_value, Stream):
-            # Skip physical streams with no flow, but NEVER skip signals
             if not is_signal and output_value.mass_flow_kg_h <= 0:
                 return
         elif isinstance(output_value, (int, float)):
             if not is_signal and output_value <= 0:
                 return
         elif output_value is None:
-            # No output - skip
             return
         else:
             logger.warning(f"Unknown output type from {conn.source_id}:{conn.source_port}: {type(output_value)}")
             return
 
-        # Push to target
         accepted_amount = target.receive_input(
             port_name=conn.target_port,
             value=output_value,
             resource_type=conn.resource_type
         )
-        
-        # DEBUG: Log signal transfers
+
         if is_signal:
             flow_val = output_value.mass_flow_kg_h if isinstance(output_value, Stream) else output_value
             logger.debug(f"SIGNAL TRANSFER: {conn.source_id}:{conn.source_port} -> {conn.target_id}:{conn.target_port} = {flow_val:.0f} kg/h")
+            return
 
-        if accepted_amount > 0 and not is_signal:
+        if accepted_amount > 0:
             source.extract_output(
                 port_name=conn.source_port,
                 amount=accepted_amount,
                 resource_type=conn.resource_type
             )
-            
-            # Record flow to tracker for Sankey/Analytics
+
+            # Record flow with pre-resolved metadata
             if self.flow_tracker:
-                flow_type = self._resource_map.get(conn.resource_type.lower(), f"{conn.resource_type.upper()}_MASS")
+                meta = self._conn_flow_meta.get(id(conn))
+                if meta:
+                    flow_type, unit = meta
+                else:
+                    flow_type = self._resource_map.get(conn.resource_type.lower(),
+                                                       f"{conn.resource_type.upper()}_MASS")
+                    unit = 'kg' if 'mass' in flow_type.lower() else 'kWh'
                 self.flow_tracker.record_flow(
                     source_component=conn.source_id,
                     destination_component=conn.target_id,
                     flow_type=flow_type,
                     amount=accepted_amount,
-                    unit='kg' if 'mass' in flow_type.lower() else 'kWh'
+                    unit=unit
                 )
 
     def _resolve_component_id(self, name: str, index: int) -> str:

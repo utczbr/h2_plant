@@ -53,6 +53,7 @@ from h2_plant.components.water.ultrapure_water_tank import UltraPureWaterTank
 from h2_plant.components.delivery.discharge_station import DischargeStation
 from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer
 from h2_plant.components.mixing.water_mixer import WaterMixer
+from h2_plant.components.external.biogas_source import BiogasSource
 from h2_plant.optimization.numba_ops import calculate_storage_mpc_factor
 
 logger = logging.getLogger(__name__)
@@ -398,19 +399,50 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         if self._storage_total_capacity_kg > 0:
             self._history['storage_capacity_kg'] = np.full(total_steps, self._storage_total_capacity_kg, dtype=np.float64)
 
-        # 4. OPTIMIZATION: Pre-cache BOP power consumers to avoid registry scan every step
-        self._bop_power_components = []
+        # 4. OPTIMIZATION: Pre-cache BOP power consumers with resolved getter
+        self._bop_power_getters = []  # List of (component, getter_func)
         for cid, comp in registry.list_components():
-            # Check for various power attributes
-            has_power = (
-                hasattr(comp, 'power_kw') or
-                hasattr(comp, 'electrical_power_kw') or
-                hasattr(comp, 'fan_power_kw') or
-                hasattr(comp, 'current_power_w')
-            )
-            if has_power:
-                self._bop_power_components.append(comp)
-        logger.info(f"Pre-cached {len(self._bop_power_components)} BOP power consumers")
+            if hasattr(comp, 'power_kw'):
+                self._bop_power_getters.append(lambda c=comp: c.power_kw)
+            elif hasattr(comp, 'electrical_power_kw'):
+                self._bop_power_getters.append(lambda c=comp: c.electrical_power_kw)
+            elif hasattr(comp, 'fan_power_kw'):
+                self._bop_power_getters.append(lambda c=comp: c.fan_power_kw)
+            elif hasattr(comp, 'current_power_w'):
+                self._bop_power_getters.append(lambda c=comp: c.current_power_w / 1000.0)
+        logger.info(f"Pre-cached {len(self._bop_power_getters)} BOP power consumers")
+
+        # 5. Pre-resolve compressors and tanks (avoids hasattr check every step)
+        self._compressors = [comp for _, comp in registry.list_components() if isinstance(comp, CompressorSingle)]
+        from h2_plant.components.storage.h2_tank import TankArray
+        self._tanks = [comp for _, comp in registry.list_components() if isinstance(comp, TankArray)]
+
+        # 6. Pre-resolve SOEC attribute getters
+        if self._soec:
+            self._soec_has_real_powers = hasattr(self._soec, 'real_powers')
+            if hasattr(self._soec, 'last_step_h2_kg'):
+                self._get_soec_h2 = lambda: self._soec.last_step_h2_kg
+            elif hasattr(self._soec, 'last_h2_output_kg'):
+                self._get_soec_h2 = lambda: self._soec.last_h2_output_kg
+            elif hasattr(self._soec, 'h2_output_kg'):
+                self._get_soec_h2 = lambda: self._soec.h2_output_kg
+            else:
+                self._get_soec_h2 = lambda: 0.0
+            self._soec_cid = getattr(self._soec, 'component_id', 'SOEC_Cluster')
+        else:
+            self._soec_has_real_powers = False
+            self._get_soec_h2 = lambda: 0.0
+            self._soec_cid = None
+
+        # 7. Pre-resolve cooling manager
+        self._cooling_manager = registry.get('cooling_manager') if registry else None
+
+        # 8. Pre-resolve economics config
+        self._bop_pricing_mode = getattr(context.economics, 'bop_pricing_mode', 'fixed')
+        self._bop_fixed_price = getattr(context.economics, 'bop_fixed_price_eur_mwh', 80.0)
+
+        # 9. Initialize accumulators
+        self._accum_bop_cost = 0.0
 
         self._state = IntegratedDispatchState()
         logger.info(f"Initialized HybridArbitrageEngineStrategy with {total_steps} steps and Storage APC")
@@ -420,6 +452,24 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         Scan registry, allocate arrays, and bind them to StreamRecorder objects.
         This enables O(1) access during the simulation loop.
         """
+        def _alloc_stream_history_with_prefix(prefix: str, steps: int) -> None:
+            keys = [
+                f"{prefix}_outlet_temp_c",
+                f"{prefix}_outlet_pressure_bar",
+                f"{prefix}_outlet_mass_flow_kg_h",
+                f"{prefix}_outlet_h2o_frac",
+                f"{prefix}_h2o_vapor_kg_h"
+            ]
+            species = ['H2', 'O2', 'N2', 'H2O', 'CH4', 'CO2']
+            keys.extend([f"{prefix}_outlet_{sp}_molf" for sp in species])
+
+            if self._use_chunked_history:
+                for k in keys:
+                    self._history_manager.register_column(k, np.float64)
+
+            for k in keys:
+                self._history[k] = np.zeros(steps, dtype=np.float64)
+
         # Mapping: Class Type -> (Stream Attribute Name, List of (Metric Name, Metric Attribute))
         CONFIG_MAP = {
             Chiller: ('outlet_stream', [('cooling_load_kw', 'cooling_load_kw'), ('electrical_power_kw', 'electrical_power_kw'), ('latent_heat_kw', 'latent_heat_kw'), ('sensible_heat_kw', 'sensible_heat_kw')]),
@@ -446,6 +496,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             ]),
             MultiComponentMixer: ('outlet_stream', [('temperature_k', 'temperature_k'), ('pressure_pa', 'pressure_pa')]),
             WaterMixer: ('outlet_stream', [('outlet_temperature_c', 'outlet_temperature_c'), ('outlet_mass_flow_kg_h', 'outlet_mass_flow_kg_h')]),
+            BiogasSource: ('out', []),
             DischargeStation: ('h2_out', [
                 ('truck_demand_kg_h', 'total_demand_signal_kg_h'),
                 ('trucks_filled', 'trucks_filled_total'),
@@ -603,6 +654,46 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
 
                 recorder.bind_accessor()
                 self._recorders.append(recorder)
+
+                # Syngas PSA Tail Gas Recorder (separate stream)
+                if isinstance(comp, SyngasPSA):
+                    tail_prefix = f"{cid}_tail_gas"
+                    _alloc_stream_history_with_prefix(tail_prefix, total_steps)
+
+                    tail_recorder = StreamRecorder(
+                        component=comp,
+                        stream_attr='tail_gas_out',
+                        temp_arr=self._history[f"{tail_prefix}_outlet_temp_c"],
+                        press_arr=self._history[f"{tail_prefix}_outlet_pressure_bar"],
+                        flow_arr=self._history[f"{tail_prefix}_outlet_mass_flow_kg_h"],
+                        h2o_frac_arr=self._history[f"{tail_prefix}_outlet_h2o_frac"],
+                        h2o_vapor_arr=self._history[f"{tail_prefix}_h2o_vapor_kg_h"],
+                        mole_arrs=[
+                            self._history[f"{tail_prefix}_outlet_H2_molf"],
+                            self._history[f"{tail_prefix}_outlet_O2_molf"],
+                            self._history[f"{tail_prefix}_outlet_N2_molf"],
+                            self._history[f"{tail_prefix}_outlet_H2O_molf"],
+                            self._history[f"{tail_prefix}_outlet_CH4_molf"],
+                            self._history[f"{tail_prefix}_outlet_CO2_molf"]
+                        ],
+                        extra_metric_arrs=[],
+                        temp_col_name=f"{tail_prefix}_outlet_temp_c",
+                        press_col_name=f"{tail_prefix}_outlet_pressure_bar",
+                        flow_col_name=f"{tail_prefix}_outlet_mass_flow_kg_h",
+                        h2o_frac_col_name=f"{tail_prefix}_outlet_h2o_frac",
+                        mole_cols=[
+                            ('H2', f"{tail_prefix}_outlet_H2_molf"),
+                            ('O2', f"{tail_prefix}_outlet_O2_molf"),
+                            ('N2', f"{tail_prefix}_outlet_N2_molf"),
+                            ('H2O', f"{tail_prefix}_outlet_H2O_molf"),
+                            ('CH4', f"{tail_prefix}_outlet_CH4_molf"),
+                            ('CO2', f"{tail_prefix}_outlet_CO2_molf")
+                        ],
+                        extra_metric_cols=[]
+                    )
+
+                    tail_recorder.bind_accessor()
+                    self._recorders.append(tail_recorder)
 
     def _alloc_stream_history(self, cid: str, total_steps: int) -> None:
         """Allocate standard outlet stream history arrays."""
@@ -1140,23 +1231,21 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             local_idx = step_idx
 
         # 1. Specialized Recording (SOEC/PEM Main metrics)
-        
+
         # SOEC Logic
         P_soec_actual = 0.0
         h2_soec = 0.0
         steam_soec = 0.0
         if self._soec:
-            if hasattr(self._soec, 'real_powers'):
+            if self._soec_has_real_powers:
                 P_soec_actual = float(np.sum(self._soec.real_powers))
-            if hasattr(self._soec, 'last_step_h2_kg'): h2_soec = self._soec.last_step_h2_kg
-            elif hasattr(self._soec, 'last_h2_output_kg'): h2_soec = self._soec.last_h2_output_kg
-            elif hasattr(self._soec, 'h2_output_kg'): h2_soec = self._soec.h2_output_kg
+            h2_soec = self._get_soec_h2()
             steam_soec = getattr(self._soec, 'last_step_steam_input_kg', 0.0)
-            
+
             history_store['H2O_soec_out_kg'][local_idx] = getattr(self._soec, 'last_water_output_kg', 0.0)
-            
+
             # Dynamic SOEC Stream
-            cid = self._soec.component_id if hasattr(self._soec, 'component_id') else 'SOEC_Cluster'
+            cid = self._soec_cid
             if cid:
                 try:
                     out_stream = self._soec.get_output('h2_out')
@@ -1191,18 +1280,11 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
 
         # Global Power and Component Logic
         P_bop_kw = 0.0
-        # Check compressors and tanks if not already cached
-        if not hasattr(self, '_compressors'):
-            self._compressors = [comp for _, comp in self._registry.list_components() if isinstance(comp, CompressorSingle)]
-        if not hasattr(self, '_tanks'):
-            from h2_plant.components.storage.h2_tank import TankArray
-            self._tanks = [comp for _, comp in self._registry.list_components() if isinstance(comp, TankArray)]
 
-        # Compressor Total Power
+        # Compressor Total Power (pre-resolved in initialize)
         total_comp_power = 0.0
         for comp in self._compressors:
-            if hasattr(comp, 'power_kw'):
-                total_comp_power += comp.power_kw
+            total_comp_power += comp.power_kw
         if total_comp_power < 0.0:
             total_comp_power = 0.0
         history_store['compressor_power_kw'][local_idx] = total_comp_power
@@ -1218,12 +1300,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         history_store['tank_level_kg'][local_idx] = total_tank_mass
         history_store['tank_pressure_bar'][local_idx] = avg_tank_pressure
 
-        # BOP Calculation - OPTIMIZED: Use pre-cached list instead of registry scan
-        for comp in self._bop_power_components:
-             if hasattr(comp, 'power_kw'): P_bop_kw += comp.power_kw
-             elif hasattr(comp, 'electrical_power_kw'): P_bop_kw += comp.electrical_power_kw
-             elif hasattr(comp, 'fan_power_kw'): P_bop_kw += comp.fan_power_kw
-             elif hasattr(comp, 'current_power_w'): P_bop_kw += (comp.current_power_w / 1000.0)
+        # BOP Calculation - pre-resolved getters from initialize()
+        for getter in self._bop_power_getters:
+            P_bop_kw += getter()
 
         P_bop_mw = P_bop_kw / 1000.0
         
@@ -1231,11 +1310,10 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         P_offer = history_store['P_offer'][local_idx]
         P_sold_corrected = max(0.0, P_offer - P_consumed_from_wind)
         
-        # BOP Grid Import Cost
+        # BOP Grid Import Cost (pre-resolved pricing config from initialize)
         dt = self._context.simulation.timestep_hours
-        bop_pricing_mode = getattr(self._context.economics, 'bop_pricing_mode', 'fixed')
         spot_price = history_store['spot_price'][local_idx]
-        bop_price = spot_price if bop_pricing_mode == 'spot' else getattr(self._context.economics, 'bop_fixed_price_eur_mwh', 80.0)
+        bop_price = spot_price if self._bop_pricing_mode == 'spot' else self._bop_fixed_price
         
         P_soec_grid_mw = P_soec_actual / self._η_soec_trafo if self._η_soec_trafo > 0 else P_soec_actual
         P_pem_grid_mw = P_pem_actual / self._η_pem_trafo if self._η_pem_trafo > 0 else P_pem_actual
@@ -1281,13 +1359,12 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # Check what _accum_spot_purchased was for. It was initialized but logic below uses a NEW cumulative metric for BOP.
         # Let's use a specialized one or reuse.
         
-        # Re-implement cumulative BOP cost logic properly
-        if not hasattr(self, '_accum_bop_cost'): self._accum_bop_cost = 0.0
+        # Cumulative BOP cost (_accum_bop_cost initialized in initialize())
         self._accum_bop_cost += bop_cost_eur
         history_store['cumulative_bop_cost_eur'][local_idx] = self._accum_bop_cost
         
         # SOEC Modules - Record Powers, Hours, and Efficiencies
-        if self._soec and hasattr(self._soec, 'real_powers'):
+        if self._soec and self._soec_has_real_powers:
             history_store['soec_active_modules'][local_idx] = int(np.sum(self._soec.real_powers > 0.01))
             if self._total_steps < 1000000:
                 # Get per-module degradation metrics
@@ -1310,8 +1387,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                         self._get_buffer(key_eff, history_store)[local_idx] = module_effs[i]
 
 
-        # 2. CoolingManager
-        cooling_manager = self._registry.get('cooling_manager') if self._registry else None
+        # 2. CoolingManager (pre-resolved in initialize)
+        cooling_manager = self._cooling_manager
         if cooling_manager:
             history_store['cooling_manager_glycol_supply_temp_c'][local_idx] = getattr(cooling_manager, 'glycol_supply_temp_c', 0.0)
             history_store['cooling_manager_glycol_duty_kw'][local_idx] = getattr(cooling_manager, 'glycol_duty_kw', 0.0)
@@ -1484,4 +1561,3 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         else: components = {}
         from h2_plant.reporting.stream_table import print_stream_summary_table
         print_stream_summary_table(components, list(components.keys()))
-

@@ -445,6 +445,26 @@ class GraphCatalog:
             enabled=True  # P2 FIX: Enabled for dual-mode
         ))
 
+        # 2b. ATR Oxygen Supply (New)
+        self.register(GraphMetadata(
+            graph_id='atr_oxygen_supply_plotly',
+            title='ATR Oxygen Supply (Interactive)',
+            description='Stacked O2 supply to ATR from PEM and external sources',
+            function=pg.plot_atr_oxygen_supply,
+            library=GraphLibrary.PLOTLY,
+            data_required=[
+                'minute',
+                '*ATR_O2_Compressor*mass_flow*',
+                '*O2_Production_Mixer*mass_flow*',
+                '*O2_Backup_Supply*',
+                'O2_pem_kg',
+                'H2_pem_kg'
+            ],
+            priority=GraphPriority.MEDIUM,
+            category='production',
+            enabled=True
+        ))
+
         # 3. Energy Pie (Twin for 'energy_pie')
         self.register(GraphMetadata(
             graph_id='energy_pie_plotly',

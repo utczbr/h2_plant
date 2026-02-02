@@ -284,14 +284,18 @@ class CapexGenerator:
         # History-based mappings for monitoring data
         history_mappings = {
             "power_kw": [
-                "power_kw", "P_consumed_kw", "electrical_power_kw",
+                "power_kw", "power_input_kw", "P_consumed_kw", "electrical_power_kw",
                 "timestep_power_kw", "energy_consumed_kwh",  # Need to derive power
             ],
             "flow_kg_h": [
                 "mass_flow_kg_h", "outlet_mass_flow_kg_h", "actual_mass_transferred_kg",
             ],
             "area_m2": [
-                "heat_duty_kw",  # Might need to derive from duty
+                "heat_duty_kw",
+                "q_transferred_kw",
+                "heat_rejected_kw",
+                "cooling_load_kw",
+                "tqc_duty_kw",
             ],
         }
         
@@ -822,21 +826,44 @@ class CapexGenerator:
             # SPECIAL: Modular Design Check (Attribute-based override from Mapping)
             # If mapping says 'modular_design': true, we recalculate N and Capacity
             if getattr(mapping, 'modular_design', False):
-                module_d = getattr(mapping, 'module_d_shell', 0.3)
-                # Recalculate module capacity (Volume of cylinder D=0.3, L=5D?)
-                # L/D = 5 assumed for standard vertical vessels
-                L_mod = 5.0 * module_d
-                module_vol = (3.14159 * (module_d**2) / 4) * L_mod
-                
-                total_vol_required = capacity  # The 'capacity' returned is the Total Volume
-                
-                if module_vol > 0:
-                     required_units = int(np.ceil(total_vol_required / module_vol))
-                     # Update for cost calculation
-                     capacity = module_vol
-                     num_units = required_units
-                     notes.append(f"MODULAR: Split {total_vol_required:.2f} m3 into {num_units} x {module_vol:.3f} m3 units (D={module_d}m)")
-                     capacity_source += " [Modular Split]"
+                # General modular split (applies to area/power/flow/volume)
+                module_capacity = getattr(mapping, 'module_capacity', None)
+                module_count = getattr(mapping, 'module_count', None)
+
+                if module_capacity and module_capacity > 0:
+                    if module_count and module_count > 0:
+                        num_units = int(module_count)
+                        capacity = float(module_capacity)
+                        notes.append(
+                            f"MODULAR: Using fixed {num_units} x {capacity:.3f} {mapping.capacity_unit} units"
+                        )
+                    else:
+                        required_units = int(np.ceil(capacity / module_capacity)) if capacity > 0 else 0
+                        if required_units > 0:
+                            num_units = required_units
+                            capacity = float(module_capacity)
+                            notes.append(
+                                f"MODULAR: Split {capacity * num_units:.3f} {mapping.capacity_unit} "
+                                f"into {num_units} x {module_capacity:.3f} {mapping.capacity_unit} units"
+                            )
+                    capacity_source += " [Modular Split]"
+                else:
+                    # Volume-specific modular split (legacy behavior)
+                    module_d = getattr(mapping, 'module_d_shell', 0.3)
+                    # Recalculate module capacity (Volume of cylinder D=0.3, L=5D?)
+                    # L/D = 5 assumed for standard vertical vessels
+                    L_mod = 5.0 * module_d
+                    module_vol = (3.14159 * (module_d**2) / 4) * L_mod
+                    
+                    total_vol_required = capacity  # The 'capacity' returned is the Total Volume
+                    
+                    if module_vol > 0:
+                         required_units = int(np.ceil(total_vol_required / module_vol))
+                         # Update for cost calculation
+                         capacity = module_vol
+                         num_units = required_units
+                         notes.append(f"MODULAR: Split {total_vol_required:.2f} m3 into {num_units} x {module_vol:.3f} m3 units (D={module_d}m)")
+                         capacity_source += " [Modular Split]"
             
             # Calculate cost (Unit Cost)
             C_p0, C_BM, formula, cost_class, within_bounds = self._calculate_cost(
@@ -1068,4 +1095,3 @@ class CapexGenerator:
         
         logger.info(f"Calculated costs for {len(report.block_summaries)} blocks")
     
-

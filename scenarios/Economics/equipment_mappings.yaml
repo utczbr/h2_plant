@@ -94,23 +94,23 @@ equipment:
     notes:
       - "Stainless Steel 316 required for 250°C steam"
   
-  - tag: "MTC-2"
-    block: "SOEC"
-    name: "Multistage O2 Compressor (4 stages)"
-    topology_ids:
-      - "SOEC_O2_compressor_1"
-      - "SOEC_O2_compressor_2"
-      - "SOEC_O2_compressor_3"
-      - "SOEC_O2_compressor_4"
-    component_type: "Centrifugal Compressor"
-    process_description: "Four-stage O2 compression from 1 bar to 15 bar"
-    capacity_variable: "power_kw"
-    capacity_unit: "kW"
-    capacity_aggregation: "sum"
-    cost_source: "turton"
-    restrictions:
-      - "450 ≤ W_shaft ≤ 3000 kW"
-      - "NOTE: Actual capacity (~60 kW) is below correlation bounds. Cost estimated via extrapolation (lower accuracy)."
+  # - tag: "MTC-2"
+  #   block: "SOEC"
+  #   name: "Multistage O2 Compressor (4 stages)"
+  #   topology_ids:
+  #     - "SOEC_O2_compressor_1"
+  #     - "SOEC_O2_compressor_2"
+  #     - "SOEC_O2_compressor_3"
+  #     - "SOEC_O2_compressor_4"
+  #   component_type: "Centrifugal Compressor"
+  #   process_description: "Four-stage O2 compression from 1 bar to 15 bar"
+  #   capacity_variable: "power_kw"
+  #   capacity_unit: "kW"
+  #   capacity_aggregation: "sum"
+  #   cost_source: "turton"
+  #   restrictions:
+  #     - "450 ≤ W_shaft ≤ 3000 kW"
+  #     - "NOTE: Actual capacity (~60 kW) is below correlation bounds. Cost estimated via extrapolation (lower accuracy)."
   
   - tag: "MTC-4"
     block: "SOEC"
@@ -171,14 +171,38 @@ equipment:
     cost_source: "turton"
     restrictions:
       - "10 ≤ A ≤ 1000 m²"
-  
+
+  - tag: "DCL-SOEC-H2"
+    block: "SOEC"
+    name: "SOEC H2 Dry Cooler (Pre-Compression)"
+    topology_ids:
+      - "SOEC_H2_DryCooler_1"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Primary cooling for SOEC H2 outlet stream"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "DCL-SOEC-STEAM"
+    block: "SOEC"
+    name: "SOEC Steam Dry Cooler"
+    topology_ids:
+      - "SOEC_Steam_Drycooler"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Steam loop cooling between compressors"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
   
   - tag: "CHL-1"
     block: "SOEC"
     name: "SOEC H2 Chiller"
     topology_ids:
       - "SOEC_H2_Chiller_1"
-    component_type: "Electrical Chiller"
+    component_type: "Shell and Tube Heat Exchanger"
     process_description: "Deep cooling for water knockout (40°C → 4°C)"
     capacity_variable: "cooling_capacity_kw"
     capacity_unit: "kW"
@@ -434,7 +458,7 @@ equipment:
     block: "SOEC"
     name: "Rectifier and Transformer (SOEC)"
     topology_ids:
-      - "SOEC_Cluster"
+      - "SOEC_Transformer"
     component_type: "Power Electronics"
     process_description: "AC-DC conversion for SOEC stack (11.52 MW)"
     capacity_variable: "power_kw"
@@ -452,20 +476,116 @@ equipment:
     notes:
       - "Cp0 = 200 USD/kW (IEA estimate)"
 
-  - tag: "DCL-O2-TRAIN"
-    block: "SOEC"
-    name: "SOEC O2 Dry Coolers (4 units)"
+  - tag: "RCT-3"
+    block: "Other"
+    name: "Rectifier and Transformer (SOEC)"
     topology_ids:
-      - "SOEC_O2_Drycooler_1"
-      - "SOEC_O2_Drycooler_2"
-      - "SOEC_O2_Drycooler_3"
-      - "SOEC_O2_Drycooler_4"
+      - "BOP_Transformer"
+    component_type: "Power Electronics"
+    process_description: "AC-DC conversion for BOP"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "iea_scaling"
+    coefficients:
+      K1: 200.0    # 200 USD/kW (Unit Cost)
+      K2: 0.0
+      K3: 0.0
+      F_m: 1.0
+      F_p: 1.0
+      B1: 2.15     # Installation factor
+      B2: 0.0
+    notes:
+      - "Cp0 = 200 USD/kW (IEA estimate)"
+
+  # ============================================================================
+  # CENTRAL UTILITY PLANT (CoolingManager)
+  # ============================================================================
+
+  - tag: "UTL-DC-BANK"
+    block: "Utilities"
+    name: "Central Dry Cooler Bank (Glycol)"
+    topology_ids:
+      - "cooling_manager"
     component_type: "Air-Cooled Heat Exchanger"
-    process_description: "O2 compression train intercoolers"
-    capacity_variable: "area_m2"
+    process_description: "Central heat rejection for glycol loop (5,000 m²)"
+    # Strategy: Extract total area, then price as 5 modules of 1,000 m²
+    capacity_variable: "dc_total_area_m2"
     capacity_unit: "m²"
     capacity_aggregation: "sum"
+    capacity_mode: "design"
+    modular_design: true
+    module_capacity: 1000.0
+    module_count: 5
+    modular_note: "Splitting 5000m² into 5x1000m² bays for Turton validity"
     cost_source: "turton"
+    coefficients:
+      # Turton 2018 Table A.2: Air Cooler, Carbon Steel (standard for glycol)
+      K1: 4.0336
+      K2: 0.2341
+      K3: 0.0497
+      F_m: 1.0
+      F_p: 1.0
+      B1: 0.96
+      B2: 1.21
+      capacity_min: 10
+      capacity_max: 1000
+
+  - tag: "UTL-CT-01"
+    block: "Utilities"
+    name: "Central Cooling Tower (Evaporative)"
+    topology_ids:
+      - "cooling_manager"
+    component_type: "Cooling Tower"
+    process_description: "50 MW Heat Rejection for Chillers"
+    capacity_variable: "tower_design_load_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    capacity_mode: "design"
+    cost_source: "turton"
+    coefficients:
+      # Turton 2018: Cooling Tower, Evaporative, Fiberglass/Wood
+      # Correlation is based on Water Flow (L/s); see notes for conversion assumption.
+      K1: 4.8509
+      K2: -0.3698
+      K3: 0.1706
+      F_BM: 1.5
+      F_m: 1.0
+      capacity_min: 10
+      capacity_max: 10000
+    notes:
+      - "Assumes 10K delta-T. 50MW load ≈ 1200 L/s water flow."
+      - "Correlation is flow-based; verify kW-to-L/s conversion if used directly."
+
+  - tag: "UTL-PUMP-GLY"
+    block: "Utilities"
+    name: "Central Glycol Circulation Pumps"
+    topology_ids:
+      - "cooling_manager"
+    component_type: "Centrifugal Pump"
+    process_description: "Main loop circulation (estimated)"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "vendor_quote"
+    vendor_quote_usd: 150000.0
+    notes:
+      - "Fixed estimate for 500 kW pump skid (update when pump sizing is defined)."
+
+  # - tag: "DCL-O2-TRAIN"
+  #   block: "SOEC"
+  #   name: "SOEC O2 Dry Coolers (4 units)"
+  #   topology_ids:
+  #     - "SOEC_O2_Drycooler_1"
+  #     - "SOEC_O2_Drycooler_2"
+  #     - "SOEC_O2_Drycooler_3"
+  #     - "SOEC_O2_Drycooler_4"
+  #   component_type: "Air-Cooled Heat Exchanger"
+  #   process_description: "O2 compression train intercoolers"
+  #   capacity_variable: "area_m2"
+  #   capacity_unit: "m²"
+  #   capacity_aggregation: "sum"
+  #   cost_source: "turton"
 
   - tag: "CHL-2"
     block: "SOEC"
@@ -547,7 +667,7 @@ equipment:
     block: "PEM"
     name: "Rectifier and Transformer (PEM)"
     topology_ids:
-      - "PEM_Electrolyzer"
+      - "PEM_Transformer"
     component_type: "Power Electronics"
     process_description: "AC-DC conversion for PEM stack (5 MW)"
     capacity_variable: "power_kw"
@@ -993,7 +1113,8 @@ equipment:
   - tag: "HBT"
     block: "Storage"
     name: "Underground H2 Storage"
-    topology_ids: []
+    topology_ids: 
+      - LP_Storage_Tank
     component_type: "Underground Storage"
     process_description: "Underground hydrogen storage facility"
     capacity_variable: "unknown"
@@ -1130,4 +1251,3 @@ equipment:
     capacity_unit: "m²"
     capacity_aggregation: "sum"
     cost_source: "turton"
-

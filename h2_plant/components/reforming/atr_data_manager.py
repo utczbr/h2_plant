@@ -2,8 +2,7 @@
 import numpy as np
 import pandas as pd
 import os
-from scipy.interpolate import interp1d
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Tuple
 from dataclasses import dataclass
 
 from h2_plant.core.component import Component
@@ -22,8 +21,8 @@ class ATRDataManager:
     Reads the linear regression/interpolation data (surrogate model).
     """
     _instance = None
-    _models: Dict[str, interp1d] = {}
-    
+    _raw_data: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ATRDataManager, cls).__new__(cls)
@@ -31,47 +30,43 @@ class ATRDataManager:
 
     def load_data(self, csv_filename: str = 'ATR_linear_regressions.csv'):
         """
-        Loads the regression data and creates interpolation functions.
+        Loads the regression data and stores raw arrays for fast np.interp lookup.
         x column (F_O2) is the independent variable.
         """
-        # Resolve path relative to this file or package data directory
-        # Assuming structure: h2_plant/components/reforming/atr_data_manager.py
-        # And data: h2_plant/data/ATR_linear_regressions.csv
         current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Go up two levels: components -> reforming -> h2_plant -> data
         data_dir = os.path.join(current_dir, '..', '..', 'data')
         csv_path = os.path.join(data_dir, csv_filename)
 
         if not os.path.exists(csv_path):
-             # Fallback check if running from root
              if os.path.exists(f"h2_plant/data/{csv_filename}"):
                   csv_path = f"h2_plant/data/{csv_filename}"
-             else:
-                  # Last resort, assume absolute path or handle error
-                  pass
 
         try:
             df = pd.read_csv(csv_path)
-            # F_O2 is the independent variable 'x' in the CSV
-            x = df['x'].values
-            
-            # Create interpolator for every column
+            x = np.ascontiguousarray(df['x'].values, dtype=np.float64)
+
             for col in df.columns:
                 if col != 'x':
-                    # fill_value="extrapolate" handles minor boundary float errors
-                    self._models[col] = interp1d(x, df[col].values, kind='linear', fill_value="extrapolate")
-            
-            print(f"ATR Model loaded: {len(self._models)} functions available from {csv_path}")
-            
+                    y = np.ascontiguousarray(df[col].values, dtype=np.float64)
+                    self._raw_data[col] = (x, y)
+
+            print(f"ATR Model loaded: {len(self._raw_data)} functions available from {csv_path}")
+
         except Exception as e:
             raise RuntimeError(f"Failed to load ATR model data from {csv_path}: {e}")
 
     def lookup(self, func_name: str, f_o2_kmol_h: float) -> float:
-        """Retrieves interpolated value for a specific function name."""
-        if func_name not in self._models:
-            # Fallback or error handling
+        """Retrieves interpolated value with linear extrapolation beyond bounds."""
+        if func_name not in self._raw_data:
             return 0.0
-        return float(self._models[func_name](f_o2_kmol_h))
+        x, y = self._raw_data[func_name]
+        if f_o2_kmol_h <= x[0]:
+            slope = (y[1] - y[0]) / (x[1] - x[0])
+            return float(y[0] + slope * (f_o2_kmol_h - x[0]))
+        if f_o2_kmol_h >= x[-1]:
+            slope = (y[-1] - y[-2]) / (x[-1] - x[-2])
+            return float(y[-1] + slope * (f_o2_kmol_h - x[-1]))
+        return float(np.interp(f_o2_kmol_h, x, y))
 
 class ATRBaseComponent(Component):
     """
@@ -86,7 +81,7 @@ class ATRBaseComponent(Component):
         super().initialize(dt, registry)
         self.data_manager = ATRDataManager()
         # Ensure data is loaded (lazy load or pre-load)
-        if not self.data_manager._models:
+        if not self.data_manager._raw_data:
             self.data_manager.load_data()
 
     def get_oxygen_flow(self, streams: Dict[str, Stream]) -> float:

@@ -479,6 +479,193 @@ def plot_total_production_stacked(df: pd.DataFrame, **kwargs) -> go.Figure:
     return fig
 
 
+@log_graph_errors
+def plot_atr_oxygen_supply(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot stacked oxygen supply to ATR (PEM vs External) with total inlet line.
+    
+    Legend shows total mass consumed from each source.
+    """
+    _check_dependencies()
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config, get_dt_hours, find_column
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    if df_plot.empty:
+        return _empty_figure("No DataFrame provided")
+    
+    hours = get_time_axis_hours(df_plot)
+    dt_h = get_dt_hours(df)
+    
+    def _hex_rgba(color: str, alpha: float = 0.7) -> str:
+        if isinstance(color, str) and color.startswith('#') and len(color) == 7:
+            rgb = tuple(int(color.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
+            return f"rgba{rgb + (alpha,)}"
+        return color
+    
+    def _rate_from_col(frame: pd.DataFrame, col: Optional[str], factor: float = 1.0) -> Optional[np.ndarray]:
+        if not col or col not in frame.columns:
+            return None
+        data = frame[col].values.astype(float) * factor
+        col_lower = col.lower()
+        if col_lower.endswith('_kg_h') or 'mass_flow' in col_lower or 'flow_kg_h' in col_lower:
+            return data
+        return data / dt_h if dt_h > 0 else data
+    
+    def _find_by_parts(frame: pd.DataFrame, parts: List[str]) -> Optional[str]:
+        for c in frame.columns:
+            lower = c.lower()
+            if all(p in lower for p in parts):
+                return c
+        return None
+    
+    total_col = find_column(
+        df_plot,
+        'ATR_O2_Compressor',
+        'outlet_mass_flow_kg_h',
+        fallback_patterns=['outlet_mass_flow', 'outlet_mass_kg_h', 'outlet_flow_kg_h', 'mass_flow_kg_h']
+    )
+    if not total_col:
+        total_col = _find_by_parts(df_plot, ['atr_o2_compressor', 'mass_flow'])
+    
+    pem_col = find_column(
+        df_plot,
+        'O2_Production_Mixer',
+        'outlet_mass_flow_kg_h',
+        fallback_patterns=['outlet_mass_flow', 'outlet_mass_kg_h', 'outlet_flow_kg_h', 'mass_flow_kg_h']
+    )
+    if not pem_col:
+        pem_col = find_column(
+            df_plot,
+            'PEM_O2_ElectricBoiler',
+            'outlet_mass_flow_kg_h',
+            fallback_patterns=['outlet_mass_flow', 'outlet_mass_kg_h', 'outlet_flow_kg_h', 'mass_flow_kg_h']
+        )
+    if not pem_col:
+        pem_col = find_column(
+            df_plot,
+            'PEM_O2_Valve',
+            'outlet_mass_flow_kg_h',
+            fallback_patterns=['outlet_mass_flow', 'outlet_mass_kg_h', 'outlet_flow_kg_h', 'mass_flow_kg_h']
+        )
+    
+    pem_factor = 1.0
+    if not pem_col:
+        if 'O2_pem_kg' in df_plot.columns:
+            pem_col = 'O2_pem_kg'
+        elif 'H2_pem_kg' in df_plot.columns:
+            pem_col = 'H2_pem_kg'
+            pem_factor = 8.0
+    
+    ext_col = find_column(
+        df_plot,
+        'O2_Backup_Supply',
+        'makeup_flow_kg_h',
+        fallback_patterns=['makeup_flow', 'makeup_kg_h', 'makeup']
+    )
+    if not ext_col:
+        ext_col = _find_by_parts(df_plot, ['o2_backup_supply', 'makeup'])
+    
+    def _build_rates(frame: pd.DataFrame) -> tuple:
+        total_rate = _rate_from_col(frame, total_col)
+        pem_rate = _rate_from_col(frame, pem_col, pem_factor)
+        ext_rate = _rate_from_col(frame, ext_col)
+        
+        if total_rate is None:
+            if pem_rate is not None and ext_rate is not None:
+                total_rate = pem_rate + ext_rate
+            elif pem_rate is not None:
+                total_rate = pem_rate
+            elif ext_rate is not None:
+                total_rate = ext_rate
+            else:
+                return None, None, None
+        
+        if ext_rate is not None:
+            ext_rate = np.minimum(ext_rate, total_rate)
+            pem_rate = np.maximum(total_rate - ext_rate, 0.0)
+        elif pem_rate is not None:
+            pem_rate = np.minimum(pem_rate, total_rate)
+            ext_rate = np.maximum(total_rate - pem_rate, 0.0)
+        else:
+            return total_rate, None, None
+        
+        return total_rate, pem_rate, ext_rate
+    
+    total_rate_plot, pem_rate_plot, ext_rate_plot = _build_rates(df_plot)
+    if total_rate_plot is None:
+        o2_cols = [c for c in df_plot.columns if 'o2' in c.lower() or 'oxygen' in c.lower()]
+        msg = "No ATR oxygen flow data found."
+        if o2_cols:
+            msg += f" Available O2 columns: {o2_cols[:10]}"
+        return _empty_figure(msg)
+    
+    if pem_rate_plot is None or ext_rate_plot is None:
+        return _empty_figure("ATR oxygen supply split unavailable (missing PEM or external O2 columns).")
+    
+    total_rate_full, pem_rate_full, ext_rate_full = _build_rates(df)
+    total_pem = float(np.nansum(pem_rate_full) * dt_h) if pem_rate_full is not None else 0.0
+    total_ext = float(np.nansum(ext_rate_full) * dt_h) if ext_rate_full is not None else 0.0
+    total_o2 = float(np.nansum(total_rate_full) * dt_h) if total_rate_full is not None else 0.0
+    
+    def _fmt_total(value: float) -> str:
+        if np.isnan(value) or value < 0:
+            value = 0.0
+        return f"{value:,.0f} kg"
+    
+    pem_name = f"PEM O2 (total {_fmt_total(total_pem)})"
+    ext_name = f"External O2 (total {_fmt_total(total_ext)})"
+    total_name = f"ATR O2 Inlet (total {_fmt_total(total_o2)})"
+    
+    color_pem = get_viz_config('styling.colors.pem', '#1f77b4')
+    color_ext = get_viz_config('styling.colors.o2', _SUBSYSTEM_COLORS.get('O2', '#e377c2'))
+    
+    fig = go.Figure()
+    ScatterType = get_scatter_type(len(hours))
+    
+    fig.add_trace(ScatterType(
+        x=hours,
+        y=np.nan_to_num(pem_rate_plot, nan=0.0),
+        mode='lines',
+        name=pem_name,
+        stackgroup='one',
+        line=dict(color=color_pem, width=0.5),
+        fillcolor=_hex_rgba(color_pem, 0.7),
+        hovertemplate='PEM O2: %{y:.1f} kg/h<extra></extra>'
+    ))
+    
+    fig.add_trace(ScatterType(
+        x=hours,
+        y=np.nan_to_num(ext_rate_plot, nan=0.0),
+        mode='lines',
+        name=ext_name,
+        stackgroup='one',
+        line=dict(color=color_ext, width=0.5),
+        fillcolor=_hex_rgba(color_ext, 0.7),
+        hovertemplate='External O2: %{y:.1f} kg/h<extra></extra>'
+    ))
+    
+    fig.add_trace(ScatterType(
+        x=hours,
+        y=np.nan_to_num(total_rate_plot, nan=0.0),
+        mode='lines',
+        name=total_name,
+        line=dict(color='#222222', width=1.5, dash='dash'),
+        hovertemplate='ATR O2 Inlet: %{y:.1f} kg/h<extra></extra>'
+    ))
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'ATR Oxygen Supply (PEM + External)'),
+        xaxis_title='Time (hours)',
+        yaxis_title='O2 Flow (kg/h)',
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(x=0.02, y=0.98)
+    )
+    
+    return fig
+
+
 
 @log_graph_errors
 def plot_cumulative_production(df: pd.DataFrame, **kwargs) -> go.Figure:

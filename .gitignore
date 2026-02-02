@@ -23,11 +23,11 @@ vendor/
 backups/
 legacy/
 .h2_plant/
-benchmark_suite.py
+#benchmark_suite.py
 graph_regeneration_analysis.md
 repro_data_loading.py
 verify_optimization.py
-benchmark_output/
+#benchmark_output/
 simulation_output_20_years/
 history_chunks/
 # removed to allow tracking of LFS cache files

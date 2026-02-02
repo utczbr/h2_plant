@@ -33,6 +33,36 @@ logger = logging.getLogger(__name__)
 _component_metadata: Dict[str, Dict[str, Any]] = {}
 
 
+def _resolve_scenario_name(scenarios_dir: str) -> str:
+    scen_name_candidate = None
+    try:
+        topo_path = Path(scenarios_dir) / "plant_topology.yaml"
+        if topo_path.exists():
+            import yaml
+            with open(topo_path, 'r') as f:
+                topo_config = yaml.safe_load(f) or {}
+                scen_name_candidate = topo_config.get('scenario_name')
+    except Exception as e:
+        logger.debug(f"Scenario name lookup failed: {e}")
+
+    return scen_name_candidate if scen_name_candidate else Path(scenarios_dir).name
+
+
+def _resolve_guaranteed_power_mw(scenarios_dir: str, default: float = 10.0) -> float:
+    guaranteed_power_mw = default
+    try:
+        eco_path = Path(scenarios_dir) / "economics_parameters.yaml"
+        if eco_path.exists():
+            import yaml
+            with open(eco_path, 'r') as f:
+                eco_config = yaml.safe_load(f) or {}
+                guaranteed_power_mw = eco_config.get('guaranteed_power_mw', default)
+    except Exception as e:
+        logger.warning(f"Could not load economics config: {e}. Using default guaranteed power.")
+        guaranteed_power_mw = default
+    return guaranteed_power_mw
+
+
 def run_with_dispatch_strategy(
     scenarios_dir: str,
     hours: Optional[int] = None,
@@ -90,7 +120,6 @@ def run_with_dispatch_strategy(
     from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
     from h2_plant.data.price_loader import EnergyPriceLoader
     from h2_plant.config.plant_config import ConnectionConfig
-    from h2_plant.reporting.scenario_summary import generate_scenario_summary
 
     # Load configuration
     logger.info(f"Loading configuration from {scenarios_dir}")
@@ -796,6 +825,28 @@ def main():
         print("\n### Generating Graphs...")
         chunks_dir = output_dir / "history_chunks"
         generate_graphs(history, args.scenarios_dir, output_dir, resample_freq=args.resample, chunks_dir=chunks_dir)
+
+    # Generate Scenario Summary Report (after graphs to minimize memory overlap)
+    # =========================================================================
+    try:
+        from h2_plant.reporting.scenario_summary import generate_scenario_summary_streaming
+
+        scenario_name = _resolve_scenario_name(args.scenarios_dir)
+        guaranteed_power_mw = _resolve_guaranteed_power_mw(args.scenarios_dir)
+        summary_csv_path = output_dir / "scenario_summary.csv"
+        chunks_dir = output_dir / "history_chunks"
+        csv_path = output_dir / "simulation_history.csv"
+
+        generate_scenario_summary_streaming(
+            scenario_name=scenario_name,
+            output_path=summary_csv_path,
+            guaranteed_power_mw=guaranteed_power_mw,
+            history=history,
+            chunks_dir=chunks_dir,
+            csv_path=csv_path
+        )
+    except Exception as e:
+        logger.error(f"Failed to generate Scenario Summary Report: {e}", exc_info=True)
 
 
 if __name__ == "__main__":

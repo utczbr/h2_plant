@@ -320,7 +320,11 @@ class SimulationEngine:
                     
                     # Flush FlowTracker to disk periodically (every checkoint or every 24h)
                     if step % (24 * steps_per_hour) == 0:
-                        self.monitoring.flow_tracker.flush(self.output_dir / "flows.jsonl")
+                        self.monitoring.flow_tracker.flush(
+                            self.output_dir / "flows.jsonl",
+                            rolling=True,
+                            reset_aggregates=True
+                        )
 
             self.is_running = False
             elapsed_time = time.time() - self.simulation_start_time
@@ -331,7 +335,11 @@ class SimulationEngine:
                 f"{elapsed_time:.2f} seconds ({rate:.1f} steps/sec)"
             )
 
-            self.monitoring.flow_tracker.flush(self.output_dir / "flows.jsonl")
+            self.monitoring.flow_tracker.flush(
+                self.output_dir / "flows.jsonl",
+                rolling=True,
+                reset_aggregates=True
+            )
             
             results = self._generate_results(start_hour=effective_start_hour, end_hour=effective_end_hour)
             return results

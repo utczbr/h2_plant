@@ -20,7 +20,7 @@ Visualization Support:
     (Plotly/D3.js) for visualizing energy and mass flow distribution.
 """
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, TYPE_CHECKING
 from enum import IntEnum
 import json
@@ -58,6 +58,7 @@ class FlowType(IntEnum):
     CO2_EMISSIONS = 7
     HYDROGEN_RFNBO = 8      # Green certified H2 (renewable powered)
     HYDROGEN_NON_RFNBO = 9  # Non-certified H2 (grid powered)
+    STREAM_MASS = 10        # Generic multi-component stream (fallback for unmapped resource types)
 
 
 @dataclass
@@ -87,9 +88,17 @@ class Flow:
     metadata: Dict = field(default_factory=dict)
 
     def to_dict(self):
-        d = asdict(self)
-        d['flow_type'] = self.flow_type.name
-        return d
+        return {
+            'hour': self.hour,
+            'flow_type': self.flow_type.name,
+            'source_component': self.source_component,
+            'destination_component': self.destination_component,
+            'amount': self.amount,
+            'unit': self.unit,
+            'temperature_k': self.temperature_k,
+            'pressure_pa': self.pressure_pa,
+            'metadata': self.metadata,
+        }
 
 
 class FlowTracker:
@@ -114,7 +123,7 @@ class FlowTracker:
         Args:
             buffer_size (int): Number of records to keep before auto-flush.
         """
-        self.buffer: List[Flow] = []
+        self.buffer: List[tuple] = []
         self.current_hour: int = 0
         self.buffer_size = buffer_size
         
@@ -124,6 +133,9 @@ class FlowTracker:
         
         # Matrix Aggregate: Key: "src->dest", Subkey: "type (unit)" -> Value: amount
         self.matrix_aggregates: Dict[str, Dict[str, float]] = {}
+        # Cache formatted matrix keys to avoid repeated f-string overhead
+        self._matrix_key_cache: Dict[tuple, str] = {}
+        self._matrix_subkey_cache: Dict[tuple, str] = {}
 
     def set_current_hour(self, hour: int) -> None:
         """
@@ -146,44 +158,35 @@ class FlowTracker:
     ) -> None:
         """
         Record a flow event between components.
-
-        Args:
-            source_component (str): Source component ID.
-            destination_component (str): Destination component ID.
-            flow_type (str): Flow type name (must match FlowType enum).
-            amount (float): Flow quantity.
-            unit (str): Unit of measurement.
-            temperature_k (float, optional): Stream temperature in K.
-            pressure_pa (float, optional): Stream pressure in Pa.
         """
         try:
-            flow_type_enum = FlowType[flow_type.upper()]
+            ft_name = flow_type.upper()
+            FlowType[ft_name]  # validate enum membership
         except KeyError:
             return
 
-        # Create record
-        flow = Flow(
-            hour=self.current_hour,
-            flow_type=flow_type_enum,
-            source_component=source_component,
-            destination_component=destination_component,
-            amount=amount,
-            unit=unit,
-            temperature_k=temperature_k,
-            pressure_pa=pressure_pa
-        )
-        
-        # 1. Add to buffer for streaming
-        self.buffer.append(flow)
-        
-        # 2. Update In-Memory Aggregates (O(1))
-        # Sankey Key
-        s_key = (source_component, destination_component, flow_type_enum.name)
+        # Store as lightweight tuple instead of dataclass (avoids __init__ overhead)
+        self.buffer.append((
+            self.current_hour, ft_name, source_component,
+            destination_component, amount, unit, temperature_k, pressure_pa
+        ))
+
+        # Update aggregates
+        s_key = (source_component, destination_component, ft_name)
         self.aggregates[s_key] = self.aggregates.get(s_key, 0.0) + amount
-        
-        # Matrix Key
-        m_key_main = f"{source_component} -> {destination_component}"
-        m_key_sub = f"{flow_type_enum.name} ({unit})"
+
+        # Matrix aggregates (cached keys)
+        pair_key = (source_component, destination_component)
+        m_key_main = self._matrix_key_cache.get(pair_key)
+        if m_key_main is None:
+            m_key_main = f"{source_component} -> {destination_component}"
+            self._matrix_key_cache[pair_key] = m_key_main
+
+        sub_key = (ft_name, unit)
+        m_key_sub = self._matrix_subkey_cache.get(sub_key)
+        if m_key_sub is None:
+            m_key_sub = f"{ft_name} ({unit})"
+            self._matrix_subkey_cache[sub_key] = m_key_sub
         if m_key_main not in self.matrix_aggregates:
             self.matrix_aggregates[m_key_main] = {}
         self.matrix_aggregates[m_key_main][m_key_sub] = \
@@ -220,28 +223,45 @@ class FlowTracker:
             pressure_pa=stream.pressure_pa
         )
     
-    def flush(self, filepath: Path) -> None:
+    def flush(self, filepath: Path, *, rolling: bool = False, reset_aggregates: bool = False) -> None:
         """
         Flush buffered flows to disk (JSON Lines format).
         
         Args:
             filepath (Path): Output file path.
+            rolling (bool): If True, overwrite file each flush (keeps only last interval).
+            reset_aggregates (bool): If True, clear aggregates/matrix after flush.
         """
         if not self.buffer:
             return
             
         try:
-            mode = 'a' if filepath.exists() else 'w'
+            mode = 'w' if rolling else ('a' if filepath.exists() else 'w')
             if not filepath.parent.exists():
                 filepath.parent.mkdir(parents=True, exist_ok=True)
-                
+
+            # Batch-serialize tuples directly (avoids to_dict + json.dumps overhead)
+            parts = []
+            for rec in self.buffer:
+                hour, ft, src, dst, amt, unit, temp, pres = rec
+                # Manual JSON construction for flat records (5-10x faster than json.dumps)
+                line = (f'{{"hour":{hour},"flow_type":"{ft}",'
+                        f'"source_component":"{src}","destination_component":"{dst}",'
+                        f'"amount":{amt},"unit":"{unit}",'
+                        f'"temperature_k":{temp if temp is not None else "null"},'
+                        f'"pressure_pa":{pres if pres is not None else "null"}}}')
+                parts.append(line)
             with open(filepath, mode) as f:
-                for flow in self.buffer:
-                    f.write(json.dumps(flow.to_dict()) + '\n')
-            
+                f.write('\n'.join(parts))
+                if parts:
+                    f.write('\n')
+
             # Clear buffer after successful write
             self.buffer = []
-            
+            if reset_aggregates:
+                self.aggregates = {}
+                self.matrix_aggregates = {}
+
         except Exception as e:
             logger.error(f"Failed to flush flow tracker: {e}")
 
