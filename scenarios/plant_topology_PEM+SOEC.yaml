@@ -1,5 +1,5 @@
 # SOEC Hydrogen Production Train Topology (No ATR)
-# 
+#
 # Process Description:
 # 1. Hot wet H2 from SOEC (152°C) enters Heat Recovery (Interchanger).
 # 2. Cooled gas passes through staged cooling and separation (DryCooler -> Chiller -> KODs).
@@ -7,34 +7,36 @@
 # 4. Compressed H2 is purified (Deoxo -> PSA) at high pressure.
 # 5. Recovered water is collected, mixed with fresh makeup water, pressurized, and pre-heated.
 
+scenario_name: "Plant PEM+SOEC (No ATR) - 30 tanks with 52.33 m3 each"
+
 nodes:
   # =================================================================================
-  # CENTRALIZED COOLING UTILITY
+  # CENTRALIZED COOLING UTILITY (Configurable via Topology)
   # =================================================================================
   - id: "cooling_manager"
     type: "CoolingManager"
     params:
-      dc_total_area_m2: 5000.0        
-      dc_air_flow_kg_s: 1000.0        
-      dc_u_value: 35.0
-      glycol_inventory_kg: 50000.0    
-      tower_design_load_kw: 300.0     # Cooling tower design capacity (kW) [nominal peak ~210 kW + margin]
-      t_dry_bulb_c: 25.0
-      t_wet_bulb_c: 18.0
-      inertia_alpha: 0.3
+      dc_total_area_m2: 5000.0 # Scaled down from 20000 (roughly 1/4)
+      dc_air_flow_kg_s: 1000.0 # Optimized for ~14 MW load (vs 5000)
+      dc_u_value: 35.0 # Overall U-value (W/m²K)
+      glycol_inventory_kg: 50000.0 # Total glycol mass in loop (kg)
+      tower_design_load_kw: 300.0 # Cooling tower design capacity (kW) [nominal peak ~210 kW + margin]
+      t_dry_bulb_c: 25.0 # Ambient dry bulb (°C)
+      t_wet_bulb_c: 18.0 # Ambient wet bulb (°C)
+      inertia_alpha: 0.3 # Thermal inertia (0=slow, 1=instant)
       system_group: "Utilities"
       process_step: 0
 
   # =================================================================================
-  # WATER SUPPLY CHAIN
+  # WATER SUPPLY CHAIN (Push Architecture with Feedback Control)
   # =================================================================================
 
-  # 0.1 External Water Source
+  # 0.1 External Water Source (Municipal/Reservoir)
   - id: "Water_Source"
     type: "ExternalWaterSource"
     params:
       mode: "external_control"
-      flow_rate_kg_h: 12000.0
+      flow_rate_kg_h: 12000.0 # Max capacity
       pressure_bar: 5.0
       temperature_c: 25.0
       system_group: "Water_Supply"
@@ -49,7 +51,7 @@ nodes:
   - id: "Water_Purifier"
     type: "WaterPurifier"
     params:
-      max_flow_kg_h: 12000.0
+      max_flow_kg_h: 12000.0 # Rated @ 25°C
       recovery_ratio: 0.75
       system_group: "Water_Supply"
       process_step: 2
@@ -59,7 +61,7 @@ nodes:
         target_port: "ultrapure_in"
         resource_type: "stream"
 
-  # 0.3 Ultra-Pure Water Tank
+  # 0.3 Ultra-Pure Water Tank (Multi-Channel Distribution)
   - id: "UltraPure_Tank"
     type: "UltraPureWaterTank"
     params:
@@ -69,10 +71,12 @@ nodes:
       system_group: "Water_Supply"
       process_step: 3
     connections:
+      # Control signal to upstream source (feedback)
       - source_port: "control_signal"
         target_name: "Water_Source"
         target_port: "control_signal"
         resource_type: "signal"
+      # Water distribution to loops
       - source_port: "water_out_SOEC"
         target_name: "SOEC_Makeup_Mixer"
         target_port: "makeup_water_in"
@@ -83,14 +87,15 @@ nodes:
         resource_type: "stream"
 
   # =================================================================================
-  # POWER TRANSFORMERS
+  # POWER TRANSFORMERS (Efficiency Loss Modeling)
+  # Models combined transformer + rectifier losses for major loads
   # =================================================================================
 
   - id: "SOEC_Transformer"
     type: "PowerTransformer"
     params:
-      efficiency: 0.95
-      rated_power_mw: 15.25
+      efficiency: 0.95 # 5% combined trafo+rectifier losses
+      rated_power_mw: 15.25 # 14.4 MW stack + headroom
       system_group: "SOEC"
       process_step: 8
 
@@ -98,7 +103,7 @@ nodes:
     type: "PowerTransformer"
     params:
       efficiency: 0.95
-      rated_power_mw: 5.57
+      rated_power_mw: 5.57 # 5 MW stack + headroom
       system_group: "PEM"
       process_step: 9
 
@@ -115,16 +120,19 @@ nodes:
   # =================================================================================
 
   # 1. SOEC Cluster
+  # -------------------------------------------------------------------------
+  # The h2_out port now outputs the combined Cathode Exhaust (Wet Hydrogen):
+  # H2 (produced) + H2O (unreacted steam) + trace O2 (crossover)
   - id: "SOEC_Cluster"
     type: "SOEC"
     params:
       num_modules: 6
       max_power_nominal_mw: 2.4
       optimal_limit: 0.80
-      steam_input_ratio_kg_per_kg_h2: 10.3  # Matches No-ATR target
+      steam_input_ratio_kg_per_kg_h2: 10.3
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
-      lifecycle: 61320
+      lifecycle: 61320 # 5 years lifecycle for degradation reset
       process_step: 10
     connections:
       - source_port: "h2_out"
@@ -136,7 +144,7 @@ nodes:
         target_port: "hot_in"
         resource_type: "stream"
 
-  # 2. Heat Recovery
+  # 2. Heat Recovery (Interchanger)
   - id: "SOEC_H2_Interchanger_1"
     type: "Interchanger"
     params:
@@ -153,11 +161,11 @@ nodes:
         target_port: "inlet_1"
         resource_type: "stream"
 
-  # 3b. Dry Cooler
+  # 3b. Dry Cooler (Post-Heat Recovery)
   - id: "SOEC_H2_DryCooler_1"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0  
+      target_outlet_temp_c: 40.0
       use_central_utility: true
       process_step: 30
     connections:
@@ -167,7 +175,7 @@ nodes:
         resource_type: "stream"
 
   # =================================================================================
-  # SEPARATION STAGE
+  # SEPARATION STAGE (Before Compression)
   # =================================================================================
 
   - id: "SOEC_H2_KOD_1"
@@ -203,8 +211,8 @@ nodes:
     type: "Chiller"
     params:
       cooling_capacity_kw: 140.0
-      target_temp_k: 277.15
-      process_step: 33
+      target_temp_k: 277.15 # 4°C
+      process_step: 41 # Corrected order: After KOD(40)
     connections:
       - source_port: "fluid_out"
         target_name: "SOEC_H2_KOD_2"
@@ -243,9 +251,9 @@ nodes:
   - id: "SOEC_H2_Cyclone_1"
     type: "HydrogenMultiCyclone"
     params:
-      element_diameter_mm: 50.0
+      element_diameter_mm: 50.0 # High efficiency separation of fine mist
       vane_angle_deg: 45.0
-      target_velocity_ms: 22.0
+      target_velocity_ms: 22.0 # Optimized for fine droplets
       process_step: 70
     connections:
       - source_port: "outlet"
@@ -256,7 +264,7 @@ nodes:
   - id: "SOEC_H2_Boiler"
     type: "ElectricBoiler"
     params:
-      target_temp_c: 15.0
+      target_outlet_temp_c: 15.0
       max_power_kw: 100.0
       efficiency: 0.99
       k_friction: 0.0
@@ -268,7 +276,8 @@ nodes:
         resource_type: "stream"
 
   # =================================================================================
-  # COMPRESSION TRAIN (6-Stage)
+  # COMPRESSION TRAIN (6-Stage, BEFORE Purification)
+  # Redistributed Pressure Ratios ~2.0x per stage (Target ~42 bar)
   # =================================================================================
 
   - id: "SOEC_H2_Compressor_S1"
@@ -288,7 +297,7 @@ nodes:
   - id: "SOEC_H2_Intercooler_1"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       design_capacity_kw: 1800.0
       use_central_utility: true
       process_step: 101
@@ -297,7 +306,7 @@ nodes:
         target_name: "SOEC_H2_Compressor_S2"
         target_port: "h2_in"
         resource_type: "stream"
-  
+
   - id: "SOEC_H2_Compressor_S2"
     type: "CompressorSingle"
     params:
@@ -315,7 +324,7 @@ nodes:
   - id: "SOEC_H2_Intercooler_2"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       design_capacity_kw: 1800.0
       use_central_utility: true
       process_step: 111
@@ -355,7 +364,7 @@ nodes:
   - id: "SOEC_H2_Intercooler_3"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       design_capacity_kw: 1800.0
       use_central_utility: true
       process_step: 121
@@ -395,7 +404,7 @@ nodes:
   - id: "SOEC_H2_Intercooler_4"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       design_capacity_kw: 1800.0
       use_central_utility: true
       process_step: 131
@@ -435,7 +444,7 @@ nodes:
   - id: "SOEC_H2_Intercooler_5"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       design_capacity_kw: 1800.0
       use_central_utility: true
       process_step: 141
@@ -475,9 +484,9 @@ nodes:
   - id: "SOEC_H2_Intercooler_6"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       design_capacity_kw: 1800.0 # Matches No-ATR target
-      use_central_utility: true 
+      use_central_utility: true
       process_step: 151
     connections:
       - source_port: "fluid_out"
@@ -486,7 +495,7 @@ nodes:
         resource_type: "stream"
 
   # =================================================================================
-  # PURIFICATION STAGE
+  # PURIFICATION STAGE (After 6-Stage Compression, at 42 bar)
   # =================================================================================
 
   - id: "SOEC_H2_Deoxo_1"
@@ -502,7 +511,7 @@ nodes:
   - id: "SOEC_H2_Chiller_2"
     type: "Chiller"
     params:
-      target_temp_k: 277.15 # 4°C
+      target_temp_k: 277.15 # 4°C heavy cooling for condensation
       cooling_capacity_kw: 60.0
       process_step: 210
     connections:
@@ -520,14 +529,14 @@ nodes:
       process_step: 215
     connections:
       - source_port: "outlet"
-        target_name: "SOEC_H2_Coalescer_2"
+        target_name: "SOEC_H2_Coalescer"
         target_port: "inlet"
         resource_type: "stream"
 
-  - id: "SOEC_H2_Coalescer_2"
+  - id: "SOEC_H2_Coalescer"
     type: "Coalescer"
     params:
-      d_shell: 0.3
+      d_shell: 0.3 # Post-Deoxo coalescer (high pressure, low liquid load)
       process_step: 220
     connections:
       - source_port: "outlet"
@@ -539,7 +548,7 @@ nodes:
     type: "ElectricBoiler"
     params:
       max_power_kw: 50.0
-      target_temp_c: 40.0 
+      target_outlet_temp_c: 40.0
       process_step: 230
     connections:
       - source_port: "fluid_out"
@@ -559,126 +568,130 @@ nodes:
         resource_type: "gas"
 
   # =================================================================================
-  # O2 PURIFICATION TRAIN
+  # O2 PURIFICATION TRAIN (Anode Side)
+  # Sequence: SOEC(o2_out) -> KOD1 -> DryCooler -> Chiller -> KOD2 -> Coalescer -> Vent
   # =================================================================================
 
+  # === O2 Compression Train (4 Stages) ===
+
+  # Heat Recovery (O2 side)
   - id: "SOEC_O2_Interchanger_1"
     type: "Interchanger"
     params:
       min_approach_temp_k: 10.0
-      target_cold_out_temp_c: 80.0
+      target_cold_out_temp_c: 80.0 # Lower than H2 side
       process_step: 21
     connections:
-      - source_port: "hot_out"
-        target_name: "SOEC_O2_Drycooler_1"
-        target_port: "fluid_in"
-        resource_type: "stream"
+      #      - source_port: "hot_out"
+      #        target_name: "SOEC_O2_Drycooler_1"
+      #        target_port: "fluid_in"
+      #        resource_type: "stream"
       - source_port: "cold_out"
         target_name: "SOEC_Interchanger_Drain_Combiner"
         target_port: "inlet_2"
         resource_type: "stream"
 
-  - id: "SOEC_O2_Drycooler_1"
-    type: "DryCooler"
-    params:
-      component_id: "SOEC_O2_Drycooler_1"
-      target_temp_c: 30.0
-      use_central_utility: true
-    connections:
-      - source_port: "fluid_out"
-        target_name: "SOEC_O2_compressor_1"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_compressor_1"
-    type: "CompressorSingle"
-    params:
-      outlet_pressure_bar: 15.0
-      max_temp_c: 135.0
-      temperature_limited: true
-      max_flow_kg_h: 2400.0
-    connections:
-      - source_port: "outlet"
-        target_name: "SOEC_O2_Drycooler_2"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_Drycooler_2"
-    type: "DryCooler"
-    params: 
-      component_id: "SOEC_O2_Drycooler_2"
-      target_temp_c: 30.0
-      use_central_utility: true
-    connections:
-      - source_port: "fluid_out"
-        target_name: "SOEC_O2_compressor_2"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_compressor_2"
-    type: "CompressorSingle"
-    params:
-      outlet_pressure_bar: 15.0
-      max_temp_c: 135.0
-      temperature_limited: true
-      max_flow_kg_h: 2400.0
-    connections:
-      - source_port: "outlet"
-        target_name: "SOEC_O2_Drycooler_3"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_Drycooler_3"
-    type: "DryCooler"
-    params:
-      component_id: "SOEC_O2_Drycooler_3"
-      target_temp_c: 30.0
-      use_central_utility: true
-    connections:
-      - source_port: "fluid_out"
-        target_name: "SOEC_O2_compressor_3"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_compressor_3"
-    type: "CompressorSingle"
-    params:
-      outlet_pressure_bar: 15.0
-      max_temp_c: 135.0
-      temperature_limited: true
-      max_flow_kg_h: 2400.0
-    connections:
-      - source_port: "outlet"
-        target_name: "SOEC_O2_Drycooler_4"
-        target_port: "fluid_in"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_Drycooler_4"
-    type: "DryCooler"
-    params:
-      component_id: "SOEC_O2_Drycooler_4"
-      target_temp_c: 30.0
-      use_central_utility: true
-    connections:
-      - source_port: "fluid_out"
-        target_name: "SOEC_O2_compressor_4"
-        target_port: "inlet"
-        resource_type: "stream"
-
-  - id: "SOEC_O2_compressor_4"
-    type: "CompressorSingle"
-    params:
-      outlet_pressure_bar: 15.0
-      max_temp_c: 135.0
-      temperature_limited: true
-      max_flow_kg_h: 2400.0
-      system_group: "SOEC_O2_Train"
-      process_step: 33
-    connections:
-      - source_port: "outlet"
-        target_name: "O2_Production_Mixer"
-        target_port: "inlet_1"
-        resource_type: "stream"
+  #  - id: "SOEC_O2_Drycooler_1"
+  #    type: "DryCooler"
+  #    params:
+  #      component_id: "SOEC_O2_Drycooler_1"
+  #      target_outlet_temp_c: 30.0
+  #      use_central_utility: true
+  #    connections:
+  #      - source_port: "fluid_out"
+  #        target_name: "SOEC_O2_compressor_1"
+  #        target_port: "inlet"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_compressor_1"
+  #    type: "CompressorSingle"
+  #    params:
+  #      outlet_pressure_bar: 15.0
+  #      max_temp_c: 135.0
+  #      temperature_limited: true
+  #      max_flow_kg_h: 2400.0
+  #    connections:
+  #      - source_port: "outlet"
+  #        target_name: "SOEC_O2_Drycooler_2"
+  #        target_port: "fluid_in"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_Drycooler_2"
+  #    type: "DryCooler"
+  #    params:
+  #      component_id: "SOEC_O2_Drycooler_2"
+  #      target_outlet_temp_c: 30.0
+  #      use_central_utility: true
+  #    connections:
+  #      - source_port: "fluid_out"
+  #        target_name: "SOEC_O2_compressor_2"
+  #        target_port: "inlet"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_compressor_2"
+  #    type: "CompressorSingle"
+  #    params:
+  #      outlet_pressure_bar: 15.0
+  #      max_temp_c: 135.0
+  #      temperature_limited: true
+  #      max_flow_kg_h: 2400.0
+  #    connections:
+  #      - source_port: "outlet"
+  #        target_name: "SOEC_O2_Drycooler_3"
+  #        target_port: "fluid_in"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_Drycooler_3"
+  #    type: "DryCooler"
+  #    params:
+  #      component_id: "SOEC_O2_Drycooler_3"
+  #      target_outlet_temp_c: 30.0
+  #      use_central_utility: true
+  #    connections:
+  #      - source_port: "fluid_out"
+  #        target_name: "SOEC_O2_compressor_3"
+  #        target_port: "inlet"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_compressor_3"
+  #    type: "CompressorSingle"
+  #    params:
+  #      outlet_pressure_bar: 15.0
+  #      max_temp_c: 135.0
+  #      temperature_limited: true
+  #      max_flow_kg_h: 2400.0
+  #    connections:
+  #      - source_port: "outlet"
+  #        target_name: "SOEC_O2_Drycooler_4"
+  #        target_port: "fluid_in"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_Drycooler_4"
+  #    type: "DryCooler"
+  #    params:
+  #      component_id: "SOEC_O2_Drycooler_4"
+  #      target_outlet_temp_c: 30.0
+  #      use_central_utility: true
+  #    connections:
+  #      - source_port: "fluid_out"
+  #        target_name: "SOEC_O2_compressor_4"
+  #        target_port: "inlet"
+  #        resource_type: "stream"
+  #
+  #  - id: "SOEC_O2_compressor_4"
+  #    type: "CompressorSingle"
+  #    params:
+  #      outlet_pressure_bar: 15.0
+  #      max_temp_c: 135.0
+  #      temperature_limited: true
+  #      max_flow_kg_h: 2400.0
+  #      system_group: "SOEC_O2_Train"
+  #      process_step: 33
+  #    connections:
+  #      - source_port: "outlet"
+  #        target_name: "O2_Production_Mixer"
+  #        target_port: "inlet_1"
+  #        resource_type: "stream"
 
   # =================================================================================
   # WATER RECIRCULATION LOOP
@@ -693,7 +706,7 @@ nodes:
         target_name: "SOEC_Drain_Pump"
         target_port: "water_in"
         resource_type: "stream"
-  
+
   - id: "SOEC_Drain_Pump"
     type: "WaterPumpThermodynamic"
     params:
@@ -730,7 +743,7 @@ nodes:
         target_name: "SOEC_Makeup_Mixer"
         target_port: "drain_in"
         resource_type: "stream"
-  
+
   - id: "SOEC_Makeup_Mixer"
     type: "SignalMakeupMixer"
     params:
@@ -751,7 +764,7 @@ nodes:
   - id: "SOEC_Water_Splitter"
     type: "StreamSplitter"
     params:
-      split_ratio: 0.9212  # Matches No-ATR target
+      split_ratio: 0.9212 # Matches No-ATR target
     connections:
       - source_port: "outlet_1"
         target_name: "SOEC_Steam_Boiler"
@@ -767,7 +780,7 @@ nodes:
     type: "ElectricBoiler"
     params:
       max_power_kw: 3000.0
-      target_temp_c: 105.0
+      target_outlet_temp_c: 105.0
     connections:
       - source_port: "fluid_out"
         target_name: "SOEC_Steam_Compressor_1"
@@ -779,8 +792,8 @@ nodes:
     params:
       max_flow_kg_h: 4000.0
       inlet_pressure_bar: 1.0
-      outlet_pressure_bar: 5.0  # Corrected: 5.0
-      max_temp_c: 260.0         # Corrected: 260.0
+      outlet_pressure_bar: 5.0 # Corrected: 5.0
+      max_temp_c: 260.0 # Corrected: 260.0
       temperature_limited: true
     connections:
       - source_port: "outlet"
@@ -791,7 +804,7 @@ nodes:
   - id: "SOEC_Steam_Drycooler"
     type: "DryCooler"
     params:
-      target_temp_c: 150.0      # Corrected: 150.0
+      target_outlet_temp_c: 150.0 # Corrected: 150.0
       use_central_utility: true
       system_group: "SOEC_Steam_Loop"
     connections:
@@ -799,14 +812,14 @@ nodes:
         target_name: "SOEC_Steam_Compressor_2"
         target_port: "inlet"
         resource_type: "stream"
-      
+
   - id: "SOEC_Steam_Compressor_2"
     type: "CompressorSingle"
     params:
       max_flow_kg_h: 4000.0
       inlet_pressure_bar: 2.3
       outlet_pressure_bar: 5.0
-      max_temp_c: 260.0         # Corrected: 260.0
+      max_temp_c: 260.0 # Corrected: 260.0
       temperature_limited: true
     connections:
       - source_port: "outlet"
@@ -877,7 +890,7 @@ nodes:
       component_id: "PEM_Water_Return_Valve_1"
       P_out_pa: 400000.0 # 4 bar
       fluid: "H2O"
-    connections: 
+    connections:
       - source_port: "outlet"
         target_name: "PEM_Degasser_1"
         target_port: "mixture_in"
@@ -901,7 +914,7 @@ nodes:
       component_id: "PEM_Water_Return_Valve_2"
       P_out_pa: 400000.0 # 4 bar
       fluid: "H2O"
-    connections: 
+    connections:
       - source_port: "outlet"
         target_name: "PEM_Degasser_2"
         target_port: "mixture_in"
@@ -951,7 +964,7 @@ nodes:
     params:
       pump_id: "PEM_Water_Pump"
       capacity_kg_h: 4000.0
-      target_pressure_pa: 4000000.0  # 40 bar
+      target_pressure_pa: 4000000.0 # 40 bar
     connections:
       - source_port: "water_out"
         target_name: "PEM_Electrolyzer"
@@ -967,7 +980,7 @@ nodes:
     params:
       max_power_mw: 5.35
       use_polynomials: True
-      water_excess_factor: 0.02 
+      water_excess_factor: 0.02
       out_pressure_pa: 4000000.0 # 40 bar
       lifecycle: 87600
     connections:
@@ -1048,12 +1061,12 @@ nodes:
 
   - id: "PEM_H2_ElectricBoiler_1"
     type: "ElectricBoiler"
-    params: 
+    params:
       max_power_kw: 25.0
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       efficiency: 0.98
     connections:
-      - source_port: "fluid_out"  
+      - source_port: "fluid_out"
         target_name: "PEM_H2_Deoxo_1"
         target_port: "inlet"
         resource_type: "gas"
@@ -1079,7 +1092,7 @@ nodes:
         target_name: "PEM_H2_Cyclone_2"
         target_port: "inlet"
         resource_type: "gas"
-    
+
   - id: "PEM_H2_Cyclone_2"
     type: "HydrogenMultiCyclone"
     params:
@@ -1109,9 +1122,9 @@ nodes:
 
   - id: "PEM_H2_ElectricBoiler_2"
     type: "ElectricBoiler"
-    params: 
+    params:
       max_power_kw: 25.0
-      target_temp_c: 30.0
+      target_outlet_temp_c: 30.0
       efficiency: 0.98
     connections:
       - source_port: "fluid_out"
@@ -1125,7 +1138,7 @@ nodes:
       purity_target: 0.99995
       recovery_rate: 0.90
       power_consumption_kw: 10.0
-    connections: 
+    connections:
       - source_port: "purified_gas_out"
         target_name: "H2_Production_Mixer"
         target_port: "inlet_2"
@@ -1155,7 +1168,7 @@ nodes:
     type: "DryCooler"
     params:
       component_id: "PEM_O2_Drycooler_1"
-      target_temp_c: 30.0
+      target_outlet_temp_c: 30.0
       use_central_utility: true
     connections:
       - source_port: "fluid_out"
@@ -1206,7 +1219,7 @@ nodes:
     type: "ElectricBoiler"
     params:
       max_power_kw: 25.0
-      target_temp_c: 20.0 
+      target_outlet_temp_c: 20.0
       process_step: 230
     connections:
       - source_port: "fluid_out"
@@ -1261,7 +1274,7 @@ nodes:
   - id: "H2_Production_Cooler"
     type: "DryCooler"
     params:
-      target_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       use_central_utility: true
     connections:
       - source_port: "fluid_out"
@@ -1292,7 +1305,7 @@ nodes:
     type: "DryCooler"
     params:
       design_capacity_kw: 500.0
-      target_out_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       use_central_utility: true
     connections:
       - source_port: "fluid_out"
@@ -1308,7 +1321,7 @@ nodes:
     type: "DetailedTank"
     params:
       n_tanks: 30
-      volume_per_tank_m3: 103.37
+      volume_per_tank_m3: 52.33
       max_pressure_bar: 70.0
       initial_pressure_bar: 1.0
       min_discharge_pressure_bar: 40.0
@@ -1330,7 +1343,7 @@ nodes:
       max_temp_c: 135.0
       temperature_limited: true
       inlet_pressure_bar: 30.0
-      outlet_pressure_bar: 70.0 # Corrected: 70.0
+      outlet_pressure_bar: 500.0
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_2"
@@ -1341,7 +1354,7 @@ nodes:
     type: "DryCooler"
     params:
       design_capacity_kw: 500.0
-      target_out_temp_c: 40.0
+      target_outlet_temp_c: 40.0
       use_central_utility: true
     connections:
       - source_port: "fluid_out"
@@ -1355,8 +1368,8 @@ nodes:
       max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 60.0 
-      outlet_pressure_bar: 140.0 # Corrected: 140.0
+      inlet_pressure_bar: 60.0
+      outlet_pressure_bar: 500.0
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_3"
@@ -1366,8 +1379,8 @@ nodes:
   - id: "HP_Intercooler_3"
     type: "DryCooler"
     params:
-      design_capacity_kw: 500.0
-      target_out_temp_c: 40.0
+      design_capacity_kw: 1500.0
+      target_outlet_temp_c: 40.0
       use_central_utility: true
     connections:
       - source_port: "fluid_out"
@@ -1381,8 +1394,8 @@ nodes:
       max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 125.0 
-      outlet_pressure_bar: 250.0
+      inlet_pressure_bar: 125.0
+      outlet_pressure_bar: 500.0
     connections:
       - source_port: "outlet"
         target_name: "HP_Intercooler_4"
@@ -1392,22 +1405,22 @@ nodes:
   - id: "HP_Intercooler_4"
     type: "DryCooler"
     params:
-      design_capacity_kw: 500.0
-      target_out_temp_c: 40.0
+      design_capacity_kw: 2000.0
+      target_outlet_temp_c: 40.0
       use_central_utility: true
     connections:
       - source_port: "fluid_out"
         target_name: "HP_Compressor_S5"
         target_port: "inlet"
         resource_type: "gas"
-  
+
   - id: "HP_Compressor_S5"
     type: "CompressorSingle"
     params:
       max_flow_kg_h: 720.0
       max_temp_c: 135.0
       temperature_limited: true
-      inlet_pressure_bar: 250.0 
+      inlet_pressure_bar: 250.0
       outlet_pressure_bar: 500.0
     connections:
       - source_port: "outlet"
@@ -1423,12 +1436,12 @@ nodes:
     type: "DischargeStation"
     params:
       station_id: 1
-      n_stations: 5             # Corrected: 5
+      n_stations: 5 # Corrected: 5
       truck_capacity_kg: 280.0
       delivery_pressure_bar: 500.0
       max_fill_rate_kg_min: 1.5
       min_fill_rate_kg_min: 0.583
-      h_in_day_max: 16.0        
+      h_in_day_max: 16.0
       valves_close_time_min: 5.0
       arrival_probability: 0.3
       isen_efficiency: 0.65

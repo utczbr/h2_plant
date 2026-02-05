@@ -48,7 +48,13 @@ installation_factors:
   Storage:
     piping: 0.15              # ~15%
     civil_foundations: 0.10   # ~10%
+  Utilities:
+    piping: 0.10              # ~10%
+    civil_foundations: 0.05   # ~5%
   Water_Treatment:
+    piping: 0.10              # ~10%
+  Other:
+    electrical: 0.30          # ~30%
     piping: 0.10              # ~10%
   General:
     engineering_supervision: 0.33   # 33% (indirect)
@@ -79,36 +85,15 @@ equipment:
     notes:
       - "Stainless Steel 316 required for 250°C steam"
   
-  - tag: "MTC-2"
-    block: "SOEC"
-    name: "Multistage O2 Compressor (4 stages)"
-    topology_ids:
-      - "SOEC_O2_compressor_1"
-      - "SOEC_O2_compressor_2"
-      - "SOEC_O2_compressor_3"
-      - "SOEC_O2_compressor_4"
-    component_type: "Centrifugal Compressor"
-    process_description: "Four-stage O2 compression from 1 bar to 15 bar"
-    capacity_variable: "power_kw"
-    capacity_unit: "kW"
-    capacity_aggregation: "sum"
-    cost_source: "turton"
-    restrictions:
-      - "450 ≤ W_shaft ≤ 3000 kW"
-      - "NOTE: Actual capacity (~60 kW) is below correlation bounds. Cost estimated via extrapolation (lower accuracy)."
-  
   - tag: "MTC-4"
     block: "SOEC"
-    name: "Multistage H2 Compressor (6 stages - SOEC Train)"
+    name: "Multistage H2 Compressor (3 stages - SOEC Train)"
     topology_ids:
       - "SOEC_H2_Compressor_S1"
       - "SOEC_H2_Compressor_S2"
       - "SOEC_H2_Compressor_S3"
-      - "SOEC_H2_Compressor_S4"
-      - "SOEC_H2_Compressor_S5"
-      - "SOEC_H2_Compressor_S6"
     component_type: "Reciprocating Compressor"
-    process_description: "Six-stage H2 compression from 1 bar to 41 bar"
+    process_description: "Three-stage H2 compression from 1 bar to 41 bar"
     capacity_variable: "power_kw"
     capacity_unit: "kW"
     capacity_aggregation: "sum"
@@ -118,6 +103,39 @@ equipment:
     notes:
       - "Reciprocating type for high pressure ratio"
       - "Alloy steel construction for H2 service"
+    coefficients:
+      K1: 2.0309
+      K2: 1.2524
+      K3: -0.0638
+      F_BM: 2.15
+      F_m: 2.1
+      F_m_note: "SS for H2 service"
+
+  - tag: "MTC-5"
+    block: "SOEC"
+    name: "Multistage H2 Compressor (3 stages - SOEC Train)"
+    topology_ids:
+      - "SOEC_H2_Compressor_S4"
+      - "SOEC_H2_Compressor_S5"
+      - "SOEC_H2_Compressor_S6"
+    component_type: "Reciprocating Compressor"
+    process_description: "Three-stage H2 compression from 1 bar to 41 bar"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+    restrictions:
+      - "10 ≤ W_shaft ≤ 10000 kW"
+    notes:
+      - "Reciprocating type for high pressure ratio"
+      - "Alloy steel construction for H2 service"
+    coefficients:
+      K1: 2.0309
+      K2: 1.2524
+      K3: -0.0638
+      F_BM: 2.15
+      F_m: 2.1
+      F_m_note: "SS for H2 service"
   
   - tag: "HP-COMP"
     block: "Storage"
@@ -273,11 +291,11 @@ equipment:
     capacity_unit: "kW"
     capacity_aggregation: "sum"
     cost_source: "vendor_quote"
-    vendor_quote_usd: 26617094.0
     notes:
       - "ROGER study fixed cost: €24,197,358"
       - "6 modules × 2.4 MW each = 11.52 MW"
       - "Cost source: CAPEX_BASE.csv (Direct cost: €24,197,358.17)"
+    vendor_quote_eur: 24197358.17
       
   - tag: "ATT-1"
     block: "SOEC"
@@ -406,7 +424,7 @@ equipment:
     block: "SOEC"
     name: "Rectifier and Transformer (SOEC)"
     topology_ids:
-      - "SOEC_Cluster"
+      - "SOEC_Transformer"
     component_type: "Power Electronics"
     process_description: "AC-DC conversion for SOEC stack (11.52 MW)"
     capacity_variable: "power_kw"
@@ -424,16 +442,47 @@ equipment:
     notes:
       - "Cp0 = 200 USD/kW (IEA estimate)"
 
-  - tag: "DCL-O2-TRAIN"
-    block: "SOEC"
-    name: "SOEC O2 Dry Coolers (4 units)"
+  - tag: "RCT-3"
+    block: "Other"
+    name: "Rectifier and Transformer (BOP)"
     topology_ids:
-      - "SOEC_O2_Drycooler_1"
-      - "SOEC_O2_Drycooler_2"
-      - "SOEC_O2_Drycooler_3"
-      - "SOEC_O2_Drycooler_4"
+      - "BOP_Transformer"
+    component_type: "Power Electronics"
+    process_description: "AC-DC conversion for BOP"
+    capacity_variable: "power_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    cost_source: "iea_scaling"
+    coefficients:
+      K1: 200.0    # 200 USD/kW (Unit Cost)
+      K2: 0.0
+      K3: 0.0
+      F_m: 1.0
+      F_p: 1.0
+      B1: 2.15     # Installation factor
+      B2: 0.0
+    notes:
+      - "Cp0 = 200 USD/kW (IEA estimate)"
+
+  - tag: "DCL-SOEC-H2"
+    block: "SOEC"
+    name: "SOEC H2 Dry Cooler (Pre-Compression)"
+    topology_ids:
+      - "SOEC_H2_DryCooler_1"
     component_type: "Air-Cooled Heat Exchanger"
-    process_description: "O2 compression train intercoolers"
+    process_description: "Primary cooling for SOEC H2 outlet stream"
+    capacity_variable: "area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    cost_source: "turton"
+
+  - tag: "DCL-SOEC-STEAM"
+    block: "SOEC"
+    name: "SOEC Steam Dry Cooler"
+    topology_ids:
+      - "SOEC_Steam_Drycooler"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Steam loop cooling between compressors"
     capacity_variable: "area_m2"
     capacity_unit: "m²"
     capacity_aggregation: "sum"
@@ -455,7 +504,7 @@ equipment:
     block: "SOEC"
     name: "SOEC H2 Coalescer"
     topology_ids:
-      - "SOEC_H2_Coalescer_2"
+      - "SOEC_H2_Coalescer"
     component_type: "Vertical Pressure Vessel"
     process_description: "Fiber-bed coalescing filters for fine mist removal (Post-Deoxo)"
     capacity_variable: "volume_m3"
@@ -519,7 +568,7 @@ equipment:
     block: "PEM"
     name: "Rectifier and Transformer (PEM)"
     topology_ids:
-      - "PEM_Electrolyzer"
+      - "PEM_Transformer"
     component_type: "Power Electronics"
     process_description: "AC-DC conversion for PEM stack (5 MW)"
     capacity_variable: "power_kw"
@@ -717,23 +766,33 @@ equipment:
     capacity_unit: "-"
     capacity_aggregation: "sum"
     cost_source: "vendor_quote"
-    vendor_quote_usd: 2124121.0
     notes:
       - "ROGER fixed cost: €1,931,019"
+    vendor_quote_eur: 1931019.0
 
   - tag: "HBT"
     block: "Storage"
     name: "Underground H2 Storage"
-    topology_ids: []
+    topology_ids:
+      - "LP_Storage_Tank"
     component_type: "Underground Storage"
     process_description: "Underground hydrogen storage facility"
     capacity_variable: "unknown"
     capacity_unit: "-"
     capacity_aggregation: "sum"
     cost_source: "vendor_quote"
-    vendor_quote_usd: 7409895.0
     notes:
       - "ROGER fixed cost: €6,736,268"
+    coefficients:
+      cost_method: power_law_scaling
+      C_ref_eur: 6736268.0
+      capacity_ref: 4800
+      capacity_unit: kg_H2
+      pressure_ref_bar: 70
+      exponent: 0.65
+      cost_formula: "C = C_ref * (capacity / capacity_ref)^0.65"
+      cost_note: "Vendor quote as reference, power law scaling for other sizes"
+    vendor_quote_eur: 6736268.0
 
   - tag: "LP-COMP"
     block: "Storage"
@@ -774,6 +833,61 @@ equipment:
     cost_source: "turton"
 
   # ============================================================================
+  # UTILITIES
+  # ============================================================================
+
+  - tag: "UTL-DC-BANK"
+    block: "Utilities"
+    name: "Central Dry Cooler Bank (Glycol)"
+    topology_ids:
+      - "cooling_manager"
+    component_type: "Air-Cooled Heat Exchanger"
+    process_description: "Central heat rejection for glycol loop (5,000 m²)"
+    capacity_variable: "dc_total_area_m2"
+    capacity_unit: "m²"
+    capacity_aggregation: "sum"
+    capacity_mode: "design"
+    modular_design: true
+    module_capacity: 1000.0
+    module_count: 5
+    modular_note: "Splitting 5000m² into 5x1000m² bays for Turton validity"
+    cost_source: "turton"
+    coefficients:
+      K1: 4.0336
+      K2: 0.2341
+      K3: 0.0497
+      F_m: 1.0
+      F_p: 1.0
+      B1: 0.96
+      B2: 1.21
+      capacity_min: 10
+      capacity_max: 1000
+
+  - tag: "UTL-CT-01"
+    block: "Utilities"
+    name: "Central Cooling Tower (Evaporative)"
+    topology_ids:
+      - "cooling_manager"
+    component_type: "Cooling Tower"
+    process_description: "50 MW Heat Rejection for Chillers"
+    capacity_variable: "tower_design_load_kw"
+    capacity_unit: "kW"
+    capacity_aggregation: "sum"
+    capacity_mode: "design"
+    cost_source: "turton"
+    coefficients:
+      K1: 4.8509
+      K2: -0.3698
+      K3: 0.1706
+      F_BM: 1.5
+      F_m: 1.0
+      capacity_min: 10
+      capacity_max: 10000
+    notes:
+      - "Assumes 10K delta-T. 50MW load ≈ 1200 L/s water flow."
+      - "Correlation is flow-based; verify kW-to-L/s conversion if used directly."
+
+  # ============================================================================
   # WATER TREATMENT
   # ============================================================================
 
@@ -802,10 +916,10 @@ equipment:
     capacity_variable: "flow_kg_h"
     capacity_unit: "kg/h"
     capacity_aggregation: "sum"
-    cost_source: "fixed"
-    fixed_cost_eur: 1288210.70
+    cost_source: "vendor_quote"
     notes:
       - "Direct cost from Roger: €1,288,210.70"
+    vendor_quote_eur: 1288210.70
 
   - tag: "WTR-TANK"
     block: "Water_Treatment"

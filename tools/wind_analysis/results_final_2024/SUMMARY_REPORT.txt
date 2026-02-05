@@ -20,11 +20,14 @@
 • 00_turbine_power_curve.png
 • 01_wind_speed_distribution.png
 • 02_power_distribution.png
+• 02_power_distribution_single_turbine.png
 • 03_wind_timeseries.png
 • 04_power_timeseries.png
+• 04_power_timeseries_single_turbine.png
 • 05_daily_revenue.png
 • 06_price_distribution.png
 • 07_exceedance_curve.png
+• 07_exceedance_curve_single_turbine.png
 • 08_matrix_capex_turbines.png
 • 09_matrix_sweet_spot.png
 • SUMMARY_REPORT.txt

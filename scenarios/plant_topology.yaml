@@ -7,7 +7,7 @@
 # 4. Compressed H2 is purified (Deoxo -> PSA) at high pressure.
 # 5. Recovered water is collected, mixed with fresh makeup water, pressurized, and pre-heated.
 
-scenario_name: "Plant PEM+SOEC+ATR original tank (30 tanks with 107.37 m3 each)"
+scenario_name: "Plant PEM+SOEC+ATR (30 tanks with 103.37 m3 each)"
 
 nodes:
   # =================================================================================

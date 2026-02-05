@@ -48,12 +48,18 @@ COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
     # 'process_train_profile': REMOVED DUPLICATE - See STACKED PROPERTIES section below
     'mixer_comparison': ['minute', '*Mixer*', '*Drain*', '*Combiner*'],
     'power_vs_ppa_thesis': CORE_COLUMNS + ['ppa_price_effective_eur_mwh'],
+    'renewable_grid_ppa_panels_plotly': CORE_COLUMNS + [
+        'ppa_price_effective_eur_mwh', 'effective_ppa_price',
+        'spot_purchased_mw', 'sell_power_mw', 'coordinator_sell_power_mw',
+        'P_renewable_mw', 'wind_power_mw', 'wind_coefficient',
+        'guaranteed_mw', 'guaranteed_power_mw'
+    ],
     
     # =========================================================================
     # H2 PRODUCTION
     # =========================================================================
     'h2_production': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
-    'total_h2_production_stacked': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg'],
+    'total_h2_production_stacked': CORE_COLUMNS + ['H2_soec', 'H2_soec_kg', 'H2_pem', 'H2_pem_kg', 'H2_atr', 'H2_atr_kg'],
     'cumulative_h2': CORE_COLUMNS + ['H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg'],
     'cumulative_h2_production': CORE_COLUMNS + [
         'H2_soec_kg', 'H2_pem_kg', 'H2_atr_kg', 'cumulative_h2_kg',
@@ -191,7 +197,17 @@ COLUMN_REQUIREMENTS: Dict[str, List[str]] = {
     'soec_h2_production_over_time': CORE_COLUMNS + ['H2_soec_kg'],
     'pem_cell_voltage_over_time': CORE_COLUMNS,
     'pem_efficiency_over_time': CORE_COLUMNS,
-    'energy_price_over_time': CORE_COLUMNS,
+    'energy_price_over_time': CORE_COLUMNS + ['energy_price_eur_kwh', 'pricing_energy_price_eur_kwh'],
+    'wind_power_production_plotly': [
+        'minute', 'P_offer', 'P_renewable_mw', 'wind_power_mw', 'wind_coefficient',
+        'P_pem', 'P_pem_actual', 'P_pem_mw', 'pem_power_mw',
+        'P_soec', 'P_soec_actual', 'P_soec_mw', 'soec_power_mw'
+    ],
+    'wind_energy_cumulative_plotly': [
+        'minute', 'P_offer', 'P_renewable_mw', 'wind_power_mw', 'wind_coefficient',
+        'P_pem', 'P_pem_actual', 'P_pem_mw', 'pem_power_mw',
+        'P_soec', 'P_soec_actual', 'P_soec_mw', 'soec_power_mw'
+    ],
     'soec_active_modules_over_time': ['minute', 'soec_active_modules', 'soec_module_*'],
 }
 
@@ -549,10 +565,36 @@ class GraphCatalog:
             description='Duration curve of wind power usage',
             function=pg.plot_wind_utilization_duration_curve,
             library=GraphLibrary.PLOTLY,
-            data_required=['wind_coefficient', 'P_pem', 'P_soec'],
+            data_required=['P_offer', 'P_renewable_mw', 'wind_power_mw', 'wind_coefficient', 'P_pem', 'P_soec'],
             priority=GraphPriority.HIGH,
             category='grid_integration',
             enabled=True  # P2 FIX: Enabled for dual-mode
+        ))
+
+        # 6b. Wind Power Production (New)
+        self.register(GraphMetadata(
+            graph_id='wind_power_production_plotly',
+            title='Wind Power Production (Time Series)',
+            description='Available, utilized, and curtailed wind power over time',
+            function=pg.plot_wind_power_production_timeline,
+            library=GraphLibrary.PLOTLY,
+            data_required=['history'],
+            priority=GraphPriority.HIGH,
+            category='grid_integration',
+            enabled=True
+        ))
+
+        # 6c. Cumulative Wind Energy (New)
+        self.register(GraphMetadata(
+            graph_id='wind_energy_cumulative_plotly',
+            title='Cumulative Wind Energy',
+            description='Cumulative available, utilized, and curtailed wind energy',
+            function=pg.plot_wind_energy_cumulative,
+            library=GraphLibrary.PLOTLY,
+            data_required=['history'],
+            priority=GraphPriority.MEDIUM,
+            category='grid_integration',
+            enabled=True
         ))
         
         # P2 FIX: Missing Plotly twins (identified as unreachable by audit)
@@ -629,6 +671,26 @@ class GraphCatalog:
             enabled=True
         ))
 
+        # 9b. Renewable/Grid Energy + Effective PPA (3-Panel)
+        self.register(GraphMetadata(
+            graph_id='renewable_grid_ppa_panels_plotly',
+            title='Renewable & Grid Energy + Effective PPA (Interactive)',
+            description='Wind availability with guaranteed line, renewable sales vs Non-RFNBO grid purchases, and effective PPA',
+            function=pg.plot_renewable_grid_ppa_panels,
+            library=GraphLibrary.PLOTLY,
+            data_required=[
+                'P_offer', 'P_renewable_mw', 'wind_power_mw', 'wind_coefficient',
+                'guaranteed_mw', 'guaranteed_power_mw',
+                'P_sold', 'sell_power_mw', 'coordinator_sell_power_mw',
+                'spot_purchased_mw',
+                'ppa_price_effective_eur_mwh', 'effective_ppa_price',
+                'spot_price'
+            ],
+            priority=GraphPriority.MEDIUM,
+            category='economics',
+            enabled=True
+        ))
+
         # 10. RFNBO Compliance (Stacked Area)
         self.register(GraphMetadata(
             graph_id='rfnbo_compliance_plotly',
@@ -697,13 +759,13 @@ class GraphCatalog:
         self.register(GraphMetadata(
             graph_id='total_h2_production_stacked',
             title='Total H2 Production (Stacked)',
-            description='Stacked area chart showing PEM + SOEC contributions',
+            description='Stacked area chart showing SOEC + ATR + PEM contributions',
             function=pg.plot_total_production_stacked,
             library=GraphLibrary.PLOTLY,
-            data_required=['pem.h2_production_kg_h', 'soec.h2_production_kg_h', 'timestamps'],
+            data_required=['minute', 'H2_soec', 'H2_soec_kg', 'H2_atr', 'H2_atr_kg', 'H2_pem', 'H2_pem_kg'],
             priority=GraphPriority.CRITICAL,
             category='production',
-            enabled=False  # Plotly disabled
+            enabled=True
         ))
         
         self.register(GraphMetadata(
@@ -736,14 +798,26 @@ class GraphCatalog:
         # Energy Economics
         self.register(GraphMetadata(
             graph_id='energy_price_over_time',
-            title='Energy Price Timeline',
-            description='Electricity price (€/kWh) over time',
+            title='Energy Price (Hourly Average)',
+            description='Hourly average electricity price (EUR/MWh) over time',
             function=pg.plot_energy_price_timeline,
             library=GraphLibrary.PLOTLY,
-            data_required=['pricing.energy_price_eur_kwh', 'timestamps'],
+            data_required=['history'],
             priority=GraphPriority.HIGH,
             category='economics',
-            enabled=False  # Plotly disabled
+            enabled=True
+        ))
+
+        self.register(GraphMetadata(
+            graph_id='energy_price_daily_monthly_plotly',
+            title='Energy Price (Daily & Monthly Averages)',
+            description='Daily and monthly average electricity price (EUR/MWh)',
+            function=pg.plot_energy_price_daily_monthly,
+            library=GraphLibrary.PLOTLY,
+            data_required=['spot_price', 'Spot', 'energy_price_eur_kwh', 'pricing_energy_price_eur_kwh', 'minute'],
+            priority=GraphPriority.MEDIUM,
+            category='economics',
+            enabled=True
         ))
         
         self.register(GraphMetadata(

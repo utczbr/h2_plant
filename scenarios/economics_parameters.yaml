@@ -42,7 +42,7 @@ h2_non_rfnbo_price_eur_kg: 2.0
 
 # Maximum grid power for spot purchases (MW)
 # Limits non-RFNBO production capacity
-p_grid_max_mw: 30.0
+p_grid_max_mw: 10.0
 
 # =============================================================================
 # BOP GRID POWER CONFIGURATION

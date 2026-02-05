@@ -63,6 +63,103 @@ SUMMARY_COLUMNS = [
     'cooling_manager_*_duty_kw'
 ]
 
+def _pem_nominal_specs() -> tuple:
+    """
+    Estimate PEM nominal specific energy (kWh/kg) and nominal power (kW)
+    using the PEM electrochemistry model at nominal current density.
+    """
+    try:
+        from h2_plant.config.constants_physics import PEMConstants
+        from h2_plant.models import pem_physics
+
+        const = PEMConstants()
+        j_nom = float(const.j_nom)
+
+        m_h2_kg_s, _, _ = pem_physics.calculate_flows(j_nom)
+        if m_h2_kg_s <= 0:
+            return 0.0, 0.0
+
+        v_cell = pem_physics.calculate_Vcell_base(j_nom, const.T_default, const.P_op_default)
+        i_total = j_nom * const.Area_Total
+        p_stack = i_total * v_cell
+        p_bop = const.P_bop_fixo + const.k_bop_var * p_stack
+        p_total_kw = (p_stack + p_bop) / 1000.0
+
+        h2_rate_kg_h = m_h2_kg_s * 3600.0
+        if h2_rate_kg_h <= 0 or p_total_kw <= 0:
+            return 0.0, 0.0
+
+        spec_kwh_kg = p_total_kw / h2_rate_kg_h
+        return spec_kwh_kg, p_total_kw
+    except Exception as exc:
+        logger.debug(f"PEM nominal specs unavailable: {exc}")
+        return 0.0, 0.0
+
+
+def _soec_nominal_specs() -> tuple:
+    """
+    Estimate SOEC nominal specific energy (kWh/kg) and nominal power (kW).
+    Uses degradation tables from both soec_operator.py and soec_operation.py
+    when available, and SOECConstants for nominal capacity.
+    """
+    values = []
+    try:
+        from h2_plant.components.electrolysis import soec_operator as soec_op
+        if hasattr(soec_op, 'DEG_EFFICIENCY_KWH_KG'):
+            values.append(float(soec_op.DEG_EFFICIENCY_KWH_KG[0]))
+    except Exception as exc:
+        logger.debug(f"SOEC operator efficiency unavailable: {exc}")
+
+    try:
+        from h2_plant.models import soec_operation as soec_ops
+        if hasattr(soec_ops, 'DEG_EFFICIENCY_KWH_KG'):
+            values.append(float(soec_ops.DEG_EFFICIENCY_KWH_KG[0]))
+    except Exception as exc:
+        logger.debug(f"SOEC operation efficiency unavailable: {exc}")
+
+    spec_kwh_kg = float(np.mean(values)) if values else 0.0
+
+    nominal_kw = 0.0
+    try:
+        from h2_plant.models import soec_operation as soec_ops
+        nominal_kw = float(soec_ops.CONST.NUM_MODULES * soec_ops.CONST.MAX_POWER_NOMINAL_MW * 1000.0)
+    except Exception as exc:
+        logger.debug(f"SOEC nominal power unavailable: {exc}")
+
+    return spec_kwh_kg, nominal_kw
+
+
+def _atr_nominal_specs() -> tuple:
+    """
+    Estimate ATR nominal specific energy (kWh/kg) and nominal power (kW)
+    from atr_range_results.txt (100% charge line).
+    """
+    try:
+        atr_path = Path(__file__).resolve().parents[1] / "scripts" / "atr_range_results.txt"
+        if not atr_path.exists():
+            return 0.0, 0.0
+
+        with open(atr_path, "r") as f:
+            for line in f:
+                if line.strip().startswith("100"):
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) < 7:
+                        return 0.0, 0.0
+                    h2_kmol_h = float(parts[2])
+                    heat_duty_kw = float(parts[6])
+                    if h2_kmol_h <= 0 or heat_duty_kw <= 0:
+                        return 0.0, 0.0
+                    h2_rate_kg_h = h2_kmol_h * 2.016
+                    if h2_rate_kg_h <= 0:
+                        return 0.0, 0.0
+                    spec_kwh_kg = heat_duty_kw / h2_rate_kg_h
+                    return spec_kwh_kg, heat_duty_kw
+    except Exception as exc:
+        logger.debug(f"ATR nominal specs unavailable: {exc}")
+        return 0.0, 0.0
+
+    return 0.0, 0.0
+
 
 class ScenarioSummaryAccumulator:
     """
@@ -86,11 +183,110 @@ class ScenarioSummaryAccumulator:
         self.heat_recovery_atr_kwh = 0.0
         self.heat_rejected_by_subsystem: Dict[str, float] = {}
         self.atr_power_mwh = 0.0
+        self.atr_q_useful_mwh = 0.0  # ATR useful heat recovery (H05+H08+H09)
+
+        # ATR Offgas composition tracking (dry basis)
+        self.atr_offgas_total_kg = 0.0      # Wet total (including H2O)
+        self.atr_offgas_dry_total_kg = 0.0  # Dry total (excluding H2O)
+        self.atr_offgas_co2_kg = 0.0        # Dry basis
+        self.atr_offgas_ch4_kg = 0.0        # Dry basis
+        self.atr_offgas_h2_kg = 0.0         # Dry basis
 
         # Time tracking across chunks
         self._last_minute: Optional[float] = None
         self._default_step_minutes: Optional[float] = None
-        
+
+        # Pre-resolved column mappings (set by configure_columns)
+        self._col_map: Dict[str, Optional[str]] = {}
+        self._col_lists: Dict[str, List[str]] = {}
+        self._configured = False
+
+    def configure_columns(self, available_columns: List[str]) -> None:
+        """
+        Pre-resolve all pattern-based column lookups once.
+        Call this before processing chunks to avoid O(N_cols²) per-chunk overhead.
+        """
+        # ATR tail gas columns (composition breakdown)
+        self._col_map['atr_tail_flow'] = next(
+            (c for c in available_columns if 'ATR' in c and 'tail_gas' in c and 'mass_flow' in c), None)
+        self._col_map['atr_tail_co2'] = next(
+            (c for c in available_columns if 'ATR' in c and 'tail_gas' in c and 'CO2_molf' in c), None)
+        self._col_map['atr_tail_ch4'] = next(
+            (c for c in available_columns if 'ATR' in c and 'tail_gas' in c and 'CH4_molf' in c), None)
+        self._col_map['atr_tail_h2'] = next(
+            (c for c in available_columns if 'ATR' in c and 'tail_gas' in c and 'H2_molf' in c), None)
+        self._col_map['atr_tail_h2o'] = next(
+            (c for c in available_columns if 'ATR' in c and 'tail_gas' in c and 'H2O_molf' in c), None)
+
+        # ATR power columns (exclude thermal/heat columns)
+        self._col_lists['atr_power'] = [
+            c for c in available_columns
+            if 'ATR' in c and ('power' in c or 'kw' in c)
+            and 'q_' not in c.lower()
+            and 'heat' not in c.lower()
+            and 'duty' not in c.lower()
+            and 'boiler' not in c.lower()
+            and 'cooler' not in c.lower()
+            and 'interchanger' not in c.lower()
+        ]
+
+        # ATR Q_useful columns
+        self._col_lists['q_useful'] = [
+            c for c in available_columns if 'atr_q_useful_kw' in c.lower()]
+
+        # Heat rejection columns
+        self._col_lists['heat_reject'] = [
+            c for c in available_columns
+            if (
+                'heat_rejected' in c
+                or 'cooling_load' in c
+                or 'tqc_duty' in c
+                or 'cooling_manager' in c.lower()
+                or 'glycol_duty' in c.lower()
+                or 'cw_duty' in c.lower()
+            )
+            and 'boiler' not in c.lower()
+        ]
+
+        self._configured = True
+        logger.debug(f"Column pre-resolution complete: {len(self._col_map)} mappings, "
+                     f"{sum(len(v) for v in self._col_lists.values())} list entries")
+
+    def get_state(self) -> Dict[str, any]:
+        """Export current state for checkpointing."""
+        return {
+            'total_time_h': self.total_time_h,
+            'sums': dict(self.sums),
+            'last_cumulative': dict(self.last_cumulative),
+            'h2_purified_sum': self.h2_purified_sum,
+            'offgas_atr_sum': self.offgas_atr_sum,
+            'biogas_mass_sum': self.biogas_mass_sum,
+            'water_atr_sum': self.water_atr_sum,
+            'heat_rejected_mwh': self.heat_rejected_mwh,
+            'heat_recovery_atr_kwh': self.heat_recovery_atr_kwh,
+            'heat_rejected_by_subsystem': dict(self.heat_rejected_by_subsystem),
+            'atr_power_mwh': self.atr_power_mwh,
+            'atr_q_useful_mwh': self.atr_q_useful_mwh,
+            'atr_offgas_total_kg': self.atr_offgas_total_kg,
+            'atr_offgas_dry_total_kg': self.atr_offgas_dry_total_kg,
+            'atr_offgas_co2_kg': self.atr_offgas_co2_kg,
+            'atr_offgas_ch4_kg': self.atr_offgas_ch4_kg,
+            'atr_offgas_h2_kg': self.atr_offgas_h2_kg,
+            '_last_minute': self._last_minute,
+            '_default_step_minutes': self._default_step_minutes,
+        }
+
+    def load_state(self, state: Dict[str, any]) -> None:
+        """Restore state from checkpoint."""
+        for key, value in state.items():
+            if hasattr(self, key):
+                attr = getattr(self, key)
+                if isinstance(value, dict) and isinstance(attr, dict):
+                    attr.clear()
+                    attr.update(value)
+                else:
+                    setattr(self, key, value)
+
     def update(self, df_chunk: pd.DataFrame):
         """
         Process a DataFrame chunk and update running totals.
@@ -181,17 +377,76 @@ class ScenarioSummaryAccumulator:
         for c in psa_product_cols:
             self.h2_purified_sum += integrate(c)
 
-        # --- 4. Offgas / Vent ---
-        # Explicit tail gas integration
-        tail_cols = [c for c in df_chunk.columns if 'PSA' in c and 'tail_gas' in c]
-        if tail_cols:
-            for c in tail_cols:
-                self.offgas_atr_sum += integrate(c)
+        # --- 4. ATR Offgas / Vent (with composition breakdown) ---
+        # Only track ATR PSA tail gas (not SOEC/PEM PSA which don't log tail gas)
+        # Use pre-resolved columns if configured, else fall back to inline lookup
+        if self._configured:
+            tail_flow_col = self._col_map.get('atr_tail_flow')
+            co2_col = self._col_map.get('atr_tail_co2')
+            ch4_col = self._col_map.get('atr_tail_ch4')
+            h2_col = self._col_map.get('atr_tail_h2')
+            h2o_col = self._col_map.get('atr_tail_h2o')
         else:
-            # Fallback estimation per chunk (Inlet - Outlet)
+            tail_flow_col = next((c for c in df_chunk.columns
+                                  if 'ATR' in c and 'tail_gas' in c and 'mass_flow' in c), None)
+            co2_col = next((c for c in df_chunk.columns
+                           if 'ATR' in c and 'tail_gas' in c and 'CO2_molf' in c), None)
+            ch4_col = next((c for c in df_chunk.columns
+                           if 'ATR' in c and 'tail_gas' in c and 'CH4_molf' in c), None)
+            h2_col = next((c for c in df_chunk.columns
+                          if 'ATR' in c and 'tail_gas' in c and 'H2_molf' in c), None)
+            h2o_col = next((c for c in df_chunk.columns
+                            if 'ATR' in c and 'tail_gas' in c and 'H2O_molf' in c), None)
+
+        # Verify column exists in this chunk (handles schema drift)
+        if tail_flow_col and tail_flow_col in df_chunk.columns:
+            tail_flow = integrate(tail_flow_col)
+            self.offgas_atr_sum += tail_flow
+            self.atr_offgas_total_kg += tail_flow
+
+            if tail_flow > 0 and dt_hours.sum() > 0:
+                # Molecular weights for mole-to-mass conversion
+                MW_H2, MW_CO2, MW_CH4, MW_H2O = 2.016, 44.01, 16.04, 18.015
+
+                # Average mole fractions (time-weighted)
+                def avg_molf(col):
+                    if col and col in df_chunk.columns:
+                        return (df_chunk[col] * dt_hours).sum() / dt_hours.sum()
+                    return 0.0
+
+                y_co2 = avg_molf(co2_col)
+                y_ch4 = avg_molf(ch4_col)
+                y_h2 = avg_molf(h2_col)
+                y_h2o = avg_molf(h2o_col)
+
+                # Calculate wet MW and H2O mass fraction
+                MW_wet = y_h2*MW_H2 + y_co2*MW_CO2 + y_ch4*MW_CH4 + y_h2o*MW_H2O
+                if MW_wet > 0:
+                    w_h2o = y_h2o * MW_H2O / MW_wet  # H2O mass fraction
+                    dry_mass = tail_flow * (1.0 - w_h2o)
+                    self.atr_offgas_dry_total_kg += dry_mass
+
+                    # Dry basis mole fractions: y_dry_i = y_i / (1 - y_h2o)
+                    y_dry_sum = 1.0 - y_h2o
+                    if y_dry_sum > 0.01:  # Avoid division by near-zero
+                        y_dry_co2 = y_co2 / y_dry_sum
+                        y_dry_ch4 = y_ch4 / y_dry_sum
+                        y_dry_h2 = y_h2 / y_dry_sum
+
+                        # Dry MW for mass fraction calculation
+                        MW_dry = y_dry_h2*MW_H2 + y_dry_co2*MW_CO2 + y_dry_ch4*MW_CH4
+                        if MW_dry > 0:
+                            # Dry mass fractions
+                            self.atr_offgas_co2_kg += dry_mass * (y_dry_co2 * MW_CO2 / MW_dry)
+                            self.atr_offgas_ch4_kg += dry_mass * (y_dry_ch4 * MW_CH4 / MW_dry)
+                            self.atr_offgas_h2_kg += dry_mass * (y_dry_h2 * MW_H2 / MW_dry)
+        else:
+            # Fallback estimation (Inlet - Outlet) - no composition breakdown
             inlet = integrate('ATR_Coalescer_1_outlet_mass_flow_kg_h')
             outlet = integrate('ATR_PSA_1_outlet_mass_flow_kg_h')
-            self.offgas_atr_sum += max(0.0, inlet - outlet)
+            fallback_mass = max(0.0, inlet - outlet)
+            self.offgas_atr_sum += fallback_mass
+            self.atr_offgas_total_kg += fallback_mass
 
         # --- 5. Consumption (Water/Biogas) ---
         # Water (per step mass)
@@ -221,16 +476,20 @@ class ScenarioSummaryAccumulator:
             self.sums[f"{col}_MWh"] = self.sums.get(f"{col}_MWh", 0.0) + integrate(col)
 
         # ATR electrical work (if available)
-        atr_power_cols = [
-            c for c in df_chunk.columns
-            if 'ATR' in c and ('power' in c or 'kw' in c)
-            and 'q_' not in c.lower()
-            and 'heat' not in c.lower()
-            and 'duty' not in c.lower()
-            and 'boiler' not in c.lower()
-            and 'cooler' not in c.lower()
-            and 'interchanger' not in c.lower()
-        ]
+        # Use pre-resolved list if configured, else compute inline
+        if self._configured:
+            atr_power_cols = [c for c in self._col_lists.get('atr_power', []) if c in df_chunk.columns]
+        else:
+            atr_power_cols = [
+                c for c in df_chunk.columns
+                if 'ATR' in c and ('power' in c or 'kw' in c)
+                and 'q_' not in c.lower()
+                and 'heat' not in c.lower()
+                and 'duty' not in c.lower()
+                and 'boiler' not in c.lower()
+                and 'cooler' not in c.lower()
+                and 'interchanger' not in c.lower()
+            ]
         for c in atr_power_cols:
             # Assume kW if column includes 'kw' and not 'mw'
             if 'kw' in c.lower() and 'mw' not in c.lower():
@@ -238,20 +497,31 @@ class ScenarioSummaryAccumulator:
             else:
                 self.atr_power_mwh += integrate(c)
 
+        # ATR Q_useful (useful heat recovery from coolers/WGS - kW -> MWh)
+        if self._configured:
+            q_useful_cols = [c for c in self._col_lists.get('q_useful', []) if c in df_chunk.columns]
+        else:
+            q_useful_cols = [c for c in df_chunk.columns if 'atr_q_useful_kw' in c.lower()]
+        for c in q_useful_cols:
+            self.atr_q_useful_mwh += integrate(c) / 1000.0
+
         # --- 7. Thermal (Integration) ---
         # kW -> kWh (divide by 1000 later for MWh)
-        cols_reject = [
-            c for c in df_chunk.columns 
-            if (
-                'heat_rejected' in c
-                or 'cooling_load' in c
-                or 'tqc_duty' in c
-                or 'cooling_manager' in c.lower()
-                or 'glycol_duty' in c.lower()
-                or 'cw_duty' in c.lower()
-            )
-            and 'boiler' not in c.lower()
-        ]
+        if self._configured:
+            cols_reject = [c for c in self._col_lists.get('heat_reject', []) if c in df_chunk.columns]
+        else:
+            cols_reject = [
+                c for c in df_chunk.columns
+                if (
+                    'heat_rejected' in c
+                    or 'cooling_load' in c
+                    or 'tqc_duty' in c
+                    or 'cooling_manager' in c.lower()
+                    or 'glycol_duty' in c.lower()
+                    or 'cw_duty' in c.lower()
+                )
+                and 'boiler' not in c.lower()
+            ]
         for c in cols_reject:
             heat_mwh = integrate(c) / 1000.0
             self.heat_rejected_mwh += heat_mwh
@@ -262,12 +532,14 @@ class ScenarioSummaryAccumulator:
                 key = 'SOEC'
             elif 'pem' in c_lower:
                 key = 'PEM'
-            elif 'atr' in c_lower:
+            elif 'atr' in c_lower or 'biogas' in c_lower:
                 key = 'ATR'
             elif 'bop' in c_lower or 'balance' in c_lower:
                 key = 'BOP'
+            elif c_lower.startswith('lp_') or c_lower.startswith('hp_'):
+                key = 'Storage'
             else:
-                key = 'Other'
+                key = 'Utilities'
             self.heat_rejected_by_subsystem[key] = self.heat_rejected_by_subsystem.get(key, 0.0) + heat_mwh
             
         # ATR Heat Recovery
@@ -295,7 +567,27 @@ class ScenarioSummaryAccumulator:
         metrics.append(('Production', 'H2 SOEC', 'kg', h2_soec))
         metrics.append(('Production', 'H2 PEM', 'kg', h2_pem))
         metrics.append(('Production', 'H2 ATR', 'kg', h2_atr))
-        metrics.append(('Production', 'H2 Total Purified', 'kg', self.h2_purified_sum))
+        metrics.append(('Production', 'H2 Total 5 Grade', 'kg', self.h2_purified_sum))
+
+        # Equivalent full-load hours (per subsystem at nominal efficiency/power)
+        pem_spec_kwh_kg, pem_nom_kw = _pem_nominal_specs()
+        soec_spec_kwh_kg, soec_nom_kw = _soec_nominal_specs()
+        atr_spec_kwh_kg, atr_nom_kw = _atr_nominal_specs()
+
+        total_energy_kwh = 0.0
+        total_nominal_kw = 0.0
+        if h2_pem > 0 and pem_spec_kwh_kg > 0 and pem_nom_kw > 0:
+            total_energy_kwh += h2_pem * pem_spec_kwh_kg
+            total_nominal_kw += pem_nom_kw
+        if h2_soec > 0 and soec_spec_kwh_kg > 0 and soec_nom_kw > 0:
+            total_energy_kwh += h2_soec * soec_spec_kwh_kg
+            total_nominal_kw += soec_nom_kw
+        if h2_atr > 0 and atr_spec_kwh_kg > 0 and atr_nom_kw > 0:
+            total_energy_kwh += h2_atr * atr_spec_kwh_kg
+            total_nominal_kw += atr_nom_kw
+
+        full_load_hours = (total_energy_kwh / total_nominal_kw) if total_nominal_kw > 0 else 0.0
+        metrics.append(('Production', 'H2 Full Load Hours (Equivalent)', 'h', full_load_hours))
 
         # O2
         o2_pem = self.sums.get('O2_pem_kg', 0.0)
@@ -303,10 +595,16 @@ class ScenarioSummaryAccumulator:
         if o2_soec == 0 and h2_soec > 0:
             o2_soec = h2_soec * 8.0 # Fallback stoichiometry
             
-        metrics.append(('Production', 'O2 Total', 'kg', o2_pem + o2_soec))
+        metrics.append(('Production', 'O2 Total Generated', 'kg', o2_pem + o2_soec))
         metrics.append(('Production', 'O2 SOEC', 'kg', o2_soec))
         metrics.append(('Production', 'O2 PEM', 'kg', o2_pem))
-        metrics.append(('Production', 'Offgas/Vent', 'kg', self.offgas_atr_sum))
+
+        # ATR Offgas with composition breakdown (dry basis, excluding H2O)
+        metrics.append(('Production', 'ATR Offgas Total (wet)', 'kg', self.atr_offgas_total_kg))
+        metrics.append(('Production', 'ATR Offgas Dry Total', 'kg', self.atr_offgas_dry_total_kg))
+        metrics.append(('Production', 'ATR Offgas CO2 (dry)', 'kg', self.atr_offgas_co2_kg))
+        metrics.append(('Production', 'ATR Offgas CH4 (dry)', 'kg', self.atr_offgas_ch4_kg))
+        metrics.append(('Production', 'ATR Offgas H2 Unrecovered (dry)', 'kg', self.atr_offgas_h2_kg))
 
         # --- 2. CONSUMPTION ---
         water_pem = self.sums.get('H2O_pem_kg', 0.0)
@@ -315,7 +613,7 @@ class ScenarioSummaryAccumulator:
         if water_atr == 0 and h2_atr > 0:
             water_atr = h2_atr * 9.0 # Fallback
             
-        metrics.append(('Consumption', 'Water Total', 'kg', water_pem + water_soec + water_atr))
+        metrics.append(('Consumption', 'Water Consumption Total', 'kg', water_pem + water_soec + water_atr))
         metrics.append(('Consumption', 'Water PEM', 'kg', water_pem))
         metrics.append(('Consumption', 'Water SOEC', 'kg', water_soec))
         metrics.append(('Consumption', 'Water ATR', 'kg', water_atr))
@@ -324,41 +622,46 @@ class ScenarioSummaryAccumulator:
         if biogas == 0 and h2_atr > 0:
             biogas = h2_atr * 5.5 # Fallback
             
-        metrics.append(('Consumption', 'Biogas Mass', 'kg', biogas))
-        # Energy (LHV approx 13.9 kWh/kg)
+        # Biogas Volume: 1 kg = 0.91 m³
+        biogas_volume_m3 = biogas * 0.91
+        metrics.append(('Consumption', 'Biogas Volume', 'm³', biogas_volume_m3))
+        # Keep biogas_energy_mwh for internal calculations (efficiency)
         biogas_energy_mwh = (biogas * 13.9) / 1000.0
-        metrics.append(('Consumption', 'Biogas Energy', 'MWh', biogas_energy_mwh))
-        metrics.append(('Consumption', 'O2 Consumption (ATR)', 'kg', self.sums.get('ATR_O2_in', 0.0)))
+
+        # O2 Balance: PEM production, ATR consumption, External required
+        o2_consumed_atr = self.sums.get('ATR_O2_in', 0.0)
+        o2_external_required = max(0.0, o2_consumed_atr - o2_pem)
+        metrics.append(('Consumption', 'O2 Produced by PEM', 'kg', o2_pem))
+        metrics.append(('Consumption', 'O2 Consumed by ATR', 'kg', o2_consumed_atr))
+        metrics.append(('Consumption', 'O2 External Required', 'kg', o2_external_required))
 
         # --- 3. ELECTRICAL ---
         e_soec = self.sums.get('P_soec_actual_MWh', 0.0)
         e_pem = self.sums.get('P_pem_MWh', 0.0)
         e_bop = self.sums.get('P_bop_mw_MWh', 0.0)
         
-        metrics.append(('Electrical', 'Total Plant Load', 'MWh', e_soec + e_pem + e_bop))
+        # Balance of Plant includes ATR auxiliary power
+        e_bop_total = e_bop + self.atr_power_mwh
+        metrics.append(('Electrical', 'Total Plant Load', 'MWh', e_soec + e_pem + e_bop_total))
         metrics.append(('Electrical', 'Electrolyzers Total', 'MWh', e_soec + e_pem))
         metrics.append(('Electrical', 'SOEC Load', 'MWh', e_soec))
         metrics.append(('Electrical', 'PEM Load', 'MWh', e_pem))
-        metrics.append(('Electrical', 'Balance of Plant', 'MWh', e_bop))
-        if self.atr_power_mwh > 0:
-            metrics.append(('Electrical', 'ATR Electric Work', 'MWh', self.atr_power_mwh))
+        metrics.append(('Electrical', 'Balance of Plant', 'MWh', e_bop_total))
 
         # --- 4. THERMAL ---
         metrics.append(('Thermal', 'Total Heat Rejected', 'MWh', self.heat_rejected_mwh))
-        for key in sorted(self.heat_rejected_by_subsystem.keys()):
-            metrics.append(('Thermal', f'Heat Rejected {key}', 'MWh', self.heat_rejected_by_subsystem[key]))
         metrics.append(('Thermal', 'Heat Exchange ATR->SOEC', 'MWh', self.heat_recovery_atr_kwh / 1000.0))
 
         # --- 5. GRID ---
         e_exported = self.sums.get('P_sold_MWh', 0.0)
         e_imported = self.sums.get('bop_grid_import_mw_MWh', 0.0)
         metrics.append(('Grid', 'Energy Sold', 'MWh', e_exported))
-        metrics.append(('Grid', 'Energy Purchased', 'MWh', e_imported))
-        
+        metrics.append(('Grid', 'Energy Purchased Total', 'MWh', e_imported))
+
         total_renewable = self.sums.get('P_offer_MWh', 0.0)
         e_guaranteed = self.guaranteed_power_mw * self.total_time_h
         e_variable = max(0.0, total_renewable - e_guaranteed)
-        
+
         metrics.append(('Grid', 'Renewable Available (Total)', 'MWh', total_renewable))
         metrics.append(('Grid', 'Renewable (Guaranteed Base)', 'MWh', e_guaranteed))
         metrics.append(('Grid', 'Renewable (Variable Wind)', 'MWh', e_variable))
@@ -373,14 +676,22 @@ class ScenarioSummaryAccumulator:
 
         metrics.append(('RFNBO', 'Compliant H2 (RFNBO)', 'kg', rfnbo_kg))
         metrics.append(('RFNBO', 'Non-Compliant H2', 'kg', non_rfnbo_kg))
-        
+
         total_rfnbo_mass = rfnbo_kg + non_rfnbo_kg
         ratio = (rfnbo_kg / total_rfnbo_mass * 100.0) if total_rfnbo_mass > 0 else 0.0
         metrics.append(('RFNBO', 'Compliance Ratio', '%', ratio))
 
+        # Energy Purchased Non-RFNBO: proportion based on non-RFNBO H2 production (PEM only)
+        if h2_total > 0:
+            non_rfnbo_fraction = non_rfnbo_kg / h2_total
+            energy_non_rfnbo = e_imported * non_rfnbo_fraction
+        else:
+            energy_non_rfnbo = 0.0
+        metrics.append(('Grid', 'Energy Purchased Non-RFNBO', 'MWh', energy_non_rfnbo))
+
         # --- 7. EFFICIENCY ---
-        h2_lhv_mwh = (h2_total * 33.33) / 1000.0 
-        total_input_mwh = (e_soec + e_pem + e_bop) + biogas_energy_mwh
+        h2_lhv_mwh = (h2_total * 33.33) / 1000.0
+        total_input_mwh = (e_soec + e_pem + e_bop_total) + biogas_energy_mwh
         global_eff = (h2_lhv_mwh / total_input_mwh * 100.0) if total_input_mwh > 0 else 0.0
         
         metrics.append(('Efficiency', 'Global Plant Efficiency (LHV)', '%', global_eff))
@@ -389,8 +700,13 @@ class ScenarioSummaryAccumulator:
         soec_eff = ((h2_soec * 33.33) / 1000.0 / e_soec * 100.0) if e_soec > 0 else 0.0
         pem_eff = ((h2_pem * 33.33) / 1000.0 / e_pem * 100.0) if e_pem > 0 else 0.0
 
-        atr_input_mwh = biogas_energy_mwh + self.atr_power_mwh
-        atr_eff = ((h2_atr * 33.33) / 1000.0 / atr_input_mwh * 100.0) if atr_input_mwh > 0 else 0.0
+        # ATR Chemical Efficiency: H2 output / Biogas input only (no electrical)
+        atr_chem_eff = ((h2_atr * 33.33) / 1000.0 / biogas_energy_mwh * 100.0) if biogas_energy_mwh > 0 else 0.0
+
+        # ATR Global Efficiency: (H2 output + Q_useful) / (Biogas + P_el)
+        atr_total_input_mwh = biogas_energy_mwh + self.atr_power_mwh
+        atr_useful_output_mwh = (h2_atr * 33.33) / 1000.0 + self.atr_q_useful_mwh
+        atr_global_eff = (atr_useful_output_mwh / atr_total_input_mwh * 100.0) if atr_total_input_mwh > 0 else 0.0
 
         electrolyzers_input_mwh = e_soec + e_pem
         electrolyzers_output_mwh = ((h2_soec + h2_pem) * 33.33) / 1000.0
@@ -398,7 +714,8 @@ class ScenarioSummaryAccumulator:
 
         metrics.append(('Efficiency', 'SOEC Efficiency (LHV)', '%', soec_eff))
         metrics.append(('Efficiency', 'PEM Efficiency (LHV)', '%', pem_eff))
-        metrics.append(('Efficiency', 'ATR Efficiency (LHV)', '%', atr_eff))
+        metrics.append(('Efficiency', 'ATR Chemical Efficiency (LHV)', '%', atr_chem_eff))
+        metrics.append(('Efficiency', 'ATR Global Efficiency (CHP)', '%', atr_global_eff))
         metrics.append(('Efficiency', 'Electrolyzers Efficiency (LHV)', '%', electrolyzers_eff))
         
         sec_soec = (e_soec * 1000.0) / h2_soec if h2_soec > 0 else 0.0

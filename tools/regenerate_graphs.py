@@ -12,8 +12,8 @@ Features:
 - 60-second timeout per graph
 
 Usage:
-    python regenerate_graphs.py scenarios/simulation_output --max-memory-mb 2000
-    python regenerate_graphs.py /path/to/output --batch-size 5
+    python regenerate_graphs.py scenarios/simulation_output --downscale hourly
+    python regenerate_graphs.py scenarios/simulation_output --downscale daily --max-memory-mb 2000
 """
 
 import os
@@ -276,8 +276,9 @@ def main():
         help='Maximum RAM usage in MB (default: 4000)'
     )
     parser.add_argument(
-        '--target-resolution', type=int, default=60,
-        help='Downsampling resolution in minutes (default: 60)'
+        '--downscale', type=str, default='hourly',
+        choices=['none', 'hourly', 'daily'],
+        help='Downscaling mode: none (1-min), hourly (1-min->1-hour, default), daily (1-min->1-day)'
     )
     parser.add_argument(
         '--batch-size', type=int, default=10,
@@ -289,7 +290,15 @@ def main():
     )
     
     args = parser.parse_args()
-    
+
+    # Map downscale choice to resolution in minutes
+    DOWNSCALE_RESOLUTION = {
+        'none': 1,      # No downscaling (1-minute data)
+        'hourly': 60,   # 1 minute -> 1 hour
+        'daily': 1440,  # 1 minute -> 1 day (24 * 60)
+    }
+    target_resolution = DOWNSCALE_RESOLUTION[args.downscale]
+
     output_dir = Path(args.output_dir).resolve()
     if not output_dir.exists():
         print(f"ERROR: Directory not found: {output_dir}")
@@ -299,7 +308,7 @@ def main():
         output_dir,
         timeout_seconds=args.timeout,
         max_memory_mb=args.max_memory_mb,
-        target_resolution=args.target_resolution,
+        target_resolution=target_resolution,
         batch_size=args.batch_size,
         skip_cache=args.skip_cache
     )

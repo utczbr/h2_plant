@@ -829,7 +829,7 @@ def analyze_statistics(data, name, unit):
     }
     return stats
 
-def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, output_dir, turbine_specs=None):
+def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, output_dir, turbine_specs=None, single_power_MW=None):
     """Generate comprehensive analysis plots."""
     
     if not CONFIG['save_plots'] or not HAS_MATPLOTLIB:
@@ -908,6 +908,20 @@ def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, out
     plt.savefig(os.path.join(output_dir, '02_power_distribution.png'), dpi=150, bbox_inches='tight')
     plt.close()
     logger.info("✓ Saved 02_power_distribution.png")
+
+    if single_power_MW is not None:
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.hist(single_power_MW, bins=50, alpha=0.7, edgecolor='black', color='seagreen')
+        ax.axvline(single_power_MW.mean(), color='red', linestyle='--', label=f'Mean: {single_power_MW.mean():.2f} MW')
+        ax.set_xlabel('Power Output (MW)')
+        ax.set_ylabel('Frequency (hours)')
+        ax.set_title('Single Turbine (Net) Power Output Distribution')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, '02_power_distribution_single_turbine.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info("✓ Saved 02_power_distribution_single_turbine.png")
     
     # 3. Time Series - Wind Speed (subsample for clarity)
     fig, ax = plt.subplots(figsize=(14, 5))
@@ -935,6 +949,19 @@ def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, out
     plt.savefig(os.path.join(output_dir, '04_power_timeseries.png'), dpi=150, bbox_inches='tight')
     plt.close()
     logger.info("✓ Saved 04_power_timeseries.png")
+
+    if single_power_MW is not None:
+        fig, ax = plt.subplots(figsize=(14, 5))
+        ax.plot(weather_data['time'][::step], single_power_MW[::step], linewidth=1.5, color='seagreen')
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Power Output (MW)')
+        ax.set_title('Single Turbine (Net) Power Output Time Series (Daily Sample)')
+        ax.grid(True, alpha=0.3)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, '04_power_timeseries_single_turbine.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info("✓ Saved 04_power_timeseries_single_turbine.png")
     
     # 5. Daily Revenue
     if daily_revenue_df is not None and not daily_revenue_df.empty:
@@ -974,7 +1001,7 @@ def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, out
     # Curva principal
     thresholds = np.linspace(0, park_power_MW.max(), 100)
     exceedance = [(park_power_MW >= t).sum() / len(park_power_MW) * 100 for t in thresholds]
-    ax.plot(thresholds, exceedance, linewidth=3, color='navy', label='Curva de Excedência')
+    ax.plot(thresholds, exceedance, linewidth=3, color='navy', label='Exceedance Curve')
 
     # Garantias de interesse
     target_percents = [90, 80, 70, 60, 50]
@@ -1002,9 +1029,9 @@ def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, out
         label_text = f" P{pct}: {power_val:.1f} MW"
         ax.text(power_val, pct + 1.5, label_text, color=color, fontsize=9, fontweight='bold', ha='left')
 
-    ax.set_xlabel('Potência Produzida (MW)', fontsize=11)
-    ax.set_ylabel('% do Tempo (Excedência)', fontsize=11)
-    ax.set_title('Curva de Duração de Potência (Garantias P90-P50)', fontsize=13, pad=15)
+    ax.set_xlabel('Power Output (MW)', fontsize=11)
+    ax.set_ylabel('% of Time (Exceedance)', fontsize=11)
+    ax.set_title('Power Duration Curve (P90-P50 Guarantees)', fontsize=13, pad=15)
     
     ax.legend(loc='upper right')
     ax.grid(True, alpha=0.2, which='both')
@@ -1017,6 +1044,37 @@ def generate_plots(weather_data, park_power_MW, daily_revenue_df, hourly_df, out
     plt.savefig(os.path.join(output_dir, '07_exceedance_curve.png'), dpi=150, bbox_inches='tight')
     plt.close()
     logger.info("✓ Saved 07_exceedance_curve.png (Updated with P90-P50 lines)")
+
+    if single_power_MW is not None:
+        fig, ax = plt.subplots(figsize=(12, 7))
+
+        thresholds = np.linspace(0, single_power_MW.max(), 100)
+        exceedance = [(single_power_MW >= t).sum() / len(single_power_MW) * 100 for t in thresholds]
+        ax.plot(thresholds, exceedance, linewidth=3, color='navy', label='Exceedance Curve')
+
+        target_percents = [90, 80, 70, 60, 50]
+        colors = ['firebrick', 'orangered', 'orange', 'mediumseagreen', 'dodgerblue']
+
+        for pct, color in zip(target_percents, colors):
+            power_val = np.percentile(single_power_MW, 100 - pct)
+            ax.vlines(x=power_val, ymin=0, ymax=pct, colors=color, linestyles='--', linewidth=1.5)
+            ax.hlines(y=pct, xmin=0, xmax=power_val, colors=color, linestyles=':', alpha=0.6)
+            ax.plot(power_val, pct, 'o', color=color, markersize=5)
+            label_text = f" P{pct}: {power_val:.1f} MW"
+            ax.text(power_val, pct + 1.5, label_text, color=color, fontsize=9, fontweight='bold', ha='left')
+
+        ax.set_xlabel('Power Output (MW)', fontsize=11)
+        ax.set_ylabel('% of Time (Exceedance)', fontsize=11)
+        ax.set_title('Power Duration Curve (Single Turbine Net)', fontsize=13, pad=15)
+        ax.legend(loc='upper right')
+        ax.grid(True, alpha=0.2, which='both')
+        ax.set_xlim(left=0, right=single_power_MW.max() * 1.05)
+        ax.set_ylim(0, 105)
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, '07_exceedance_curve_single_turbine.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+        logger.info("✓ Saved 07_exceedance_curve_single_turbine.png")
 
 def plot_decision_matrix(df_matrix, output_dir):
     """
@@ -1043,20 +1101,26 @@ def plot_decision_matrix(df_matrix, output_dir):
     df = df.sort_values('Garantia')
 
     # Cores
+    method_label_map = {
+        'Físico (Instantâneo)': 'Physical (Instantaneous)',
+        'Volume (Energia)': 'Energy (Volume-Based)',
+    }
     colors = {'Físico (Instantâneo)': 'firebrick', 'Volume (Energia)': 'steelblue'}
+    colors_en = {method_label_map.get(k, k): v for k, v in colors.items()}
 
     # --- GRÁFICO 1: NÚMERO DE TURBINAS (CAPEX) ---
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Pivotar para plotar fácil
     pivot_n = df.pivot(index='Garantia', columns='Metodo', values='N_Turbinas')
-    pivot_n.plot(kind='bar', ax=ax, color=[colors.get(x, 'gray') for x in pivot_n.columns], width=0.8)
+    pivot_n = pivot_n.rename(columns=method_label_map)
+    pivot_n.plot(kind='bar', ax=ax, color=[colors_en.get(x, 'gray') for x in pivot_n.columns], width=0.8)
     
-    ax.set_title('Impacto no CAPEX: Número de Turbinas por Nível de Garantia', fontsize=12, pad=20)
-    ax.set_ylabel('Número de Turbinas')
-    ax.set_xlabel('Nível de Garantia Alvo')
+    ax.set_title('CAPEX Impact: Number of Turbines by Guarantee Level', fontsize=12, pad=20)
+    ax.set_ylabel('Number of Turbines')
+    ax.set_xlabel('Target Guarantee Level')
     ax.grid(axis='y', alpha=0.3)
-    ax.legend(title='Metodologia')
+    ax.legend(title='Method')
     
     # Anotação dos valores nas barras
     for p in ax.patches:
@@ -1071,28 +1135,35 @@ def plot_decision_matrix(df_matrix, output_dir):
     fig, ax = plt.subplots(figsize=(10, 7))
     
     for method, group in df.groupby('Metodo'):
-        ax.scatter(group['Cobertura_Volume_%'], group['Cobertura_Fisica_Real_%'], 
-                   s=150, alpha=0.8, label=method, color=colors.get(method, 'gray'), edgecolors='black')
+        ax.scatter(
+            group['Cobertura_Volume_%'],
+            group['Cobertura_Fisica_Real_%'],
+            s=150,
+            alpha=0.8,
+            label=method_label_map.get(method, method),
+            color=colors.get(method, 'gray'),
+            edgecolors='black',
+        )
         
         # Anotar os pontos (ex: P60)
         for _, row in group.iterrows():
             ax.text(row['Cobertura_Volume_%'], row['Cobertura_Fisica_Real_%']+2, 
-                    f"{row['Garantia']}\n({int(row['N_Turbinas'])} T)", 
+                    f"{row['Garantia']}\n({int(row['N_Turbinas'])} turbines)", 
                     ha='center', fontsize=9, fontweight='bold')
 
     # Linhas de referência
-    ax.axhline(100, color='gray', linestyle='--', alpha=0.5, label='100% Tempo (Ideal Impossível)')
-    ax.axvline(100, color='green', linestyle='--', alpha=0.5, label='100% Energia (Volume Neutro)')
+    ax.axhline(100, color='gray', linestyle='--', alpha=0.5, label='100% Time (Ideal, Unrealistic)')
+    ax.axvline(100, color='green', linestyle='--', alpha=0.5, label='100% Energy (Neutral Volume)')
     
-    ax.set_title('Análise de Trade-off: Cobertura Física vs. Volume', fontsize=12)
-    ax.set_xlabel('Cobertura de Volume (% da Energia Anual Necessária)')
-    ax.set_ylabel('Cobertura Física Real (% do Tempo Atendendo a Carga)')
+    ax.set_title('Trade-off Analysis: Physical Coverage vs. Volume', fontsize=12)
+    ax.set_xlabel('Volume Coverage (% of Required Annual Energy)')
+    ax.set_ylabel('Physical Coverage (% of Time Meeting Load)')
     ax.grid(True, alpha=0.3)
     ax.legend(loc='lower right')
     
     # Zona de Desperdício vs Risco
-    ax.text(df['Cobertura_Volume_%'].max()*0.9, 20, 'Zona de Risco\n(Falta Energia)', ha='center', color='red', alpha=0.3)
-    ax.text(df['Cobertura_Volume_%'].max()*0.9, 95, 'Zona de Desperdício\n(Muito Excedente)', ha='center', color='orange', alpha=0.3)
+    ax.text(df['Cobertura_Volume_%'].max()*0.9, 20, 'Risk Zone\n(Energy Shortfall)', ha='center', color='red', alpha=0.3)
+    ax.text(df['Cobertura_Volume_%'].max()*0.9, 95, 'Waste Zone\n(Excess Surplus)', ha='center', color='orange', alpha=0.3)
 
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, '09_matrix_sweet_spot.png'), dpi=150)
@@ -1221,6 +1292,9 @@ def main():
         turbine,
         apply_density_correction=CONFIG['apply_density_correction']
     )
+
+    single_eff = calculate_wake_efficiency(1)
+    single_power_MW = (power_kW * single_eff) / 1000.0
     
     # ========== Wind Resource Analysis ==========
     logger.info("\n" + "=" * 80)
@@ -1471,7 +1545,15 @@ def main():
     }
     
     # Generate visualizations
-    generate_plots(weather, park_power_MW, daily_revenue_df, hourly_df, CONFIG['output_dir'], turbine_specs=turbine)
+    generate_plots(
+        weather,
+        park_power_MW,
+        daily_revenue_df,
+        hourly_df,
+        CONFIG['output_dir'],
+        turbine_specs=turbine,
+        single_power_MW=single_power_MW,
+    )
     
     create_summary_report(results, CONFIG['output_dir'])
     

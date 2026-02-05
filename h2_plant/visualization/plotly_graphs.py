@@ -416,7 +416,7 @@ def plot_soec_module_degradation(df: pd.DataFrame, **kwargs) -> go.Figure:
 
 @log_graph_errors
 def plot_total_production_stacked(df: pd.DataFrame, **kwargs) -> go.Figure:
-    """Plot stacked area chart showing PEM + SOEC contributions.
+    """Plot stacked area chart showing SOEC + ATR + PEM contributions.
     
     Note: H2_pem_kg/H2_soec_kg are mass per timestep. We convert to kg/h for display.
     """
@@ -430,6 +430,7 @@ def plot_total_production_stacked(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     pem_col = next((c for c in ['H2_pem_kg', 'H2_pem'] if c in df_plot.columns), None)
     soec_col = next((c for c in ['H2_soec_kg', 'H2_soec'] if c in df_plot.columns), None)
+    atr_col = next((c for c in ['H2_atr_kg', 'H2_atr'] if c in df_plot.columns), None)
     
     # Unit conversion
     dt_seconds = df.attrs.get('dt_seconds', 60.0)
@@ -437,25 +438,18 @@ def plot_total_production_stacked(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     pem_raw = df_plot[pem_col].values if pem_col else np.zeros(len(hours))
     soec_raw = df_plot[soec_col].values if soec_col else np.zeros(len(hours))
+    atr_raw = df_plot[atr_col].values if atr_col else np.zeros(len(hours))
     
     # Convert per-timestep to rate (kg/h)
     pem_production = pem_raw / dt_h if pem_col and not pem_col.endswith('_kg_h') else pem_raw
     soec_production = soec_raw / dt_h if soec_col and not soec_col.endswith('_kg_h') else soec_raw
+    atr_production = atr_raw / dt_h if atr_col and not atr_col.endswith('_kg_h') else atr_raw
     
     color_pem = get_viz_config('styling.colors.pem', '#1f77b4')
     color_soec = get_viz_config('styling.colors.soec', '#ff7f0e')
+    color_atr = get_viz_config('styling.colors.atr', _SUBSYSTEM_COLORS.get('ATR', '#2ca02c'))
     
     fig = go.Figure()
-    
-    fig.add_trace(get_scatter_type(len(hours))(
-        x=hours,
-        y=pem_production,
-        mode='lines',
-        name='PEM',
-        stackgroup='one',
-        line=dict(color=color_pem, width=0.5),
-        fillcolor=f"rgba{tuple(int(color_pem.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (0.7,)}" if color_pem.startswith('#') else color_pem
-    ))
     
     fig.add_trace(get_scatter_type(len(hours))(
         x=hours,
@@ -467,8 +461,29 @@ def plot_total_production_stacked(df: pd.DataFrame, **kwargs) -> go.Figure:
         fillcolor=f"rgba{tuple(int(color_soec.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (0.7,)}" if color_soec.startswith('#') else color_soec
     ))
     
+    if atr_col:
+        fig.add_trace(get_scatter_type(len(hours))(
+            x=hours,
+            y=atr_production,
+            mode='lines',
+            name='ATR',
+            stackgroup='one',
+            line=dict(color=color_atr, width=0.5),
+            fillcolor=f"rgba{tuple(int(color_atr.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (0.7,)}" if color_atr.startswith('#') else color_atr
+        ))
+    
+    fig.add_trace(get_scatter_type(len(hours))(
+        x=hours,
+        y=pem_production,
+        mode='lines',
+        name='PEM',
+        stackgroup='one',
+        line=dict(color=color_pem, width=0.5),
+        fillcolor=f"rgba{tuple(int(color_pem.lstrip('#')[i:i+2], 16) for i in (0, 2, 4)) + (0.7,)}" if color_pem.startswith('#') else color_pem
+    ))
+    
     fig.update_layout(
-        title=kwargs.get('title', 'Total H2 Production (PEM + SOEC)'),
+        title=kwargs.get('title', 'Total H2 Production (SOEC + ATR + PEM)'),
         xaxis_title='Time (hours)',
         yaxis_title='H2 Production (kg/h)',
         template='plotly_white',
@@ -476,6 +491,77 @@ def plot_total_production_stacked(df: pd.DataFrame, **kwargs) -> go.Figure:
         legend=dict(x=0.02, y=0.98)
     )
     
+    return fig
+
+
+@log_graph_errors
+def plot_energy_price_daily_monthly(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot daily and monthly average energy prices (EUR/MWh) in a single chart.
+    """
+    _check_dependencies()
+
+    from h2_plant.visualization.utils import get_viz_config
+
+    price_col = next((c for c in ['energy_price_eur_kwh', 'pricing_energy_price_eur_kwh'] if c in df.columns), None)
+    spot_col = next((c for c in ['spot_price', 'Spot'] if c in df.columns), None)
+
+    if not price_col and not spot_col:
+        return _empty_figure("No price data found")
+
+    if price_col:
+        price_mwh = df[price_col].values * 1000.0
+    else:
+        price_mwh = df[spot_col].values
+
+    if 'minute' in df.columns:
+        minutes = df['minute'].values
+    else:
+        dt_seconds = df.attrs.get('dt_seconds', 60.0)
+        minutes = np.arange(len(df)) * (dt_seconds / 60.0)
+
+    df_tmp = pd.DataFrame({
+        'minute': minutes,
+        'price_mwh': price_mwh
+    })
+
+    df_tmp['day_group'] = (df_tmp['minute'] // 1440).astype(int)
+    df_tmp['month_group'] = (df_tmp['minute'] // 43800).astype(int)
+
+    daily = df_tmp.groupby('day_group', as_index=False)['price_mwh'].mean()
+    monthly = df_tmp.groupby('month_group', as_index=False)['price_mwh'].mean()
+
+    # X-axis in days
+    daily_x = daily['day_group'].values.astype(float)
+    monthly_x = monthly['month_group'].values.astype(float) * 30.4
+
+    fig = go.Figure()
+
+    fig.add_trace(get_scatter_type(len(daily_x))(
+        x=daily_x,
+        y=daily['price_mwh'].values,
+        mode='lines',
+        name='Daily Avg Price',
+        line=dict(color=get_viz_config('styling.colors.price', '#9467bd'), width=2)
+    ))
+
+    fig.add_trace(get_scatter_type(len(monthly_x))(
+        x=monthly_x,
+        y=monthly['price_mwh'].values,
+        mode='lines+markers',
+        name='Monthly Avg Price',
+        line=dict(color='#2c3e50', width=2, dash='dash'),
+        marker=dict(size=6, color='#2c3e50')
+    ))
+
+    fig.update_layout(
+        title=kwargs.get('title', 'Energy Price (Daily & Monthly Averages)'),
+        xaxis_title='Time (days)',
+        yaxis_title='Price (EUR/MWh)',
+        template='plotly_white',
+        hovermode='x unified'
+    )
+
     return fig
 
 
@@ -1124,6 +1210,16 @@ def plot_dispatch_strategy(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     fig.add_trace(get_scatter_type(len(hours))(
         x=hours,
+        y=soec_power,
+        mode='lines',
+        name='SOEC',
+        stackgroup='one',
+        line=dict(color=get_viz_config('styling.colors.soec', '#ff7f0e'), width=0.5),
+        fillcolor='rgba(255, 127, 14, 0.7)'
+    ))
+
+    fig.add_trace(get_scatter_type(len(hours))(
+        x=hours,
         y=pem_power,
         mode='lines',
         name='PEM',
@@ -1132,16 +1228,7 @@ def plot_dispatch_strategy(df: pd.DataFrame, **kwargs) -> go.Figure:
         fillcolor='rgba(31, 119, 180, 0.7)'
     ))
     
-    fig.add_trace(get_scatter_type(len(hours))(
-        x=hours,
-        y=soec_power,
-        mode='lines',
-        name='SOEC',
-        stackgroup='one',
-        line=dict(color=get_viz_config('styling.colors.soec', '#ff7f0e'), width=0.5),
-        fillcolor='rgba(255, 127, 14, 0.7)'
-    ))
-    
+    # Reordered stack: SOEC -> PEM -> Grid Export -> BOP
     fig.add_trace(get_scatter_type(len(hours))(
         x=hours,
         y=sell_power,
@@ -1151,8 +1238,7 @@ def plot_dispatch_strategy(df: pd.DataFrame, **kwargs) -> go.Figure:
         line=dict(color='#2ca02c', width=0.5),
         fillcolor='rgba(44, 160, 44, 0.7)'
     ))
-    
-    # Reordered: BOP on top of stack
+
     fig.add_trace(get_scatter_type(len(hours))(
         x=hours,
         y=aux_power_mw,
@@ -1687,6 +1773,163 @@ def plot_wind_utilization_duration_curve(df: pd.DataFrame, **kwargs) -> go.Figur
         legend=dict(orientation='h', yanchor='bottom', y=1.02)
     )
     
+    return fig
+
+
+@log_graph_errors
+def plot_wind_power_production_timeline(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot wind power production timeline (Grid Integration).
+    
+    Shows available, utilized, and curtailed wind power over time.
+    """
+    _check_dependencies()
+
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+
+    WIND_CAPACITY_MW = get_viz_config('plant_parameters.wind_capacity_mw', 20.0)
+
+    wind_col = next((c for c in ['P_offer', 'P_renewable_mw', 'wind_power_mw'] if c in df_plot.columns), None)
+    if not wind_col and 'wind_coefficient' in df_plot.columns:
+        wind_available = df_plot['wind_coefficient'].values * WIND_CAPACITY_MW
+    elif wind_col:
+        wind_available = df_plot[wind_col].values
+    else:
+        return _empty_figure("No wind data (P_offer) found")
+
+    pem_col = next((c for c in ['P_pem', 'pem_power_mw', 'P_pem_mw'] if c in df_plot.columns), None)
+    soec_col = next((c for c in ['P_soec', 'soec_power_mw', 'P_soec_mw'] if c in df_plot.columns), None)
+
+    pem_power = df_plot[pem_col].values if pem_col else np.zeros(len(wind_available))
+    soec_power = df_plot[soec_col].values if soec_col else np.zeros(len(wind_available))
+
+    if pem_power.mean() > 100: pem_power /= 1000.0
+    if soec_power.mean() > 100: soec_power /= 1000.0
+
+    total_used = pem_power + soec_power
+    curtailment = np.maximum(0, wind_available - total_used)
+
+    ScatterType = get_scatter_type(len(hours))
+    fig = go.Figure()
+
+    fig.add_trace(ScatterType(
+        x=hours, y=wind_available,
+        mode='lines', name='Available Wind Power',
+        line=dict(color='#3498db', width=2),
+        hovertemplate='Time: %{x:.1f}h<br>Available: %{y:.2f} MW<extra></extra>'
+    ))
+
+    fig.add_trace(ScatterType(
+        x=hours, y=total_used,
+        mode='lines', name='Utilized Wind Power',
+        line=dict(color='#2ecc71', width=2),
+        hovertemplate='Time: %{x:.1f}h<br>Utilized: %{y:.2f} MW<extra></extra>'
+    ))
+
+    fig.add_trace(ScatterType(
+        x=hours, y=curtailment,
+        mode='lines', name='Curtailment',
+        line=dict(color='#e74c3c', width=1.5, dash='dash'),
+        hovertemplate='Time: %{x:.1f}h<br>Curtailment: %{y:.2f} MW<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title=kwargs.get('title', 'Wind Power Production (Time Series)'),
+        xaxis_title='Time (hours)',
+        yaxis_title='Power (MW)',
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+
+    return fig
+
+
+@log_graph_errors
+def plot_wind_energy_cumulative(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot cumulative wind energy (Grid Integration).
+    
+    Shows cumulative available, utilized, and curtailed wind energy.
+    """
+    _check_dependencies()
+
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+
+    WIND_CAPACITY_MW = get_viz_config('plant_parameters.wind_capacity_mw', 20.0)
+
+    wind_col = next((c for c in ['P_offer', 'P_renewable_mw', 'wind_power_mw'] if c in df_plot.columns), None)
+    if not wind_col and 'wind_coefficient' in df_plot.columns:
+        wind_available = df_plot['wind_coefficient'].values * WIND_CAPACITY_MW
+    elif wind_col:
+        wind_available = df_plot[wind_col].values
+    else:
+        return _empty_figure("No wind data (P_offer) found")
+
+    pem_col = next((c for c in ['P_pem', 'pem_power_mw', 'P_pem_mw'] if c in df_plot.columns), None)
+    soec_col = next((c for c in ['P_soec', 'soec_power_mw', 'P_soec_mw'] if c in df_plot.columns), None)
+
+    pem_power = df_plot[pem_col].values if pem_col else np.zeros(len(wind_available))
+    soec_power = df_plot[soec_col].values if soec_col else np.zeros(len(wind_available))
+
+    if pem_power.mean() > 100: pem_power /= 1000.0
+    if soec_power.mean() > 100: soec_power /= 1000.0
+
+    total_used = pem_power + soec_power
+    curtailment = np.maximum(0, wind_available - total_used)
+
+    if len(hours) > 1:
+        dt_h = np.median(np.diff(hours))
+    else:
+        dt_h = df.attrs.get('dt_seconds', 60.0) / 3600.0
+    if not np.isfinite(dt_h) or dt_h <= 0:
+        dt_h = df.attrs.get('dt_seconds', 60.0) / 3600.0
+
+    available_mwh = np.cumsum(wind_available * dt_h)
+    used_mwh = np.cumsum(total_used * dt_h)
+    curtailed_mwh = np.cumsum(curtailment * dt_h)
+
+    ScatterType = get_scatter_type(len(hours))
+    fig = go.Figure()
+
+    fig.add_trace(ScatterType(
+        x=hours, y=available_mwh,
+        mode='lines', name='Available Wind Energy',
+        line=dict(color='#3498db', width=2),
+        hovertemplate='Time: %{x:.1f}h<br>Available: %{y:.1f} MWh<extra></extra>'
+    ))
+
+    fig.add_trace(ScatterType(
+        x=hours, y=used_mwh,
+        mode='lines', name='Utilized Wind Energy',
+        line=dict(color='#2ecc71', width=2),
+        hovertemplate='Time: %{x:.1f}h<br>Utilized: %{y:.1f} MWh<extra></extra>'
+    ))
+
+    fig.add_trace(ScatterType(
+        x=hours, y=curtailed_mwh,
+        mode='lines', name='Curtailed Wind Energy',
+        line=dict(color='#e74c3c', width=1.5, dash='dash'),
+        hovertemplate='Time: %{x:.1f}h<br>Curtailed: %{y:.1f} MWh<extra></extra>'
+    ))
+
+    fig.update_layout(
+        title=kwargs.get('title', 'Cumulative Wind Energy'),
+        xaxis_title='Time (hours)',
+        yaxis_title='Energy (MWh)',
+        template='plotly_white',
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+
     return fig
 
 
@@ -2341,6 +2584,145 @@ def plot_effective_ppa(df: pd.DataFrame, **kwargs) -> go.Figure:
         template='plotly_white',
         hovermode='x unified'
     )
+    
+    return fig
+
+
+@log_graph_errors
+def plot_renewable_grid_ppa_panels(df: pd.DataFrame, **kwargs) -> go.Figure:
+    """
+    Plot Renewable & Grid Energy + Effective PPA (3-Panel).
+    
+    Panels:
+    1) Wind availability with guaranteed line
+    2) Renewable sales vs Non-RFNBO grid purchases
+    3) Effective PPA (with optional spot price overlay)
+    """
+    _check_dependencies()
+    
+    from h2_plant.visualization.utils import downsample_dataframe, get_time_axis_hours, get_viz_config
+    from plotly.subplots import make_subplots
+    
+    maxpoints = kwargs.get('maxpoints', get_viz_config('performance.max_points_default', 2000))
+    df_plot = downsample_dataframe(df, max_points=maxpoints)
+    hours = get_time_axis_hours(df_plot)
+    
+    WIND_CAPACITY_MW = get_viz_config('plant_parameters.wind_capacity_mw', 20.0)
+    
+    wind_col = next((c for c in ['P_offer', 'P_renewable_mw', 'wind_power_mw'] if c in df_plot.columns), None)
+    if not wind_col and 'wind_coefficient' in df_plot.columns:
+        wind_available = df_plot['wind_coefficient'].values * WIND_CAPACITY_MW
+    elif wind_col:
+        wind_available = df_plot[wind_col].values
+    else:
+        return _empty_figure("No wind data (P_offer) found")
+    
+    # Guaranteed power line (try config, attrs, or column)
+    config = df.attrs.get('config', {})
+    economics = df.attrs.get('economics', {})
+    guaranteed_mw = (
+        config.get('guaranteed_power_mw') or
+        config.get('guaranteed_mw') or
+        economics.get('guaranteed_power_mw') or
+        economics.get('guaranteed_mw') or
+        get_viz_config('plant_parameters.guaranteed_power_mw', None) or
+        get_viz_config('ppa_parameters.guaranteed_power_mw', None)
+    )
+    if guaranteed_mw is None:
+        guar_col = next((c for c in ['guaranteed_mw', 'guaranteed_power_mw'] if c in df_plot.columns), None)
+        if guar_col:
+            guaranteed_mw = pd.to_numeric(df_plot[guar_col], errors='coerce').mean()
+    
+    # Renewable sales vs grid purchases
+    sell_col = next((c for c in ['P_sold', 'sell_power_mw', 'coordinator_sell_power_mw'] if c in df_plot.columns), None)
+    spot_purchased_col = next((c for c in ['spot_purchased_mw'] if c in df_plot.columns), None)
+    
+    renewable_sales = pd.to_numeric(df_plot[sell_col], errors='coerce').fillna(0.0).values if sell_col else None
+    spot_purchased = pd.to_numeric(df_plot[spot_purchased_col], errors='coerce').fillna(0.0).values if spot_purchased_col else None
+    
+    # Effective PPA
+    ppa_col = next((c for c in ['ppa_price_effective_eur_mwh', 'effective_ppa_price'] if c in df_plot.columns), None)
+    spot_col = next((c for c in ['spot_price', 'Spot'] if c in df_plot.columns), None)
+    
+    ppa_price = df_plot[ppa_col].values if ppa_col else None
+    spot_price = df_plot[spot_col].values if spot_col else None
+    
+    fig = make_subplots(
+        rows=3, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.08,
+        subplot_titles=(
+            'Wind Availability',
+            'Renewable Sales vs Grid Purchases',
+            'Effective PPA Price'
+        )
+    )
+    
+    ScatterType = get_scatter_type(len(hours))
+    
+    # Panel 1: Wind availability + guaranteed line
+    fig.add_trace(ScatterType(
+        x=hours, y=wind_available,
+        mode='lines', name='Available Wind Power',
+        line=dict(color='#3498db', width=2),
+        hovertemplate='Time: %{x:.1f}h<br>Wind: %{y:.2f} MW<extra></extra>'
+    ), row=1, col=1)
+    
+    if guaranteed_mw is not None and guaranteed_mw > 0:
+        fig.add_hline(
+            y=guaranteed_mw,
+            line=dict(color='#9b59b6', width=2, dash='dot'),
+            annotation_text=f"Guaranteed ({guaranteed_mw:.1f} MW)",
+            annotation_position="top right",
+            row=1, col=1
+        )
+    
+    # Panel 2: Renewable sales vs Non-RFNBO grid purchases
+    if renewable_sales is not None:
+        fig.add_trace(ScatterType(
+            x=hours, y=renewable_sales,
+            mode='lines', name='Renewable Sales',
+            line=dict(color='#2ecc71', width=2),
+            hovertemplate='Time: %{x:.1f}h<br>Sales: %{y:.2f} MW<extra></extra>'
+        ), row=2, col=1)
+    
+    if spot_purchased is not None:
+        fig.add_trace(ScatterType(
+            x=hours, y=spot_purchased,
+            mode='lines', name='Grid Purchases (Non-RFNBO)',
+            line=dict(color='#e74c3c', width=2, dash='dash'),
+            hovertemplate='Time: %{x:.1f}h<br>Purchase: %{y:.2f} MW<extra></extra>'
+        ), row=2, col=1)
+    
+    # Panel 3: Effective PPA (with spot overlay if available)
+    if ppa_price is not None:
+        fig.add_trace(ScatterType(
+            x=hours, y=ppa_price,
+            mode='lines', name='Effective PPA',
+            line=dict(color='#1976D2', width=2),
+            hovertemplate='Time: %{x:.1f}h<br>PPA: %{y:.2f} EUR/MWh<extra></extra>'
+        ), row=3, col=1)
+    
+    if spot_price is not None:
+        fig.add_trace(ScatterType(
+            x=hours, y=spot_price,
+            mode='lines', name='Spot Price',
+            line=dict(color='#7f8c8d', width=1.5, dash='dot'),
+            hovertemplate='Time: %{x:.1f}h<br>Spot: %{y:.2f} EUR/MWh<extra></extra>'
+        ), row=3, col=1)
+    
+    fig.update_layout(
+        title=kwargs.get('title', 'Renewable & Grid Energy + Effective PPA'),
+        template='plotly_white',
+        height=900,
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    
+    fig.update_yaxes(title_text='Power (MW)', row=1, col=1)
+    fig.update_yaxes(title_text='Power (MW)', row=2, col=1)
+    fig.update_yaxes(title_text='Price (EUR/MWh)', row=3, col=1)
+    fig.update_xaxes(title_text='Time (hours)', row=3, col=1)
     
     return fig
 
@@ -5322,11 +5704,10 @@ def plot_temporal_averages(df: pd.DataFrame, **kwargs) -> go.Figure:
         
         # Priority 1: Sum of PSA Outputs (True Purified Production)
         # Matches logic in scripts/plot_daily_h2_production.py
-        psa_cols = [
-            'SOEC_H2_PSA_1_outlet_mass_flow_kg_h',
-            'PEM_H2_PSA_1_outlet_mass_flow_kg_h', 
-            'ATR_PSA_1_outlet_mass_flow_kg_h'
-        ]
+        soec_psa_col = 'SOEC_H2_PSA_1_outlet_mass_flow_kg_h'
+        pem_psa_col = 'PEM_H2_PSA_1_outlet_mass_flow_kg_h'
+        atr_psa_col = 'ATR_PSA_1_outlet_mass_flow_kg_h'
+        psa_cols = [soec_psa_col, pem_psa_col, atr_psa_col]
         available_psa_cols = [c for c in psa_cols if c in df_grouped.columns]
         
         if available_psa_cols:
@@ -5350,6 +5731,28 @@ def plot_temporal_averages(df: pd.DataFrame, **kwargs) -> go.Figure:
                     df_grouped['Total_H2'] += df_grouped[c] * 60.0
                 else:
                     df_grouped['Total_H2'] += df_grouped[c]
+
+        # Component Rates (kg/h) with PSA priority, then H2_*, then H2_*_kg
+        def _component_rate(psa_col, rate_col, mass_col):
+            if psa_col in df_grouped.columns:
+                return df_grouped[psa_col]
+            if rate_col in df_grouped.columns:
+                return df_grouped[rate_col]
+            if mass_col in df_grouped.columns:
+                return df_grouped[mass_col] * 60.0
+            return None
+
+        soec_rate = _component_rate(soec_psa_col, 'H2_soec', 'H2_soec_kg')
+        if soec_rate is not None:
+            df_grouped['H2_SOEC_Rate'] = soec_rate
+
+        pem_rate = _component_rate(pem_psa_col, 'H2_pem', 'H2_pem_kg')
+        if pem_rate is not None:
+            df_grouped['H2_PEM_Rate'] = pem_rate
+
+        atr_rate = _component_rate(atr_psa_col, 'H2_atr', 'H2_atr_kg')
+        if atr_rate is not None:
+            df_grouped['H2_ATR_Rate'] = atr_rate
             
         # Recalculate Efficiencies (Dynamic)
         LHV_MWh_kg = 0.03333
@@ -5399,26 +5802,55 @@ def plot_temporal_averages(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     # -- Row 1 --
     if p_wind_col:
-        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_wind_col), name='Wind Power', marker_color='#3498db'), row=1, col=1)
+        fig.add_trace(go.Bar(
+            x=x_axis, y=get_col(df_h, p_wind_col), name='Wind Power', marker_color='#3498db',
+            offsetgroup='r1_wind'
+        ), row=1, col=1)
         traces_config.append((p_wind_col, False, None))
         
     if p_grid_col:
-        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_grid_col), name='Grid Export', marker_color='#f1c40f'), row=1, col=1)
+        fig.add_trace(go.Bar(
+            x=x_axis, y=get_col(df_h, p_grid_col), name='Grid Export', marker_color='#f1c40f',
+            offsetgroup='r1_grid'
+        ), row=1, col=1)
         traces_config.append((p_grid_col, False, None))
     
     # -- Row 2 --
     if p_soec_col:
-        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_soec_col), name=f'SOEC Power{soec_cf_str}', marker_color='#2ecc71'), row=2, col=1)
+        fig.add_trace(go.Bar(
+            x=x_axis, y=get_col(df_h, p_soec_col), name=f'SOEC Power{soec_cf_str}', marker_color='#2ecc71',
+            offsetgroup='r2_soec'
+        ), row=2, col=1)
         traces_config.append((p_soec_col, False, None))
         
     if p_pem_col:
-        fig.add_trace(go.Bar(x=x_axis, y=get_col(df_h, p_pem_col), name=f'PEM Power{pem_cf_str}', marker_color='#e74c3c'), row=2, col=1)
+        fig.add_trace(go.Bar(
+            x=x_axis, y=get_col(df_h, p_pem_col), name=f'PEM Power{pem_cf_str}', marker_color='#e74c3c',
+            offsetgroup='r2_pem'
+        ), row=2, col=1)
         traces_config.append((p_pem_col, False, None))
     
     # -- Row 3 --
-    if 'Total_H2' in df_h.columns:
-        fig.add_trace(go.Bar(x=x_axis, y=df_h['Total_H2'], name='Total H2 Production', marker_color='#9b59b6'), row=3, col=1)
-        traces_config.append(('Total_H2', False, None))
+    if 'H2_SOEC_Rate' in df_h.columns:
+        fig.add_trace(go.Bar(
+            x=x_axis, y=df_h['H2_SOEC_Rate'], name='SOEC H2 Production', marker_color='#2ecc71',
+            offsetgroup='h2_prod'
+        ), row=3, col=1)
+        traces_config.append(('H2_SOEC_Rate', False, None))
+
+    if 'H2_PEM_Rate' in df_h.columns:
+        fig.add_trace(go.Bar(
+            x=x_axis, y=df_h['H2_PEM_Rate'], name='PEM H2 Production', marker_color='#e74c3c',
+            offsetgroup='h2_prod'
+        ), row=3, col=1)
+        traces_config.append(('H2_PEM_Rate', False, None))
+
+    if 'H2_ATR_Rate' in df_h.columns:
+        fig.add_trace(go.Bar(
+            x=x_axis, y=df_h['H2_ATR_Rate'], name='ATR H2 Production', marker_color='#9b59b6',
+            offsetgroup='h2_prod'
+        ), row=3, col=1)
+        traces_config.append(('H2_ATR_Rate', False, None))
     
     # -- Row 4 --
     if 'Eff_soec' in df_h.columns:
@@ -5506,7 +5938,7 @@ def plot_temporal_averages(df: pd.DataFrame, **kwargs) -> go.Figure:
         template='plotly_white',
         height=900,
         showlegend=True,
-        barmode='group',
+        barmode='relative',
         # Margin adjusted to accommodate buttons
         margin=dict(t=120, b=50, l=60, r=60), 
         updatemenus=[dict(
@@ -5904,22 +6336,39 @@ def plot_temporal_sums(df: pd.DataFrame, **kwargs) -> go.Figure:
 
     # Identify H2 Columns (PSA Outlet Flow Rates in kg/h)
     # User requested specific PSA tags:
-    psa_cols = [
-        'SOEC_H2_PSA_1_outlet_mass_flow_kg_h',
-        'PEM_H2_PSA_1_outlet_mass_flow_kg_h', 
-        'ATR_PSA_1_outlet_mass_flow_kg_h'
-    ]
+    soec_psa_col = 'SOEC_H2_PSA_1_outlet_mass_flow_kg_h'
+    pem_psa_col = 'PEM_H2_PSA_1_outlet_mass_flow_kg_h'
+    atr_psa_col = 'ATR_PSA_1_outlet_mass_flow_kg_h'
+    psa_cols = [soec_psa_col, pem_psa_col, atr_psa_col]
 
     # Consolidate H2 Mass (kg)
-    # These columns are RATES (kg/h). To get Mass (kg), multiply by dt_h.
-    # User comment: "forgot to multiply by 60" might refer to this integration step or unit conversion.
-    # Logic: Mass (kg) = Rate (kg/h) * Time (h)
-    
+    # Rates are in kg/h. To get Mass (kg), multiply by dt_h.
+    # For H2_*_kg fallback, assume kg/min and convert to kg/h via *60 first.
+    def _component_rate(psa_col, rate_col, mass_col):
+        if psa_col in df_calc.columns:
+            return df_calc[psa_col]
+        if rate_col in df_calc.columns:
+            return df_calc[rate_col]
+        if mass_col in df_calc.columns:
+            return df_calc[mass_col] * 60.0
+        return None
+
     df_calc['Mass_H2_Total'] = 0.0
-    for col in psa_cols:
-        if col in df_calc.columns:
-            # Integrate Rate to Mass: kg = (kg/h) * h
-            df_calc['Mass_H2_Total'] += (df_calc[col] * dt_h)
+
+    soec_rate = _component_rate(soec_psa_col, 'H2_soec', 'H2_soec_kg')
+    if soec_rate is not None:
+        df_calc['Mass_H2_SOEC'] = soec_rate * dt_h
+        df_calc['Mass_H2_Total'] += df_calc['Mass_H2_SOEC']
+
+    pem_rate = _component_rate(pem_psa_col, 'H2_pem', 'H2_pem_kg')
+    if pem_rate is not None:
+        df_calc['Mass_H2_PEM'] = pem_rate * dt_h
+        df_calc['Mass_H2_Total'] += df_calc['Mass_H2_PEM']
+
+    atr_rate = _component_rate(atr_psa_col, 'H2_atr', 'H2_atr_kg')
+    if atr_rate is not None:
+        df_calc['Mass_H2_ATR'] = atr_rate * dt_h
+        df_calc['Mass_H2_Total'] += df_calc['Mass_H2_ATR']
 
     # --- 3. AGGREGATION FUNCTION ---
     def get_summed_df(resolution_minutes):
@@ -5937,6 +6386,9 @@ def plot_temporal_sums(df: pd.DataFrame, **kwargs) -> go.Figure:
         if 'Energy_SOEC' in df_res: agg_rules['Energy_SOEC'] = 'sum'
         
         # H2 Mass (kg)
+        if 'Mass_H2_SOEC' in df_res: agg_rules['Mass_H2_SOEC'] = 'sum'
+        if 'Mass_H2_PEM' in df_res: agg_rules['Mass_H2_PEM'] = 'sum'
+        if 'Mass_H2_ATR' in df_res: agg_rules['Mass_H2_ATR'] = 'sum'
         agg_rules['Mass_H2_Total'] = 'sum'
         
         if not agg_rules: return pd.DataFrame()
@@ -5974,35 +6426,41 @@ def plot_temporal_sums(df: pd.DataFrame, **kwargs) -> go.Figure:
     def get_col(df_in, col): return df_in[col] if col in df_in.columns else np.array([])
     
     # Store trace configuration
-    # Format: (column_name, color, name, row_idx)
+    # Format: (column_name, color, name, row_idx, offsetgroup)
     traces_config = []
     
     # Define Traces logic
     # Row 1: Energy Availability
     if 'Energy_Wind' in df_calc:
-        traces_config.append(('Energy_Wind', '#3498db', 'Wind Energy Available', 1))
+        traces_config.append(('Energy_Wind', '#3498db', 'Wind Energy Available', 1, 'r1_wind'))
     if 'Energy_Grid' in df_calc:
-        traces_config.append(('Energy_Grid', '#f1c40f', 'Grid Export', 1))
+        traces_config.append(('Energy_Grid', '#f1c40f', 'Grid Export', 1, 'r1_grid'))
         
     # Row 2: Consumption
     if 'Energy_SOEC' in df_calc:
-        traces_config.append(('Energy_SOEC', '#2ecc71', 'SOEC Consumption', 2))
+        traces_config.append(('Energy_SOEC', '#2ecc71', 'SOEC Consumption', 2, 'r2_soec'))
     if 'Energy_PEM' in df_calc:
-        traces_config.append(('Energy_PEM', '#e74c3c', 'PEM Consumption', 2))
+        traces_config.append(('Energy_PEM', '#e74c3c', 'PEM Consumption', 2, 'r2_pem'))
         
     # Row 3: H2 Production
-    traces_config.append(('Mass_H2_Total', '#9b59b6', 'Total H2 Mass', 3))
+    if 'Mass_H2_SOEC' in df_calc:
+        traces_config.append(('Mass_H2_SOEC', '#2ecc71', 'SOEC H2 Mass', 3, 'h2_prod'))
+    if 'Mass_H2_PEM' in df_calc:
+        traces_config.append(('Mass_H2_PEM', '#e74c3c', 'PEM H2 Mass', 3, 'h2_prod'))
+    if 'Mass_H2_ATR' in df_calc:
+        traces_config.append(('Mass_H2_ATR', '#9b59b6', 'ATR H2 Mass', 3, 'h2_prod'))
 
     # Initial Plot (Hourly)
     x_axis = df_h['group'].values
     
-    for col, color, name, row in traces_config:
+    for col, color, name, row, offsetgroup in traces_config:
         fig.add_trace(
             go.Bar(
                 x=x_axis, 
                 y=get_col(df_h, col), 
                 name=name, 
-                marker_color=color
+                marker_color=color,
+                offsetgroup=offsetgroup
             ), row=row, col=1
         )
 
@@ -6011,7 +6469,7 @@ def plot_temporal_sums(df: pd.DataFrame, **kwargs) -> go.Figure:
         new_x = df_target['group'].values
         updates = {'x': [], 'y': []}
         
-        for col, _, _, _ in traces_config:
+        for col, _, _, _, _ in traces_config:
             updates['x'].append(new_x)
             updates['y'].append(get_col(df_target, col))
             
@@ -6030,7 +6488,7 @@ def plot_temporal_sums(df: pd.DataFrame, **kwargs) -> go.Figure:
         template='plotly_white',
         height=800,  # Slightly shorter since 1 row removed
         showlegend=True,
-        barmode='group',
+        barmode='relative',
         margin=dict(t=120, b=50, l=60, r=60), 
         updatemenus=[dict(
             type="buttons",
