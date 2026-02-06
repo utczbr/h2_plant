@@ -13,7 +13,7 @@ import csv
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 
 import pandas as pd
 import yaml
@@ -212,13 +212,13 @@ class OpexGenerator:
         csv_path = Path(csv_path)
         if csv_path.exists():
             # Identify required columns from config
-            required_resources = [
-                item.resource_id for item in self.items 
+            required_items = [
+                item for item in self.items
                 if item.strategy == "variable" and item.resource_id
             ]
             
             quantities = self._extract_quantities_streaming(
-                csv_path, required_resources, chunk_size
+                csv_path, required_items, chunk_size
             )
             logger.info(f"Extracted {len(quantities)} quantities via streaming")
         else:
@@ -249,7 +249,11 @@ class OpexGenerator:
             report.items.append(result)
         
         # Set H2 production from streaming extraction
-        report.annual_h2_production_kg = quantities.get('cumulative_h2_kg', 0.0) * annualization_factor
+        h2_entry = quantities.get('cumulative_h2_kg', 0.0)
+        if isinstance(h2_entry, dict):
+            report.annual_h2_production_kg = h2_entry.get('sum', 0.0) * annualization_factor
+        else:
+            report.annual_h2_production_kg = h2_entry * annualization_factor
         
         # Calculate totals
         report.calculate_totals()
@@ -270,13 +274,108 @@ class OpexGenerator:
             logger.info(f"  Maintenance: ${report.total_maintenance_cost:,.0f}")
         
         return report
+
+    def generate_streaming_parquet(
+        self,
+        config_path: str,
+        chunks_dir: Path,
+        capex_report: Optional[CapexReport] = None,
+        output_dir: Optional[str] = None,
+        simulation_hours: float = 8760.0,
+    ) -> OpexReport:
+        """
+        Generate OPEX report using streaming Parquet history (history_chunks).
+        
+        Args:
+            config_path: Path to opex_config.yaml
+            chunks_dir: Path to history_chunks/ with chunk_*.parquet
+            capex_report: Previous CAPEX report (for FCI reference)
+            output_dir: Directory for output files (JSON, CSV)
+            simulation_hours: Hours of simulation data (for annualization)
+        """
+        import time
+        start_time = time.time()
+
+        # Load configuration
+        self.load_config(config_path)
+
+        # Initialize report
+        annualization_factor = 8760.0 / simulation_hours if simulation_hours > 0 else 1.0
+        report = OpexReport(
+            scenario_name=self.config.get('scenario_name', 'default'),
+            simulation_hours=simulation_hours,
+            annualization_factor=annualization_factor,
+        )
+
+        # Get FCI from CAPEX report
+        if capex_report:
+            report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
+            logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
+
+        base_costs = {
+            "FCI": report.fci,
+            "Labor": 0.0,
+            "C_OL": 0.0,
+        }
+
+        required_items = [
+            item for item in self.items
+            if item.strategy == "variable" and item.resource_id
+        ]
+
+        quantities = self._extract_quantities_parquet_chunks(chunks_dir, required_items)
+        logger.info(f"Extracted {len(quantities)} quantities from Parquet chunks")
+
+        sorted_items = sorted(
+            self.items,
+            key=lambda x: 0 if x.strategy == "turton_labor" else (1 if x.strategy == "fixed" and "Labor" in x.name else 2)
+        )
+
+        for item in sorted_items:
+            result = self._calculate_item_streaming(
+                item=item,
+                quantities=quantities,
+                base_costs=base_costs,
+                annualization_factor=annualization_factor,
+            )
+
+            if "Labor" in item.name or item.strategy == "turton_labor":
+                base_costs["Labor"] = result.annual_cost
+                base_costs["C_OL"] = result.annual_cost
+                report.labor_cost = result.annual_cost
+
+            report.items.append(result)
+
+        h2_entry = quantities.get('cumulative_h2_kg', 0.0)
+        if isinstance(h2_entry, dict):
+            report.annual_h2_production_kg = h2_entry.get('sum', 0.0) * annualization_factor
+        else:
+            report.annual_h2_production_kg = h2_entry * annualization_factor
+
+        report.calculate_totals()
+
+        if output_dir:
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            self._export_json(report, output_path / "opex_report.json")
+            self._export_csv(report, output_path / "opex_report.csv")
+
+            elapsed = time.time() - start_time
+            logger.info(f"OPEX report generated (parquet streaming) in {elapsed:.1f}s")
+            logger.info(f"  Total OPEX: ${report.total_opex:,.0f}/year")
+            logger.info(f"  Variable: ${report.total_variable_cost:,.0f}")
+            logger.info(f"  Fixed: ${report.total_fixed_cost:,.0f}")
+            logger.info(f"  Maintenance: ${report.total_maintenance_cost:,.0f}")
+
+        return report
     
     def _extract_quantities_streaming(
         self,
         csv_path: Path,
-        required_resources: list,
+        required_items: List[OpexItemConfig],
         chunk_size: int = 50_000,
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Dict[str, float]]:
         """
         Extract quantities using chunked streaming with column filtering.
         
@@ -284,11 +383,11 @@ class OpexGenerator:
         
         Args:
             csv_path: Path to simulation_history.csv
-            required_resources: List of resource_id patterns to match
+            required_items: List of OPEX items requiring simulation data
             chunk_size: Rows per chunk
             
         Returns:
-            Dict of resource_id -> accumulated quantity
+            Dict of resource_id -> metric quantities (sum/max/avg)
         """
         import gc
         
@@ -298,6 +397,11 @@ class OpexGenerator:
         
         # Map resource_id -> actual column name
         col_map = {}
+        required_resources = []
+        for item in required_items:
+            if item.resource_id:
+                required_resources.append(item.resource_id)
+
         for res_id in required_resources:
             for col in all_cols:
                 if res_id.lower() in col.lower():
@@ -318,8 +422,17 @@ class OpexGenerator:
         logger.info(f"Streaming OPEX: reading {len(needed_cols)} columns in chunks of {chunk_size}")
         
         # 3. Initialize accumulators
-        accumulators = {res_id: 0.0 for res_id in col_map.keys()}
-        last_h2 = 0.0
+        accumulators: Dict[str, Dict[str, float]] = {}
+        for res_id, col in col_map.items():
+            is_cumulative = 'cumulative' in col.lower()
+            accumulators[res_id] = {
+                "sum": 0.0,
+                "max": float("-inf"),
+                "count": 0.0,
+                "last": 0.0,
+                "is_cumulative": True if is_cumulative else False,
+            }
+
         rows_processed = 0
         
         # 4. Process chunks
@@ -329,12 +442,24 @@ class OpexGenerator:
                 
                 for res_id, col in col_map.items():
                     if col in chunk.columns:
-                        if 'cumulative' in col.lower():
-                            # Take last value for cumulative columns
-                            last_h2 = chunk[col].iloc[-1]
+                        series = chunk[col]
+                        is_cumulative = bool(accumulators[res_id]["is_cumulative"])
+                        if is_cumulative:
+                            if len(series) > 0:
+                                accumulators[res_id]["last"] = series.iloc[-1]
+                                series_max = series.max()
+                                if pd.notna(series_max):
+                                    accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
                         else:
-                            # Sum for flow/consumption columns
-                            accumulators[res_id] += chunk[col].sum()
+                            series_sum = series.sum()
+                            series_max = series.max()
+                            series_count = series.count()
+                            if pd.notna(series_sum):
+                                accumulators[res_id]["sum"] += series_sum
+                            if pd.notna(series_max):
+                                accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
+                            if pd.notna(series_count):
+                                accumulators[res_id]["count"] += series_count
                 
                 # Periodic cleanup
                 if rows_processed % (chunk_size * 5) == 0:
@@ -342,18 +467,166 @@ class OpexGenerator:
         
         except Exception as e:
             logger.error(f"Error in streaming extraction: {e}")
-            return accumulators
+            return {}
         
-        # Set final cumulative H2 value
-        accumulators['cumulative_h2_kg'] = last_h2
+        # Finalize metrics
+        quantities: Dict[str, Dict[str, float]] = {}
+        for res_id, acc in accumulators.items():
+            if bool(acc["is_cumulative"]):
+                last_val = acc["last"] if acc["last"] is not None else 0.0
+                quantities[res_id] = {
+                    "sum": last_val,
+                    "max": last_val,
+                    "avg": last_val,
+                }
+            else:
+                max_val = acc["max"] if acc["max"] != float("-inf") else 0.0
+                avg_val = (acc["sum"] / acc["count"]) if acc["count"] > 0 else 0.0
+                quantities[res_id] = {
+                    "sum": acc["sum"],
+                    "max": max_val,
+                    "avg": avg_val,
+                }
         
         logger.info(f"Streaming complete: {rows_processed:,} rows processed")
-        return accumulators
+        return quantities
+
+    def _extract_quantities_parquet_chunks(
+        self,
+        chunks_dir: Path,
+        required_items: List[OpexItemConfig],
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Extract quantities from Parquet history chunks with metric-aware aggregation.
+        
+        Args:
+            chunks_dir: Path to history_chunks with chunk_*.parquet files
+            required_items: OPEX items requiring simulation data
+            
+        Returns:
+            Dict of resource_id -> metric quantities (sum/max/avg)
+        """
+        try:
+            chunk_files = sorted(
+                chunks_dir.glob("chunk_*.parquet"),
+                key=lambda p: int(p.stem.split('_')[-1])
+            )
+        except Exception:
+            chunk_files = sorted(chunks_dir.glob("chunk_*.parquet"))
+
+        if not chunk_files:
+            logger.warning(f"No chunk files found in {chunks_dir}")
+            return {}
+
+        # Resolve available columns
+        all_cols: List[str] = []
+        try:
+            import pyarrow.parquet as pq
+            all_cols = pq.read_schema(chunk_files[0]).names
+        except Exception:
+            try:
+                df_preview = pd.read_parquet(chunk_files[0])
+                all_cols = list(df_preview.columns)
+                del df_preview
+            except Exception as e:
+                logger.warning(f"Failed to read parquet schema: {e}")
+                return {}
+
+        # Map resource_id -> actual column name
+        col_map: Dict[str, str] = {}
+        for item in required_items:
+            if not item.resource_id:
+                continue
+            res_id = item.resource_id
+            for col in all_cols:
+                if res_id.lower() in col.lower():
+                    col_map[res_id] = col
+                    break
+
+        # Always include H2 production column
+        h2_cols = [c for c in all_cols if 'cumulative_h2_kg' in c.lower()]
+        if h2_cols:
+            col_map['cumulative_h2_kg'] = h2_cols[0]
+
+        needed_cols = list(set(col_map.values()))
+        if not needed_cols:
+            logger.warning("No matching columns found for Parquet OPEX extraction")
+            return {}
+
+        accumulators: Dict[str, Dict[str, float]] = {}
+        for res_id, col in col_map.items():
+            is_cumulative = 'cumulative' in col.lower()
+            accumulators[res_id] = {
+                "sum": 0.0,
+                "max": float("-inf"),
+                "count": 0.0,
+                "last": 0.0,
+                "is_cumulative": True if is_cumulative else False,
+            }
+
+        for chunk_file in chunk_files:
+            try:
+                df = pd.read_parquet(chunk_file, columns=needed_cols)
+            except Exception:
+                try:
+                    import pyarrow.parquet as pq
+                    schema_cols = pq.read_schema(chunk_file).names
+                    valid_cols = [c for c in needed_cols if c in schema_cols]
+                    if not valid_cols:
+                        continue
+                    df = pd.read_parquet(chunk_file, columns=valid_cols)
+                except Exception as e:
+                    logger.warning(f"Skipping {chunk_file.name}: {e}")
+                    continue
+
+            if df.empty:
+                continue
+
+            for res_id, col in col_map.items():
+                if col not in df.columns:
+                    continue
+                series = df[col]
+                is_cumulative = bool(accumulators[res_id]["is_cumulative"])
+                if is_cumulative:
+                    accumulators[res_id]["last"] = series.iloc[-1]
+                    series_max = series.max()
+                    if pd.notna(series_max):
+                        accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
+                else:
+                    series_sum = series.sum()
+                    series_max = series.max()
+                    series_count = series.count()
+                    if pd.notna(series_sum):
+                        accumulators[res_id]["sum"] += series_sum
+                    if pd.notna(series_max):
+                        accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
+                    if pd.notna(series_count):
+                        accumulators[res_id]["count"] += series_count
+
+        quantities: Dict[str, Dict[str, float]] = {}
+        for res_id, acc in accumulators.items():
+            if bool(acc["is_cumulative"]):
+                last_val = acc["last"] if acc["last"] is not None else 0.0
+                quantities[res_id] = {
+                    "sum": last_val,
+                    "max": last_val,
+                    "avg": last_val,
+                }
+            else:
+                max_val = acc["max"] if acc["max"] != float("-inf") else 0.0
+                avg_val = (acc["sum"] / acc["count"]) if acc["count"] > 0 else 0.0
+                quantities[res_id] = {
+                    "sum": acc["sum"],
+                    "max": max_val,
+                    "avg": avg_val,
+                }
+
+        return quantities
     
     def _calculate_item_streaming(
         self,
         item: OpexItemConfig,
-        quantities: Dict[str, float],
+        quantities: Dict[str, Dict[str, float]],
         base_costs: Dict[str, float],
         annualization_factor: float,
     ) -> OpexResult:
@@ -369,8 +642,19 @@ class OpexGenerator:
         # Extract quantity from pre-computed values
         quantity = 1.0
         if item.strategy == "variable" and item.resource_id:
-            raw_qty = quantities.get(item.resource_id, 0.0)
-            quantity = raw_qty * annualization_factor
+            raw_entry = quantities.get(item.resource_id, {})
+            if isinstance(raw_entry, dict):
+                raw_qty = raw_entry.get(item.metric, 0.0)
+            else:
+                raw_qty = raw_entry
+
+            if item.metric == "avg":
+                quantity = raw_qty * 8760.0
+            elif item.metric == "max":
+                quantity = raw_qty
+            else:
+                quantity = raw_qty * annualization_factor
+
             result.source = f"simulation:streaming:{item.resource_id}"
         elif item.strategy == "turton_labor":
             quantity = item.hours_per_year
@@ -433,14 +717,18 @@ class OpexGenerator:
         
         # Extract quantity from simulation if applicable
         quantity = 1.0
-        if item.strategy == "variable" and item.resource_id and history_df is not None:
-            quantity, source = self._extract_quantity(
-                history_df, 
-                item.resource_id, 
-                item.metric,
-                annualization_factor
-            )
-            result.source = source
+        if item.strategy == "variable" and item.resource_id:
+            if history_df is not None:
+                quantity, source = self._extract_quantity(
+                    history_df, 
+                    item.resource_id, 
+                    item.metric,
+                    annualization_factor
+                )
+                result.source = source
+            else:
+                quantity = 0.0
+                result.source = "no_history"
         elif item.strategy == "turton_labor":
             quantity = item.hours_per_year
         

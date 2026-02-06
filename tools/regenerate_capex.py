@@ -11,6 +11,8 @@ Usage:
     python tools/regenerate_capex.py scenarios/ --output-dir scenarios/simulation_output
     python tools/regenerate_capex.py scenarios/ --capacity-mode design
     python tools/regenerate_capex.py scenarios/ --simulation-hours 8760
+    python tools/regenerate_capex.py scenarios/ --history-dir scenarios/simulation_output
+    python tools/regenerate_capex.py scenarios/ --no-opex
 """
 
 import argparse
@@ -74,6 +76,53 @@ def _resolve_config_dir(scenarios_dir: Path) -> Path:
     return scenarios_dir
 
 
+def _resolve_history_source(
+    output_dir: Path,
+    history_dir: Optional[str],
+) -> Tuple[Optional[Path], Optional[Path]]:
+    """
+    Resolve history source for OPEX.
+    
+    Returns:
+        (chunks_dir, csv_path) with preference for history_chunks parquet.
+    """
+    def _check_base(base: Path) -> Tuple[Optional[Path], Optional[Path]]:
+        chunks_dir = base / "history_chunks"
+        if chunks_dir.exists():
+            if list(chunks_dir.glob("chunk_*.parquet")):
+                return chunks_dir, None
+        csv_path = base / "simulation_history.csv"
+        if csv_path.exists():
+            return None, csv_path
+        return None, None
+
+    if history_dir:
+        base = Path(history_dir).resolve()
+        if base.is_file():
+            if base.suffix.lower() == ".csv":
+                return None, base
+        if base.name.lower() == "history_chunks" and base.exists():
+            if list(base.glob("chunk_*.parquet")):
+                return base, None
+        if base.is_dir():
+            chunks, csv = _check_base(base)
+            if chunks or csv:
+                return chunks, csv
+            chunks, csv = _check_base(base / "history_chunks")
+            if chunks or csv:
+                return chunks, csv
+
+    # Default: check output_dir and parent (if Economics)
+    chunks, csv = _check_base(output_dir)
+    if chunks or csv:
+        return chunks, csv
+    if output_dir.name.lower() == "economics":
+        return _check_base(output_dir.parent)
+    if output_dir.parent != output_dir:
+        return _check_base(output_dir.parent)
+    return None, None
+
+
 def _build_registry(scenarios_dir: Path) -> Tuple:
     """
     Reconstruct ComponentRegistry from scenario YAML files.
@@ -109,6 +158,9 @@ def regenerate_capex(
     simulation_name: Optional[str] = None,
     simulation_hours: Optional[int] = None,
     config_dir: Optional[Path] = None,
+    generate_opex: bool = True,
+    opex_config: Optional[Path] = None,
+    history_dir: Optional[Path] = None,
 ) -> int:
     """
     Generate CAPEX report from scenario configuration files.
@@ -204,6 +256,67 @@ def regenerate_capex(
             for warn in entry.warnings:
                 logger.info(f"  [{entry.tag}] WARNING: {warn}")
 
+    # Generate OPEX report (optional)
+    if generate_opex:
+        opex_path = opex_config or (base_config_dir / "Economics" / "opex_config.yaml")
+        if not opex_path.exists():
+            logger.warning(f"OPEX config not found: {opex_path}. Skipping OPEX.")
+        else:
+            from h2_plant.economics.opex_generator import OpexGenerator
+
+            opex_generator = OpexGenerator()
+            opex_hours = float(simulation_hours) if simulation_hours else 8760.0
+            chunks_dir, csv_path = _resolve_history_source(output_dir, str(history_dir) if history_dir else None)
+
+            try:
+                if chunks_dir:
+                    logger.info(f"Generating OPEX report from Parquet history: {chunks_dir}")
+                    opex_report = opex_generator.generate_streaming_parquet(
+                        config_path=str(opex_path),
+                        chunks_dir=chunks_dir,
+                        capex_report=report,
+                        output_dir=str(output_dir),
+                        simulation_hours=opex_hours,
+                    )
+                elif csv_path:
+                    logger.info(f"Generating OPEX report from CSV history: {csv_path}")
+                    opex_report = opex_generator.generate_streaming(
+                        config_path=str(opex_path),
+                        csv_path=csv_path,
+                        capex_report=report,
+                        output_dir=str(output_dir),
+                        simulation_hours=opex_hours,
+                    )
+                else:
+                    logger.warning("No history data found for OPEX; generating fixed-only report.")
+                    opex_report = opex_generator.generate(
+                        config_path=str(opex_path),
+                        capex_report=report,
+                        history_df=None,
+                        output_dir=str(output_dir),
+                        simulation_hours=opex_hours,
+                    )
+            except Exception as e:
+                logger.error(f"OPEX generation failed: {e}", exc_info=True)
+                return 1
+
+            print("\n" + "=" * 60)
+            print("OPEX REPORT SUMMARY")
+            print("=" * 60)
+            print(f"  Scenario:          {opex_report.scenario_name}")
+            print(f"  Simulation Hours:  {opex_report.simulation_hours}")
+            print(f"  Total OPEX:        €{opex_report.total_opex:>14,.0f}/year")
+            print(f"  Variable:          €{opex_report.total_variable_cost:>14,.0f}")
+            print(f"  Fixed:             €{opex_report.total_fixed_cost:>14,.0f}")
+            print(f"  Maintenance:       €{opex_report.total_maintenance_cost:>14,.0f}")
+            if opex_report.annual_h2_production_kg > 0:
+                print(f"  H2 Production:     {opex_report.annual_h2_production_kg:>14,.0f} kg/year")
+                print(f"  OPEX per kg H2:    €{opex_report.opex_per_kg_h2:>14,.4f}")
+            print("-" * 60)
+            print(f"  Output:  {output_dir / 'opex_report.json'}")
+            print(f"           {output_dir / 'opex_report.csv'}")
+            print("=" * 60)
+
     return 0
 
 
@@ -237,6 +350,19 @@ def main() -> None:
         "--simulation-hours", type=int, default=None,
         help="Simulation duration metadata for the report"
     )
+    parser.add_argument(
+        "--no-opex", action="store_true",
+        help="Skip OPEX report generation"
+    )
+    parser.add_argument(
+        "--opex-config", type=str, default=None,
+        help="Path to opex_config.yaml "
+             "(default: scenarios_dir/Economics/opex_config.yaml)"
+    )
+    parser.add_argument(
+        "--history-dir", type=str, default=None,
+        help="Path to simulation output or history_chunks directory for OPEX history"
+    )
 
     args = parser.parse_args()
 
@@ -248,6 +374,7 @@ def main() -> None:
     config_dir = _resolve_config_dir(scenarios_dir)
     output_dir = _infer_output_dir(scenarios_dir, args.output_dir)
     capex_config = Path(args.capex_config).resolve() if args.capex_config else None
+    opex_config = Path(args.opex_config).resolve() if args.opex_config else None
 
     logger.info("\n" + "=" * 60)
     logger.info("REGENERATE CAPEX REPORT")
@@ -258,6 +385,10 @@ def main() -> None:
     logger.info(f"Output Dir:    {output_dir}")
     if capex_config:
         logger.info(f"CAPEX Config:  {capex_config}")
+    if opex_config:
+        logger.info(f"OPEX Config:   {opex_config}")
+    if args.history_dir:
+        logger.info(f"History Dir:   {args.history_dir}")
     if args.capacity_mode:
         logger.info(f"Capacity Mode: {args.capacity_mode}")
     logger.info("=" * 60)
@@ -270,6 +401,9 @@ def main() -> None:
         simulation_name=args.simulation_name,
         simulation_hours=args.simulation_hours,
         config_dir=config_dir,
+        generate_opex=not args.no_opex,
+        opex_config=opex_config,
+        history_dir=Path(args.history_dir).resolve() if args.history_dir else None,
     )
     sys.exit(rc)
 
