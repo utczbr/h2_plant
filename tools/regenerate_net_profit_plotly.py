@@ -4,7 +4,7 @@ Regenerate ONLY the net_profit_plotly graph with minimal columns.
 
 This script loads simulation history from history_chunks Parquet and
 generates the "Cumulative Net Profit (Interactive)" Plotly HTML.
-It loads only: minute + cumulative_h2_kg.
+It loads only: minute, cumulative_h2_kg, P_pem, P_soec_actual.
 
 Usage:
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output
@@ -17,10 +17,11 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 import numpy as np
 import pandas as pd
+import yaml
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -112,6 +113,7 @@ def _load_minimal_history(
             raise
 
     required_cols = ["minute", "cumulative_h2_kg"]
+    optional_cols = ["P_pem", "P_soec_actual"]
     missing = [c for c in required_cols if c not in all_cols]
     if missing:
         h2_cols = [c for c in all_cols if "h2" in c.lower() and "kg" in c.lower()]
@@ -120,13 +122,20 @@ def _load_minimal_history(
             f"Available H2 columns: {h2_cols[:20]}"
         )
 
+    present_optional = [c for c in optional_cols if c in all_cols]
+    for col in optional_cols:
+        if col not in present_optional:
+            logger.warning(f"Optional column missing: {col}. Lifecycle spikes will be skipped.")
+
+    cols_to_read = required_cols + present_optional
+
     dfs = []
     global_idx = 0
     factor = max(1, int(downsample_factor))
 
     for chunk_file in chunk_files:
         try:
-            df_chunk = pd.read_parquet(chunk_file, columns=required_cols)
+            df_chunk = pd.read_parquet(chunk_file, columns=cols_to_read)
         except OSError as e:
             if getattr(e, "errno", None) == 107:
                 raise ValueError(
@@ -150,7 +159,11 @@ def _load_minimal_history(
     if not dfs:
         return pd.DataFrame(columns=required_cols)
 
-    return pd.concat(dfs, ignore_index=True)
+    df = pd.concat(dfs, ignore_index=True)
+    for col in optional_cols:
+        if col not in df.columns:
+            df[col] = 0.0
+    return df
 
 
 def _find_report(paths: List[Path], filename: str) -> Optional[Path]:
@@ -159,6 +172,85 @@ def _find_report(paths: List[Path], filename: str) -> Optional[Path]:
         if path.exists():
             return path
     return None
+
+
+def _find_config(paths: List[Path], filename: str) -> Optional[Path]:
+    for base in paths:
+        path = base / filename
+        if path.exists():
+            return path
+    return None
+
+
+def _find_topology_path(output_dir: Path) -> Optional[Path]:
+    direct = output_dir / "plant_topology.yaml"
+    if direct.exists():
+        return direct
+    parent = output_dir.parent / "plant_topology.yaml"
+    if parent.exists():
+        return parent
+    return None
+
+
+def _load_lifecycle_hours(topology_path: Optional[Path]) -> Tuple[Optional[float], Optional[float]]:
+    if topology_path is None or not topology_path.exists():
+        logger.warning("plant_topology.yaml not found; skipping lifecycle-based OPEX spikes.")
+        return None, None
+    try:
+        data = yaml.safe_load(topology_path.read_text()) or {}
+    except Exception as e:
+        logger.warning(f"Failed to read topology for lifecycles: {e}")
+        return None, None
+
+    nodes = data.get("nodes", [])
+    pem_lifecycle = None
+    soec_lifecycle = None
+    for node in nodes:
+        ntype = str(node.get("type", "")).strip()
+        params = node.get("params", {}) or {}
+        lifecycle = params.get("lifecycle")
+        if lifecycle is None:
+            continue
+        if ntype.upper() == "PEM" and pem_lifecycle is None:
+            pem_lifecycle = float(lifecycle)
+        if ntype.upper() == "SOEC" and soec_lifecycle is None:
+            soec_lifecycle = float(lifecycle)
+
+    if pem_lifecycle is None:
+        logger.warning("PEM lifecycle not found in topology.")
+    if soec_lifecycle is None:
+        logger.warning("SOEC lifecycle not found in topology.")
+    return pem_lifecycle, soec_lifecycle
+
+
+def _load_opex_reserves(opex_path: Optional[Path]) -> Tuple[Optional[float], Optional[float]]:
+    if opex_path is None or not opex_path.exists():
+        logger.warning("opex_config.yaml not found; skipping reserve-based spikes.")
+        return None, None
+    try:
+        data = yaml.safe_load(opex_path.read_text()) or {}
+    except Exception as e:
+        logger.warning(f"Failed to read opex_config.yaml: {e}")
+        return None, None
+
+    items = data.get("opex_items", []) or []
+    pem_reserve = None
+    soec_reserve = None
+    for item in items:
+        name = str(item.get("name", "")).lower()
+        price = item.get("price")
+        if price is None:
+            continue
+        if "stack replacement reserve" in name and "pem" in name:
+            pem_reserve = float(price)
+        if "stack replacement reserve" in name and "soec" in name:
+            soec_reserve = float(price)
+
+    if pem_reserve is None:
+        logger.warning("PEM stack replacement reserve not found in opex_config.yaml.")
+    if soec_reserve is None:
+        logger.warning("SOEC stack replacement reserve not found in opex_config.yaml.")
+    return pem_reserve, soec_reserve
 
 
 def _extract_capex(report_path: Path) -> Optional[float]:
@@ -248,6 +340,17 @@ def regenerate_net_profit_plotly(
         logger.error("OPEX not found. Provide opex_report.json or --opex.")
         return 1
 
+    # Load lifecycle + reserve data for spikes
+    topology_path = _find_topology_path(output_dir)
+    pem_lifecycle_h, soec_lifecycle_h = _load_lifecycle_hours(topology_path)
+
+    config_candidates = []
+    if economics_dir:
+        config_candidates.append(Path(economics_dir).resolve())
+    config_candidates.extend([output_dir / "Economics", output_dir.parent / "Economics"])
+    opex_config_path = _find_config(config_candidates, "opex_config.yaml")
+    pem_reserve_pct, soec_reserve_pct = _load_opex_reserves(opex_config_path)
+
     kwargs = {}
     kwargs["capex"] = capex
     kwargs["opex"] = opex
@@ -259,6 +362,15 @@ def regenerate_net_profit_plotly(
 
     kwargs["purification_yield"] = 0.9
     logger.info("Applying purification yield: 0.90")
+
+    if pem_lifecycle_h:
+        kwargs["pem_lifecycle_h"] = pem_lifecycle_h
+    if soec_lifecycle_h:
+        kwargs["soec_lifecycle_h"] = soec_lifecycle_h
+    if pem_reserve_pct is not None:
+        kwargs["pem_reserve_pct"] = pem_reserve_pct
+    if soec_reserve_pct is not None:
+        kwargs["soec_reserve_pct"] = soec_reserve_pct
 
     fig = plot_cumulative_net_profit(df, **kwargs)
 

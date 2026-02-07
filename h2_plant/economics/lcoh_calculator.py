@@ -1,0 +1,223 @@
+"""
+Discounted LCOH Calculator.
+
+Computes discounted Levelized Cost of Hydrogen (LCOH) for plant and pathways.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+
+from h2_plant.economics.models import CapexReport, BlockCostSummary
+from h2_plant.economics.opex_models import OpexReport
+from h2_plant.economics.lcoh_models import LcohReport
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LcohInputs:
+    capex_report: CapexReport
+    opex_report: OpexReport
+    history_chunks_dir: Path
+    discount_rate: float
+    project_years: int
+
+
+class LcohCalculator:
+    """Calculate discounted LCOH for plant and pathways."""
+
+    def _discount_factor_sum(self, r: float, n: int) -> float:
+        if n <= 0:
+            return 0.0
+        if r == 0:
+            return float(n)
+        years = np.arange(1, n + 1, dtype=float)
+        return float(np.sum(1.0 / ((1.0 + r) ** years)))
+
+    def _load_h2_totals(self, chunks_dir: Path) -> Dict[str, float]:
+        try:
+            chunk_files = sorted(
+                chunks_dir.glob("chunk_*.parquet"),
+                key=lambda p: int(p.stem.split("_")[-1])
+            )
+        except Exception:
+            chunk_files = sorted(chunks_dir.glob("chunk_*.parquet"))
+
+        if not chunk_files:
+            raise ValueError(f"No chunk files found in {chunks_dir}")
+
+        required_cols = ["minute", "H2_pem_kg", "H2_soec_kg", "H2_atr_kg"]
+        try:
+            import pyarrow.parquet as pq
+            schema_cols = pq.read_schema(chunk_files[0]).names
+        except Exception:
+            df_preview = pd.read_parquet(chunk_files[0], nrows=1)
+            schema_cols = list(df_preview.columns)
+            del df_preview
+
+        missing = [c for c in required_cols if c not in schema_cols]
+        if missing:
+            h2_cols = [c for c in schema_cols if "h2" in c.lower() and "kg" in c.lower()]
+            raise ValueError(
+                f"Missing required H2 columns: {missing}. "
+                f"Available H2 columns: {h2_cols[:20]}"
+            )
+        totals = {"pem": 0.0, "soec": 0.0, "atr": 0.0}
+        minutes_min = None
+        minutes_max = None
+        diff_samples = []
+
+        for chunk_file in chunk_files:
+            df = pd.read_parquet(chunk_file, columns=required_cols)
+            if df.empty:
+                continue
+            totals["pem"] += float(pd.to_numeric(df["H2_pem_kg"], errors="coerce").fillna(0).sum())
+            totals["soec"] += float(pd.to_numeric(df["H2_soec_kg"], errors="coerce").fillna(0).sum())
+            totals["atr"] += float(pd.to_numeric(df["H2_atr_kg"], errors="coerce").fillna(0).sum())
+
+            min_val = pd.to_numeric(df["minute"], errors="coerce").min()
+            max_val = pd.to_numeric(df["minute"], errors="coerce").max()
+            if minutes_min is None or (pd.notna(min_val) and min_val < minutes_min):
+                minutes_min = float(min_val)
+            if minutes_max is None or (pd.notna(max_val) and max_val > minutes_max):
+                minutes_max = float(max_val)
+            minute_vals = pd.to_numeric(df["minute"], errors="coerce").dropna().values
+            if len(minute_vals) > 1:
+                diffs = np.diff(minute_vals)
+                if diffs.size:
+                    diff_samples.append(np.median(diffs))
+
+        # Estimate simulation hours
+        sim_hours = 0.0
+        dt_h = None
+        if diff_samples:
+            dt_min = float(np.median(diff_samples))
+            if dt_min > 0:
+                dt_h = dt_min / 60.0
+        if minutes_min is not None and minutes_max is not None and minutes_max >= minutes_min:
+            sim_hours = (minutes_max - minutes_min) / 60.0
+            if dt_h is not None:
+                sim_hours += dt_h
+        return {**totals, "simulation_hours": sim_hours}
+
+    def _allocate_capex_by_block(
+        self,
+        block_summaries: list[BlockCostSummary],
+        fallback_shares: Dict[str, float],
+        warnings: list[str]
+    ) -> Dict[str, float]:
+        capex_by = {"pem": 0.0, "soec": 0.0, "atr": 0.0}
+        block_map = {
+            "pem": ["pem"],
+            "soec": ["soec"],
+            "atr": ["atr"],
+        }
+        matched = {"pem": False, "soec": False, "atr": False}
+
+        for block in block_summaries:
+            block_name = block.block_name.lower()
+            for key, tokens in block_map.items():
+                if any(tok in block_name for tok in tokens):
+                    capex_by[key] += float(block.total_installed_cost or 0.0)
+                    matched[key] = True
+
+        for key, ok in matched.items():
+            if not ok:
+                share = fallback_shares.get(key, 0.0)
+                warnings.append(
+                    f"CAPEX block for {key.upper()} missing; allocating by production share ({share:.2%})."
+                )
+
+        return capex_by, matched
+
+    def generate(self, inputs: LcohInputs) -> LcohReport:
+        capex_report = inputs.capex_report
+        opex_report = inputs.opex_report
+
+        warnings: list[str] = []
+
+        totals = self._load_h2_totals(inputs.history_chunks_dir)
+        sim_hours = totals.pop("simulation_hours")
+
+        annual_factor = 0.0
+        if sim_hours and sim_hours > 0:
+            annual_factor = 8760.0 / sim_hours
+        else:
+            fallback_hours = getattr(opex_report, "simulation_hours", 0.0)
+            if fallback_hours and fallback_hours > 0:
+                annual_factor = 8760.0 / float(fallback_hours)
+                warnings.append("Simulation hours inferred from OPEX report.")
+            else:
+                warnings.append("Simulation hours could not be determined; annualization set to 0.")
+                logger.warning("Simulation hours could not be determined; annualization set to 0.")
+
+        annual_by = {k: v * annual_factor for k, v in totals.items()}
+        annual_total = sum(annual_by.values())
+
+        if annual_total <= 0:
+            warnings.append("Annual H2 production is zero; LCOH will be zeroed.")
+
+        # Production shares for fallback allocation
+        prod_shares = {k: (annual_by[k] / annual_total) if annual_total > 0 else 0.0 for k in annual_by}
+
+        capex_total = float(capex_report.total_installed_cost or capex_report.total_C_BM or 0.0)
+        capex_by, matched = self._allocate_capex_by_block(capex_report.block_summaries, prod_shares, warnings)
+        for key, ok in matched.items():
+            if not ok:
+                capex_by[key] = capex_total * prod_shares.get(key, 0.0)
+
+        opex_total = float(opex_report.total_opex or 0.0)
+        opex_by = {k: opex_total * prod_shares.get(k, 0.0) for k in annual_by}
+
+        df_sum = self._discount_factor_sum(inputs.discount_rate, inputs.project_years)
+
+        def _safe_div(num: float, den: float) -> float:
+            if den <= 0:
+                return 0.0
+            return num / den
+
+        pv_h2_total = annual_total * df_sum
+        lcoh_total = _safe_div(capex_total + (opex_total * df_sum), pv_h2_total)
+
+        lcoh_by = {}
+        for key in ["pem", "soec", "atr"]:
+            pv_h2 = annual_by.get(key, 0.0) * df_sum
+            lcoh_by[key] = _safe_div(capex_by.get(key, 0.0) + (opex_by.get(key, 0.0) * df_sum), pv_h2)
+
+        weighted = 0.0
+        if annual_total > 0:
+            weighted = sum(lcoh_by[k] * annual_by.get(k, 0.0) for k in lcoh_by) / annual_total
+
+        breakdown = {
+            "capex": _safe_div(capex_total, pv_h2_total),
+            "opex": _safe_div(opex_total * df_sum, pv_h2_total),
+            "energy": 0.0,
+            "water": 0.0,
+            "compression": 0.0,
+        }
+
+        return LcohReport(
+            generated_at=datetime.now().isoformat(),
+            discount_rate=inputs.discount_rate,
+            project_lifetime_years=inputs.project_years,
+            discount_factor_sum=df_sum,
+            capex_total=capex_total,
+            opex_annual_total=opex_total,
+            annual_h2_total_kg=annual_total,
+            annual_h2_by_pathway=annual_by,
+            capex_by_pathway=capex_by,
+            opex_by_pathway=opex_by,
+            lcoh_total=lcoh_total,
+            lcoh_by_pathway=lcoh_by,
+            lcoh_weighted_plant=weighted,
+            lcoh_breakdown=breakdown,
+            warnings=warnings,
+        )

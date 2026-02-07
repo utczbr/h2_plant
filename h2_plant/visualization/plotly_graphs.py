@@ -2228,15 +2228,141 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     if len(missing) == 2:
         return _empty_figure("CAPEX/OPEX values not available. Provide economics data (attrs or columns).")
     
-    net_profit = cumulative_value - capex - opex
-    
+    # --- Lifecycle-aware OPEX and yearly bars ---
+    stack_threshold = kwargs.get('stack_power_threshold_mw', 0.01)
+    pem_lifecycle_h = kwargs.get('pem_lifecycle_h')
+    soec_lifecycle_h = kwargs.get('soec_lifecycle_h')
+    pem_reserve_pct = kwargs.get('pem_reserve_pct')
+    soec_reserve_pct = kwargs.get('soec_reserve_pct')
+
+    try:
+        stack_threshold = float(stack_threshold)
+    except (TypeError, ValueError):
+        stack_threshold = 0.01
+
+    def _to_float(val: Optional[float]) -> Optional[float]:
+        if val is None:
+            return None
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return None
+
+    pem_lifecycle_h = _to_float(pem_lifecycle_h)
+    soec_lifecycle_h = _to_float(soec_lifecycle_h)
+    pem_reserve_pct = _to_float(pem_reserve_pct)
+    soec_reserve_pct = _to_float(soec_reserve_pct)
+
+    annual_reserve_pem = capex * pem_reserve_pct if pem_reserve_pct is not None else 0.0
+    annual_reserve_soec = capex * soec_reserve_pct if soec_reserve_pct is not None else 0.0
+    base_opex = opex - annual_reserve_pem - annual_reserve_soec
+    if base_opex < 0:
+        logger.warning("Annual OPEX is lower than reserve totals; base OPEX set to 0.")
+        base_opex = 0.0
+
+    if len(hours) > 1:
+        dt_h = np.median(np.diff(hours))
+    else:
+        dt_h = get_dt_hours(df_plot)
+    if not np.isfinite(dt_h) or dt_h <= 0:
+        dt_h = get_dt_hours(df_plot)
+
+    year_idx = np.floor(hours / 8760.0).astype(int)
+    n_years = int(year_idx.max()) + 1 if len(year_idx) > 0 else 1
+    years = np.arange(n_years)
+
+    # Yearly revenue (delta cumulative H2)
+    year_series = pd.Series(year_idx)
+    cum_series = pd.Series(cumulative_h2)
+    last_by_year = cum_series.groupby(year_series).last().reindex(years, fill_value=0.0)
+    revenue_per_year = last_by_year.diff().fillna(last_by_year).values * h2_price
+
+    # Lifecycle event costs split by source (PEM/SOEC)
+    event_costs_time_pem = np.zeros(len(hours))
+    event_costs_time_soec = np.zeros(len(hours))
+    event_costs_year_pem = np.zeros(n_years)
+    event_costs_year_soec = np.zeros(n_years)
+
+    def _apply_events(
+        power_col: Optional[str],
+        lifecycle_h: Optional[float],
+        cost_per_event: float,
+        event_costs_time_out: np.ndarray,
+        event_costs_year_out: np.ndarray,
+    ) -> None:
+        if power_col is None or lifecycle_h is None or lifecycle_h <= 0 or cost_per_event <= 0:
+            return
+        power = pd.to_numeric(df_plot[power_col], errors='coerce').fillna(0).values
+        active = power > stack_threshold
+        cum_hours = np.cumsum(active.astype(float) * dt_h)
+        if len(cum_hours) == 0:
+            return
+        events = np.floor(cum_hours / lifecycle_h).astype(int)
+        delta = np.diff(events, prepend=0)
+        if not np.any(delta > 0):
+            return
+        event_costs_time_out[:] += delta * cost_per_event
+        for idx, count in enumerate(delta):
+            if count > 0:
+                year = year_idx[idx]
+                if 0 <= year < n_years:
+                    event_costs_year_out[year] += count * cost_per_event
+
+    pem_col = next((c for c in ['P_pem', 'P_pem_mw'] if c in df_plot.columns), None)
+    soec_col = next((c for c in ['P_soec_actual', 'P_soec', 'P_soec_mw'] if c in df_plot.columns), None)
+
+    if pem_col is None:
+        logger.warning("PEM power column missing; PEM lifecycle spikes skipped.")
+    if soec_col is None:
+        logger.warning("SOEC power column missing; SOEC lifecycle spikes skipped.")
+
+    pem_event_cost = annual_reserve_pem * (pem_lifecycle_h / 8760.0) if pem_lifecycle_h else 0.0
+    soec_event_cost = annual_reserve_soec * (soec_lifecycle_h / 8760.0) if soec_lifecycle_h else 0.0
+
+    _apply_events(
+        pem_col,
+        pem_lifecycle_h,
+        pem_event_cost,
+        event_costs_time_pem,
+        event_costs_year_pem,
+    )
+    _apply_events(
+        soec_col,
+        soec_lifecycle_h,
+        soec_event_cost,
+        event_costs_time_soec,
+        event_costs_year_soec,
+    )
+
+    event_costs_time_total = event_costs_time_pem + event_costs_time_soec
+    base_opex_per_year = np.full(n_years, base_opex, dtype=float)
+    pem_spike_per_year = event_costs_year_pem
+    soec_spike_per_year = event_costs_year_soec
+
+    capex_per_year = np.zeros(n_years)
+    if n_years > 0:
+        capex_per_year[0] = capex
+
+    cumulative_opex_time = base_opex * (hours / 8760.0) + np.cumsum(event_costs_time_total)
+    net_profit = cumulative_value - capex - cumulative_opex_time
+
     # --- Plot ---
     profit_color = get_viz_config('styling.colors.profit', '#2c3e50')
     value_color = get_viz_config('styling.colors.h2total', '#2ecc71')
-    
+
     ScatterType = get_scatter_type(len(hours))
-    fig = go.Figure()
-    
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=False,
+        vertical_spacing=0.08,
+        row_heights=[0.65, 0.35],
+        subplot_titles=(
+            "Cumulative Net Profit (Time-Based OPEX)",
+            "Annual Revenue vs Cost Sources"
+        )
+    )
+
     # Net Profit (Primary)
     fig.add_trace(ScatterType(
         x=hours,
@@ -2245,8 +2371,8 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         name='Net Profit (CAPEX + OPEX Deducted)',
         line=dict(color=profit_color, width=2),
         hovertemplate='Net Profit: %{y:,.0f}<extra></extra>'
-    ))
-    
+    ), row=1, col=1)
+
     # Cumulative H2 Value (Reference)
     fig.add_trace(ScatterType(
         x=hours,
@@ -2255,32 +2381,74 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         name='Cumulative H2 Value',
         line=dict(color=value_color, width=1.5, dash='dot'),
         hovertemplate='H2 Value: %{y:,.0f}<extra></extra>'
-    ))
-    
+    ), row=1, col=1)
+
     # Break-even line
-    fig.add_hline(y=0, line=dict(color='#7f8c8d', width=1, dash='dash'))
-    
+    fig.add_hline(y=0, line=dict(color='#7f8c8d', width=1, dash='dash'), row=1, col=1)
+
+    # Bottom bar panel
+    x_years = years + 1
+    fig.add_trace(go.Bar(
+        x=x_years,
+        y=revenue_per_year,
+        name='H2 Revenue',
+        marker_color='#2ecc71'
+    ), row=2, col=1)
+
+    fig.add_trace(go.Bar(
+        x=x_years,
+        y=-base_opex_per_year,
+        name='OPEX Base',
+        marker_color='#e74c3c'
+    ), row=2, col=1)
+
+    fig.add_trace(go.Bar(
+        x=x_years,
+        y=-pem_spike_per_year,
+        name='PEM Replacement',
+        marker_color='#d35400'
+    ), row=2, col=1)
+
+    fig.add_trace(go.Bar(
+        x=x_years,
+        y=-soec_spike_per_year,
+        name='SOEC Replacement',
+        marker_color='#c0392b'
+    ), row=2, col=1)
+
+    fig.add_trace(go.Bar(
+        x=x_years,
+        y=-capex_per_year,
+        name='CAPEX (Year 1)',
+        marker_color='#922b21'
+    ), row=2, col=1)
+
     # Cost annotation
     capex_label = f"{capex:,.0f}" if 'CAPEX' not in missing else "n/a (0)"
     opex_label = f"{opex:,.0f}" if 'OPEX' not in missing else "n/a (0)"
     fig.add_annotation(
-        text=f"CAPEX: {capex_label} | OPEX: {opex_label}",
+        text=f"CAPEX: {capex_label} | Annual OPEX (Total): {opex_label}",
         xref="paper", yref="paper",
         x=0.01, y=1.08,
         showarrow=False,
         align="left",
         font=dict(size=10, color="#555")
     )
-    
+
     fig.update_layout(
         title=kwargs.get('title', 'Cumulative Net Profit (H2 Value - CAPEX - OPEX)'),
-        xaxis_title='Time (hours)',
-        yaxis_title='Value (EUR)',
         template='plotly_white',
         hovermode='x unified',
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        barmode='relative',
+        height=720
     )
-    
+
+    fig.update_xaxes(title_text='Time (hours)', row=1, col=1)
+    fig.update_yaxes(title_text='Value (EUR)', row=1, col=1)
+    fig.update_xaxes(title_text='Year', row=2, col=1)
+    fig.update_yaxes(title_text='Annual Value (EUR)', row=2, col=1)
+
     return fig
 
 

@@ -21,6 +21,8 @@ from h2_plant.economics.cost_strategies import (
     TurtonStrategy,
     VendorQuoteStrategy,
 )
+from h2_plant.economics.lcoh_calculator import LcohCalculator
+from h2_plant.economics.lcoh_models import LcohReport
 
 __all__ = [
     "CapexGenerator",
@@ -32,4 +34,6 @@ __all__ = [
     "CostStrategy",
     "TurtonStrategy",
     "VendorQuoteStrategy",
+    "LcohCalculator",
+    "LcohReport",
 ]
