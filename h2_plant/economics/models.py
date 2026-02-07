@@ -186,18 +186,26 @@ class BlockCostSummary(BaseModel):
     block_name: str = Field(..., description="Block identifier (PEM, SOEC, ATR, etc.)")
     equipment_tags: List[str] = Field(default_factory=list, description="Equipment tags in this block")
     equipment_total: float = Field(0.0, description="Sum of C_BM for all equipment in block")
+    equipment_total_low: float = Field(0.0, description="Sum of C_BM_low for all equipment in block")
+    equipment_total_high: float = Field(0.0, description="Sum of C_BM_high for all equipment in block")
     
     # Installation costs by category
     installation_costs: Dict[str, float] = Field(default_factory=dict, description="Installation cost per category")
     installation_total: float = Field(0.0, description="Sum of all installation costs")
+    installation_total_low: float = Field(0.0, description="Installation total derived from C_BM_low")
+    installation_total_high: float = Field(0.0, description="Installation total derived from C_BM_high")
     
     # Block total (equipment + installation)
     total_installed_cost: float = Field(0.0, description="Total installed cost = equipment + installation")
+    total_installed_cost_low: float = Field(0.0, description="Low installed cost = equipment_low + installation_low")
+    total_installed_cost_high: float = Field(0.0, description="High installed cost = equipment_high + installation_high")
     
     def calculate(self, entries: List["CapexEntry"], installation_factors: Dict[str, float]) -> None:
         """Calculate equipment total and apply installation factors."""
         # Sum equipment costs
         self.equipment_total = sum(e.C_BM or 0 for e in entries if e.tag in self.equipment_tags)
+        self.equipment_total_low = sum(e.C_BM_low or 0 for e in entries if e.tag in self.equipment_tags)
+        self.equipment_total_high = sum(e.C_BM_high or 0 for e in entries if e.tag in self.equipment_tags)
         
         # Apply installation factors
         self.installation_costs = {}
@@ -205,7 +213,12 @@ class BlockCostSummary(BaseModel):
             self.installation_costs[category] = self.equipment_total * factor
         
         self.installation_total = sum(self.installation_costs.values())
+        factor_sum = sum(installation_factors.values())
+        self.installation_total_low = self.equipment_total_low * factor_sum
+        self.installation_total_high = self.equipment_total_high * factor_sum
         self.total_installed_cost = self.equipment_total + self.installation_total
+        self.total_installed_cost_low = self.equipment_total_low + self.installation_total_low
+        self.total_installed_cost_high = self.equipment_total_high + self.installation_total_high
 
 
 class CapexReport(BaseModel):
@@ -237,7 +250,11 @@ class CapexReport(BaseModel):
     
     # Total Installed Cost (after installation factors)
     total_installation: float = Field(0.0, description="Total installation costs")
+    total_installation_low: float = Field(0.0, description="Total installation costs derived from low estimates")
+    total_installation_high: float = Field(0.0, description="Total installation costs derived from high estimates")
     total_installed_cost: float = Field(0.0, description="Equipment + Installation")
+    total_installed_cost_low: float = Field(0.0, description="Low equipment + low installation")
+    total_installed_cost_high: float = Field(0.0, description="High equipment + high installation")
     
     # Statistics
     entries_with_cost: int = Field(0, description="Entries with valid cost")
@@ -259,6 +276,7 @@ class CapexReport(BaseModel):
         return {
             "total_C_BM": f"€{self.total_C_BM:,.0f}",
             "total_range": f"€{self.total_C_BM_low:,.0f} - €{self.total_C_BM_high:,.0f}",
+            "installed_range": f"€{self.total_installed_cost_low:,.0f} - €{self.total_installed_cost_high:,.0f}",
             "cost_class": self.overall_cost_class.value,
             "entries_valid": f"{self.entries_with_cost}/{len(self.entries)}",
             "entries_out_of_bounds": self.entries_out_of_bounds,

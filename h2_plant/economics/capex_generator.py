@@ -1123,9 +1123,19 @@ class CapexGenerator:
             writer.writerow([])
             writer.writerow(["BLOCK SUMMARY"] + [""] * 16)
             writer.writerow([
-                "Block", "Equipment Count", "Equipment Total (EUR)",
-                "Installation Categories", "Installation Total (EUR)",
-                "Total Installed Cost (EUR)"] + [""] * 11)
+                "Block",
+                "Equipment Count",
+                "Equipment Total (EUR)",
+                "Equipment Low (EUR)",
+                "Equipment High (EUR)",
+                "Installation Categories",
+                "Installation Total (EUR)",
+                "Installation Low (EUR)",
+                "Installation High (EUR)",
+                "Total Installed Cost (EUR)",
+                "Total Installed Low (EUR)",
+                "Total Installed High (EUR)",
+            ] + [""] * 5)
 
             for summary in report.block_summaries:
                 install_cats = "; ".join([f"{k}: €{v:,.0f}" for k, v in summary.installation_costs.items()])
@@ -1133,17 +1143,33 @@ class CapexGenerator:
                     summary.block_name,
                     len(summary.equipment_tags),
                     round(summary.equipment_total, 0),
+                    round(summary.equipment_total_low, 0),
+                    round(summary.equipment_total_high, 0),
                     install_cats,
                     round(summary.installation_total, 0),
-                    round(summary.total_installed_cost, 0)] + [""] * 11)
+                    round(summary.installation_total_low, 0),
+                    round(summary.installation_total_high, 0),
+                    round(summary.total_installed_cost, 0),
+                    round(summary.total_installed_cost_low, 0),
+                    round(summary.total_installed_cost_high, 0),
+                ] + [""] * 5)
 
             # Overall Totals with Installation
             writer.writerow([])
             writer.writerow([
-                "OVERALL TOTAL", len(report.entries),
-                round(report.total_C_BM, 0), "",
+                "OVERALL TOTAL",
+                len(report.entries),
+                round(report.total_C_BM, 0),
+                round(report.total_C_BM_low, 0),
+                round(report.total_C_BM_high, 0),
+                "",
                 round(report.total_installation, 0),
-                round(report.total_installed_cost, 0)] + [""] * 11)
+                round(report.total_installation_low, 0),
+                round(report.total_installation_high, 0),
+                round(report.total_installed_cost, 0),
+                round(report.total_installed_cost_low, 0),
+                round(report.total_installed_cost_high, 0),
+            ] + [""] * 5)
 
         logger.info(f"✓ CSV export: {path}")
     
@@ -1156,13 +1182,17 @@ class CapexGenerator:
         """
         # Group equipment by block
         block_equipment: Dict[str, List[str]] = {}
-        block_costs: Dict[str, float] = {}
+        block_costs: Dict[str, Dict[str, float]] = {}
         
         for mapping in self.mappings:
             block = mapping.block
             if block not in block_equipment:
                 block_equipment[block] = []
-                block_costs[block] = 0.0
+                block_costs[block] = {
+                    "base": 0.0,
+                    "low": 0.0,
+                    "high": 0.0,
+                }
             block_equipment[block].append(mapping.tag)
         
         # Sum equipment costs per block
@@ -1170,34 +1200,53 @@ class CapexGenerator:
             # Find which block this entry belongs to
             for block, tags in block_equipment.items():
                 if entry.tag in tags:
-                    block_costs[block] += entry.C_BM or 0.0
+                    block_costs[block]["base"] += entry.C_BM or 0.0
+                    block_costs[block]["low"] += entry.C_BM_low or 0.0
+                    block_costs[block]["high"] += entry.C_BM_high or 0.0
                     break
         
         # Create block summaries with installation factors
         total_installation = 0.0
+        total_installation_low = 0.0
+        total_installation_high = 0.0
+        report.block_summaries = []
         for block_name, equipment_tags in block_equipment.items():
             factors = self.installation_factors.get(block_name, {})
             
             summary = BlockCostSummary(
                 block_name=block_name,
                 equipment_tags=equipment_tags,
-                equipment_total=block_costs.get(block_name, 0.0),
+                equipment_total=block_costs.get(block_name, {}).get("base", 0.0),
+                equipment_total_low=block_costs.get(block_name, {}).get("low", 0.0),
+                equipment_total_high=block_costs.get(block_name, {}).get("high", 0.0),
             )
             
             # Apply installation factors
+            factor_sum = 0.0
             for category, pct in factors.items():
                 cost = summary.equipment_total * pct
                 summary.installation_costs[category] = round(cost, 2)
+                factor_sum += pct
             
             summary.installation_total = sum(summary.installation_costs.values())
+            summary.installation_total_low = round(summary.equipment_total_low * factor_sum, 2)
+            summary.installation_total_high = round(summary.equipment_total_high * factor_sum, 2)
             summary.total_installed_cost = summary.equipment_total + summary.installation_total
+            summary.total_installed_cost_low = summary.equipment_total_low + summary.installation_total_low
+            summary.total_installed_cost_high = summary.equipment_total_high + summary.installation_total_high
             total_installation += summary.installation_total
+            total_installation_low += summary.installation_total_low
+            total_installation_high += summary.installation_total_high
             
             report.block_summaries.append(summary)
         
         # Update report totals
         report.total_installation = total_installation
+        report.total_installation_low = total_installation_low
+        report.total_installation_high = total_installation_high
         report.total_installed_cost = report.total_C_BM + total_installation
+        report.total_installed_cost_low = report.total_C_BM_low + total_installation_low
+        report.total_installed_cost_high = report.total_C_BM_high + total_installation_high
         
         logger.info(f"Calculated costs for {len(report.block_summaries)} blocks")
     

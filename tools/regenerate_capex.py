@@ -237,10 +237,13 @@ def regenerate_capex(
         for block in report.block_summaries:
             if block.equipment_total > 0:
                 print(f"    {block.block_name:<20s} €{block.equipment_total:>12,.0f}  "
-                      f"(installed: €{block.total_installed_cost:,.0f})")
+                      f"(installed: €{block.total_installed_cost:,.0f}; "
+                      f"range: €{block.total_installed_cost_low:,.0f} - €{block.total_installed_cost_high:,.0f})")
         print("-" * 60)
         print(f"  Installation:      €{report.total_installation:>14,.0f}")
+        print(f"  Installation Rng:  €{report.total_installation_low:>14,.0f} - €{report.total_installation_high:,.0f}")
         print(f"  Total Installed:   €{report.total_installed_cost:>14,.0f}")
+        print(f"  Installed Range:   €{report.total_installed_cost_low:>14,.0f} - €{report.total_installed_cost_high:,.0f}")
 
     print("=" * 60)
     print(f"  Output:  {output_dir / 'capex_report.json'}")

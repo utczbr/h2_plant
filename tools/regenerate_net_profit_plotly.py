@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-Regenerate ONLY the net_profit_plotly graph with minimal columns.
+Regenerate net_profit_plotly graphs for CAPEX low/base/high scenarios.
 
-This script loads simulation history from history_chunks Parquet and
-generates the "Cumulative Net Profit (Interactive)" Plotly HTML.
-It loads only: minute, cumulative_h2_kg, P_pem, P_soec_actual.
+This script loads simulation history from history_chunks Parquet,
+integrates purified H2 from mixer/PSA flow tags, and
+generates three "Cumulative Net Profit (Interactive)" Plotly HTML files
+using CAPEX low/base/high from capex_report.json.
+It loads only: minute, purified cumulative_h2_kg (computed), P_pem, P_soec_actual.
 
 Usage:
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output
@@ -17,7 +19,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 
 import numpy as np
 import pandas as pd
@@ -33,6 +35,24 @@ logger = logging.getLogger(__name__)
 NET_PROFIT_TITLE = "Cumulative Net Profit (Interactive)"
 # Suppress GraphCatalog import-time logs triggered by plotly_graphs dependencies.
 logging.getLogger("h2_plant.visualization.graph_catalog").setLevel(logging.WARNING)
+
+NET_H2_MIXER_FLOW_COL = "H2_Production_Mixer_outlet_mass_flow_kg_h"
+NET_H2_PSA_FLOW_COLS = [
+    "PEM_H2_PSA_1_outlet_mass_flow_kg_h",
+    "SOEC_H2_PSA_1_outlet_mass_flow_kg_h",
+    "ATR_PSA_1_outlet_mass_flow_kg_h",
+]
+CAPEX_VARIANT_KEY_MAP = {
+    "low": "total_installed_cost_low",
+    "base": "total_installed_cost",
+    "high": "total_installed_cost_high",
+}
+CAPEX_VARIANT_SUFFIX = {
+    "low": "_Capex_Low",
+    "base": "_Capex_Base",
+    "high": "_Capex_High",
+}
+
 
 def _resolve_history_chunks(
     output_dir: Path,
@@ -112,28 +132,50 @@ def _load_minimal_history(
                 ) from e
             raise
 
-    required_cols = ["minute", "cumulative_h2_kg"]
+    required_cols = ["minute"]
     optional_cols = ["P_pem", "P_soec_actual"]
     missing = [c for c in required_cols if c not in all_cols]
     if missing:
-        h2_cols = [c for c in all_cols if "h2" in c.lower() and "kg" in c.lower()]
+        h2_cols = [c for c in all_cols if "h2" in c.lower()]
         raise ValueError(
             f"Missing required columns: {missing}. "
             f"Available H2 columns: {h2_cols[:20]}"
         )
+
+    flow_cols: List[str] = []
+    flow_source_desc = ""
+    if NET_H2_MIXER_FLOW_COL in all_cols:
+        flow_cols = [NET_H2_MIXER_FLOW_COL]
+        flow_source_desc = NET_H2_MIXER_FLOW_COL
+    else:
+        flow_cols = [c for c in NET_H2_PSA_FLOW_COLS if c in all_cols]
+        if flow_cols:
+            flow_source_desc = " + ".join(flow_cols)
+
+    if not flow_cols:
+        raise ValueError(
+            "No purified H2 flow tags found for net-profit integration. "
+            "Expected H2_Production_Mixer_outlet_mass_flow_kg_h or PSA outlet flow tags."
+        )
+
+    logger.info(f"Using purified H2 source columns: {flow_source_desc}")
 
     present_optional = [c for c in optional_cols if c in all_cols]
     for col in optional_cols:
         if col not in present_optional:
             logger.warning(f"Optional column missing: {col}. Lifecycle spikes will be skipped.")
 
-    cols_to_read = required_cols + present_optional
+    cols_to_read = required_cols + flow_cols + present_optional
 
-    dfs = []
+    dfs: List[pd.DataFrame] = []
     global_idx = 0
     factor = max(1, int(downsample_factor))
+    running_cumulative_h2 = 0.0
+    prev_minute: Optional[float] = None
+    last_dt_h = 1.0 / 60.0
+    last_full_row: Optional[pd.DataFrame] = None
 
-    for chunk_file in chunk_files:
+    for chunk_idx, chunk_file in enumerate(chunk_files):
         try:
             df_chunk = pd.read_parquet(chunk_file, columns=cols_to_read)
         except OSError as e:
@@ -147,19 +189,65 @@ def _load_minimal_history(
         if n_rows == 0:
             continue
 
-        if factor > 1:
-            idx = np.arange(global_idx, global_idx + n_rows)
-            mask = (idx % factor) == 0
-            df_chunk = df_chunk.loc[mask]
+        minute_vals = pd.to_numeric(df_chunk["minute"], errors="coerce").to_numpy(dtype=float)
+        flow_vals = np.zeros(n_rows, dtype=float)
+        for col in flow_cols:
+            flow_vals += pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+
+        # Integrate step mass with chunk-boundary-aware dt.
+        dt_h = np.full(n_rows, np.nan, dtype=float)
+        if n_rows > 1:
+            local_diff_h = np.diff(minute_vals) / 60.0
+            dt_h[1:] = local_diff_h
+            valid_local = local_diff_h[np.isfinite(local_diff_h) & (local_diff_h > 0)]
+            if valid_local.size:
+                last_dt_h = float(np.median(valid_local))
+
+        if np.isfinite(minute_vals[0]) and prev_minute is not None:
+            boundary_dt_h = (minute_vals[0] - prev_minute) / 60.0
+            if np.isfinite(boundary_dt_h) and boundary_dt_h > 0:
+                dt_h[0] = boundary_dt_h
+
+        invalid_dt = ~np.isfinite(dt_h) | (dt_h <= 0)
+        if invalid_dt.any():
+            dt_h[invalid_dt] = last_dt_h
+
+        step_h2_kg = flow_vals * dt_h
+        cumulative_h2 = running_cumulative_h2 + np.cumsum(step_h2_kg)
+        running_cumulative_h2 = float(cumulative_h2[-1])
+
+        if np.isfinite(minute_vals[-1]):
+            prev_minute = float(minute_vals[-1])
+
+        out_chunk = pd.DataFrame({
+            "minute": minute_vals,
+            "cumulative_h2_kg": cumulative_h2,
+        })
+        for col in present_optional:
+            out_chunk[col] = pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
 
         global_idx += n_rows
-        if not df_chunk.empty:
-            dfs.append(df_chunk)
+        last_full_row = out_chunk.iloc[[-1]].copy()
+
+        if factor > 1:
+            idx = np.arange(global_idx - n_rows, global_idx)
+            mask = (idx % factor) == 0
+            # Always keep the last point from the final chunk for endpoint stability.
+            if chunk_idx == (len(chunk_files) - 1) and n_rows > 0:
+                mask[-1] = True
+            out_chunk = out_chunk.loc[mask]
+
+        if not out_chunk.empty:
+            dfs.append(out_chunk)
 
     if not dfs:
-        return pd.DataFrame(columns=required_cols)
+        return pd.DataFrame(columns=["minute", "cumulative_h2_kg"])
 
     df = pd.concat(dfs, ignore_index=True)
+    if factor > 1 and last_full_row is not None:
+        if df.empty or float(df["minute"].iloc[-1]) != float(last_full_row["minute"].iloc[0]):
+            df = pd.concat([df, last_full_row], ignore_index=True)
+
     for col in optional_cols:
         if col not in df.columns:
             df[col] = 0.0
@@ -253,20 +341,42 @@ def _load_opex_reserves(opex_path: Optional[Path]) -> Tuple[Optional[float], Opt
     return pem_reserve, soec_reserve
 
 
-def _extract_capex(report_path: Path) -> Optional[float]:
+def _extract_capex_variants(report_path: Path) -> Optional[Dict[str, float]]:
     try:
         data = json.loads(report_path.read_text())
     except Exception as e:
         logger.warning(f"Failed to read CAPEX report {report_path}: {e}")
         return None
-    for key in ("total_installed_cost", "total_C_BM", "total_c_bm", "total_capex", "capex"):
-        val = data.get(key)
-        if val is not None:
-            try:
-                return float(val)
-            except (TypeError, ValueError):
-                continue
-    return None
+
+    variants: Dict[str, float] = {}
+    missing_keys: List[str] = []
+    invalid_keys: List[str] = []
+
+    for variant, key in CAPEX_VARIANT_KEY_MAP.items():
+        raw_val = data.get(key)
+        if raw_val is None:
+            missing_keys.append(key)
+            continue
+        try:
+            val = float(raw_val)
+        except (TypeError, ValueError):
+            invalid_keys.append(key)
+            continue
+        if val <= 0:
+            invalid_keys.append(key)
+            continue
+        variants[variant] = val
+
+    if missing_keys or invalid_keys:
+        problems = []
+        if missing_keys:
+            problems.append(f"missing keys: {', '.join(missing_keys)}")
+        if invalid_keys:
+            problems.append(f"invalid/non-positive keys: {', '.join(invalid_keys)}")
+        logger.warning(f"CAPEX variants are incomplete in {report_path}: {'; '.join(problems)}")
+        return None
+
+    return variants
 
 
 def _extract_opex(report_path: Path) -> Optional[float]:
@@ -314,28 +424,33 @@ def regenerate_net_profit_plotly(
         return 1
 
     # Resolve CAPEX/OPEX from reports unless overridden
-    capex = capex_override
     opex = opex_override
-    if capex is None or opex is None:
-        candidates = [output_dir, output_dir / "Economics"]
-        if output_dir.name.lower() == "economics":
-            candidates.insert(0, output_dir)
-            candidates.insert(1, output_dir.parent)
-        if economics_dir:
-            candidates.insert(0, Path(economics_dir).resolve())
+    candidates = [output_dir, output_dir / "Economics"]
+    if output_dir.name.lower() == "economics":
+        candidates.insert(0, output_dir)
+        candidates.insert(1, output_dir.parent)
+    if economics_dir:
+        candidates.insert(0, Path(economics_dir).resolve())
 
-        if capex is None:
-            capex_path = _find_report(candidates, "capex_report.json")
-            if capex_path:
-                capex = _extract_capex(capex_path)
-        if opex is None:
-            opex_path = _find_report(candidates, "opex_report.json")
-            if opex_path:
-                opex = _extract_opex(opex_path)
-
-    if capex is None:
-        logger.error("CAPEX not found. Provide capex_report.json or --capex.")
+    capex_path = _find_report(candidates, "capex_report.json")
+    if not capex_path:
+        logger.error("CAPEX report not found. Expected capex_report.json with low/base/high installed costs.")
         return 1
+    capex_variants = _extract_capex_variants(capex_path)
+    if not capex_variants:
+        logger.error(
+            "CAPEX variants missing or invalid in capex_report.json. "
+            "Required: total_installed_cost_low, total_installed_cost, total_installed_cost_high."
+        )
+        return 1
+    if capex_override is not None:
+        logger.warning("--capex is ignored in multi-scenario mode. Using CAPEX low/base/high from capex_report.json.")
+
+    if opex is None:
+        opex_path = _find_report(candidates, "opex_report.json")
+        if opex_path:
+            opex = _extract_opex(opex_path)
+
     if opex is None:
         logger.error("OPEX not found. Provide opex_report.json or --opex.")
         return 1
@@ -352,16 +467,11 @@ def regenerate_net_profit_plotly(
     pem_reserve_pct, soec_reserve_pct = _load_opex_reserves(opex_config_path)
 
     kwargs = {}
-    kwargs["capex"] = capex
     kwargs["opex"] = opex
-    logger.info(f"Using CAPEX: {capex:,.0f}")
     logger.info(f"Using OPEX: {opex:,.0f}")
     if h2_price_eur_kg is not None:
         kwargs["h2_price_eur_kg"] = h2_price_eur_kg
         logger.info(f"Using H2 price override: {h2_price_eur_kg}")
-
-    kwargs["purification_yield"] = 0.9
-    logger.info("Applying purification yield: 0.90")
 
     if pem_lifecycle_h:
         kwargs["pem_lifecycle_h"] = pem_lifecycle_h
@@ -372,18 +482,28 @@ def regenerate_net_profit_plotly(
     if soec_reserve_pct is not None:
         kwargs["soec_reserve_pct"] = soec_reserve_pct
 
-    fig = plot_cumulative_net_profit(df, **kwargs)
+    saved = 0
+    base_filename = NET_PROFIT_TITLE.replace(" ", "_").replace("/", "_")
+    for variant in ("low", "base", "high"):
+        capex_val = capex_variants[variant]
+        kwargs_variant = dict(kwargs)
+        kwargs_variant["capex"] = capex_val
 
-    filename = f"{NET_PROFIT_TITLE.replace(' ', '_').replace('/', '_')}.html"
-    output_path = graphs_dir / filename
-    fig.write_html(
-        str(output_path),
-        include_plotlyjs="cdn",
-        full_html=True,
-        config={"displayModeBar": True, "responsive": True, "editable": True},
-    )
+        logger.info(f"Generating net profit graph for CAPEX {variant.upper()}: {capex_val:,.0f}")
+        fig = plot_cumulative_net_profit(df, **kwargs_variant)
 
-    logger.info(f"✓ Net profit graph saved: {output_path}")
+        filename = f"{base_filename}{CAPEX_VARIANT_SUFFIX[variant]}.html"
+        output_path = graphs_dir / filename
+        fig.write_html(
+            str(output_path),
+            include_plotlyjs="cdn",
+            full_html=True,
+            config={"displayModeBar": True, "responsive": True, "editable": True},
+        )
+        saved += 1
+        logger.info(f"✓ Net profit graph ({variant}) saved: {output_path}")
+
+    logger.info(f"✓ Net profit graph generation completed: {saved} files")
     return 0
 
 
@@ -400,11 +520,17 @@ def _parse_downscale(value: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Regenerate only the net_profit_plotly graph with filtered columns."
+        description=(
+            "Regenerate 3 net_profit_plotly graphs (CAPEX low/base/high) by integrating "
+            "purified H2 from mixer/PSA flow tags."
+        )
     )
     parser.add_argument(
         "output_dir", type=str,
-        help="Path to simulation output directory (contains history_chunks)"
+        help=(
+            "Path to simulation output directory (contains history_chunks with mixer/PSA "
+            "purified H2 flow tags)"
+        )
     )
     parser.add_argument(
         "--history-dir", type=str, default=None,
@@ -421,7 +547,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--capex", type=float, default=None,
-        help="Override CAPEX value (EUR)"
+        help="Ignored in multi-scenario mode (kept for compatibility)"
     )
     parser.add_argument(
         "--opex", type=float, default=None,
