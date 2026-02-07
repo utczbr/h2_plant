@@ -30,6 +30,8 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 NET_PROFIT_TITLE = "Cumulative Net Profit (Interactive)"
+# Suppress GraphCatalog import-time logs triggered by plotly_graphs dependencies.
+logging.getLogger("h2_plant.visualization.graph_catalog").setLevel(logging.WARNING)
 
 def _resolve_history_chunks(
     output_dir: Path,
@@ -89,10 +91,25 @@ def _load_minimal_history(
     try:
         import pyarrow.parquet as pq
         all_cols = pq.read_schema(chunk_files[0]).names
+    except OSError as e:
+        if getattr(e, "errno", None) == 107:
+            raise ValueError(
+                "History chunks are on a disconnected mount. "
+                "Ensure the drive is mounted or copy history locally."
+            ) from e
+        raise
     except Exception:
-        df_preview = pd.read_parquet(chunk_files[0], nrows=1)
-        all_cols = list(df_preview.columns)
-        del df_preview
+        try:
+            df_preview = pd.read_parquet(chunk_files[0], nrows=1)
+            all_cols = list(df_preview.columns)
+            del df_preview
+        except OSError as e:
+            if getattr(e, "errno", None) == 107:
+                raise ValueError(
+                    "History chunks are on a disconnected mount. "
+                    "Ensure the drive is mounted or copy history locally."
+                ) from e
+            raise
 
     required_cols = ["minute", "cumulative_h2_kg"]
     missing = [c for c in required_cols if c not in all_cols]
@@ -108,7 +125,15 @@ def _load_minimal_history(
     factor = max(1, int(downsample_factor))
 
     for chunk_file in chunk_files:
-        df_chunk = pd.read_parquet(chunk_file, columns=required_cols)
+        try:
+            df_chunk = pd.read_parquet(chunk_file, columns=required_cols)
+        except OSError as e:
+            if getattr(e, "errno", None) == 107:
+                raise ValueError(
+                    "History chunks are on a disconnected mount. "
+                    "Ensure the drive is mounted or copy history locally."
+                ) from e
+            raise
         n_rows = len(df_chunk)
         if n_rows == 0:
             continue
