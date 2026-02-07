@@ -29,6 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
+NET_PROFIT_TITLE = "Cumulative Net Profit (Interactive)"
 
 def _resolve_history_chunks(
     output_dir: Path,
@@ -178,16 +179,8 @@ def regenerate_net_profit_plotly(
     h2_price_eur_kg: Optional[float] = None,
 ) -> int:
     from h2_plant.visualization.plotly_graphs import plot_cumulative_net_profit
-    from h2_plant.visualization.graph_catalog import GraphCatalog
-
     graphs_dir = graphs_dir or (output_dir / "graphs")
     graphs_dir.mkdir(parents=True, exist_ok=True)
-
-    catalog = GraphCatalog()
-    meta = catalog.get("net_profit_plotly")
-    if meta is None:
-        logger.error("Graph 'net_profit_plotly' not found in catalog.")
-        return 1
 
     chunks_dir = _resolve_history_chunks(output_dir, history_dir)
     if not chunks_dir:
@@ -244,7 +237,7 @@ def regenerate_net_profit_plotly(
 
     fig = plot_cumulative_net_profit(df, **kwargs)
 
-    filename = f"{meta.title.replace(' ', '_').replace('/', '_')}.html"
+    filename = f"{NET_PROFIT_TITLE.replace(' ', '_').replace('/', '_')}.html"
     output_path = graphs_dir / filename
     fig.write_html(
         str(output_path),
