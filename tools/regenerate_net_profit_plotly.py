@@ -3,10 +3,12 @@
 Regenerate net_profit_plotly graphs for CAPEX low/base/high scenarios.
 
 This script loads simulation history from history_chunks Parquet,
-integrates purified H2 from mixer/PSA flow tags, and
+integrates purified H2 from mixer/PSA flow tags,
+integrates grid electricity-sale revenue, and
 generates three "Cumulative Net Profit (Interactive)" Plotly HTML files
 using CAPEX low/base/high from capex_report.json.
-It loads only: minute, purified cumulative_h2_kg (computed), P_pem, P_soec_actual.
+It loads only: minute, purified cumulative_h2_kg (computed),
+cumulative_grid_revenue_eur (computed), P_pem, P_soec_actual.
 
 Usage:
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output
@@ -41,6 +43,15 @@ NET_H2_PSA_FLOW_COLS = [
     "PEM_H2_PSA_1_outlet_mass_flow_kg_h",
     "SOEC_H2_PSA_1_outlet_mass_flow_kg_h",
     "ATR_PSA_1_outlet_mass_flow_kg_h",
+]
+SELL_POWER_COL_CANDIDATES = [
+    "P_sold",
+    "sell_power_mw",
+    "coordinator_sell_power_mw",
+]
+SELL_PRICE_COL_CANDIDATES = [
+    "spot_price",
+    "Spot",
 ]
 CAPEX_VARIANT_KEY_MAP = {
     "low": "total_installed_cost_low",
@@ -160,17 +171,42 @@ def _load_minimal_history(
 
     logger.info(f"Using purified H2 source columns: {flow_source_desc}")
 
+    sell_power_col = next((c for c in SELL_POWER_COL_CANDIDATES if c in all_cols), None)
+    sell_price_col = next((c for c in SELL_PRICE_COL_CANDIDATES if c in all_cols), None)
+    if sell_power_col and sell_price_col:
+        logger.info(
+            "Using electricity-sale columns: "
+            f"power={sell_power_col}, price={sell_price_col}"
+        )
+    else:
+        if not sell_power_col:
+            logger.warning(
+                "Electricity-sale power column not found "
+                f"(candidates: {SELL_POWER_COL_CANDIDATES})."
+            )
+        if not sell_price_col:
+            logger.warning(
+                "Electricity-sale price column not found "
+                f"(candidates: {SELL_PRICE_COL_CANDIDATES})."
+            )
+        logger.warning("Electricity-sale revenue will be set to zero.")
+
     present_optional = [c for c in optional_cols if c in all_cols]
     for col in optional_cols:
         if col not in present_optional:
             logger.warning(f"Optional column missing: {col}. Lifecycle spikes will be skipped.")
 
     cols_to_read = required_cols + flow_cols + present_optional
+    if sell_power_col:
+        cols_to_read.append(sell_power_col)
+    if sell_price_col:
+        cols_to_read.append(sell_price_col)
 
     dfs: List[pd.DataFrame] = []
     global_idx = 0
     factor = max(1, int(downsample_factor))
     running_cumulative_h2 = 0.0
+    running_cumulative_grid_revenue = 0.0
     prev_minute: Optional[float] = None
     last_dt_h = 1.0 / 60.0
     last_full_row: Optional[pd.DataFrame] = None
@@ -216,12 +252,23 @@ def _load_minimal_history(
         cumulative_h2 = running_cumulative_h2 + np.cumsum(step_h2_kg)
         running_cumulative_h2 = float(cumulative_h2[-1])
 
+        if sell_power_col and sell_price_col:
+            sold_mw = pd.to_numeric(df_chunk[sell_power_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            sold_mw = np.clip(sold_mw, a_min=0.0, a_max=None)
+            spot_price = pd.to_numeric(df_chunk[sell_price_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            step_grid_revenue_eur = sold_mw * spot_price * dt_h
+        else:
+            step_grid_revenue_eur = np.zeros(n_rows, dtype=float)
+        cumulative_grid_revenue_eur = running_cumulative_grid_revenue + np.cumsum(step_grid_revenue_eur)
+        running_cumulative_grid_revenue = float(cumulative_grid_revenue_eur[-1])
+
         if np.isfinite(minute_vals[-1]):
             prev_minute = float(minute_vals[-1])
 
         out_chunk = pd.DataFrame({
             "minute": minute_vals,
             "cumulative_h2_kg": cumulative_h2,
+            "cumulative_grid_revenue_eur": cumulative_grid_revenue_eur,
         })
         for col in present_optional:
             out_chunk[col] = pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
@@ -241,7 +288,7 @@ def _load_minimal_history(
             dfs.append(out_chunk)
 
     if not dfs:
-        return pd.DataFrame(columns=["minute", "cumulative_h2_kg"])
+        return pd.DataFrame(columns=["minute", "cumulative_h2_kg", "cumulative_grid_revenue_eur"])
 
     df = pd.concat(dfs, ignore_index=True)
     if factor > 1 and last_full_row is not None:
@@ -522,7 +569,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Regenerate 3 net_profit_plotly graphs (CAPEX low/base/high) by integrating "
-            "purified H2 from mixer/PSA flow tags."
+            "purified H2 from mixer/PSA flow tags and electricity-sale revenue."
         )
     )
     parser.add_argument(

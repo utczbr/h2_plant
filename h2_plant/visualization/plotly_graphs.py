@@ -2040,7 +2040,7 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     """
     Plot cumulative net profit over time after CAPEX and OPEX deduction.
     
-    Net Profit = (Cumulative H2 Value) - CAPEX - OPEX
+    Net Profit = (Cumulative Revenue) - CAPEX - OPEX
     """
     _check_dependencies()
     
@@ -2165,7 +2165,51 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     if purification_yield > 0 and purification_yield != 1.0:
         cumulative_h2 = cumulative_h2 * purification_yield
 
-    cumulative_value = cumulative_h2 * h2_price
+    cumulative_h2_value = cumulative_h2 * h2_price
+
+    # --- Cumulative Electricity-Sale Revenue ---
+    cumulative_grid_revenue = None
+    grid_cumulative_col = next(
+        (
+            c for c in df_plot.columns
+            if c.lower() in ['cumulative_grid_revenue_eur', 'cumulative_electricity_revenue_eur']
+        ),
+        None
+    )
+    if grid_cumulative_col:
+        cumulative_grid_revenue = pd.to_numeric(df_plot[grid_cumulative_col], errors='coerce').fillna(0).values
+    else:
+        sold_col = next(
+            (c for c in ['P_sold', 'sell_power_mw', 'coordinator_sell_power_mw'] if c in df_plot.columns),
+            None
+        )
+        price_col = next((c for c in ['spot_price', 'Spot'] if c in df_plot.columns), None)
+        if sold_col and price_col:
+            # Use local timestep integration if cumulative revenue was not precomputed.
+            if len(hours) > 1:
+                dt_h_fallback = np.median(np.diff(hours))
+            else:
+                dt_h_fallback = get_dt_hours(df_plot)
+            if not np.isfinite(dt_h_fallback) or dt_h_fallback <= 0:
+                dt_h_fallback = get_dt_hours(df_plot)
+            dt_h_steps = np.full(len(hours), dt_h_fallback, dtype=float)
+            if len(hours) > 1:
+                dt_h_steps[1:] = np.diff(hours)
+                invalid_dt = ~np.isfinite(dt_h_steps) | (dt_h_steps <= 0)
+                if invalid_dt.any():
+                    dt_h_steps[invalid_dt] = dt_h_fallback
+            sold_mw = pd.to_numeric(df_plot[sold_col], errors='coerce').fillna(0).values
+            sold_mw = np.clip(sold_mw, a_min=0.0, a_max=None)
+            spot_price = pd.to_numeric(df_plot[price_col], errors='coerce').fillna(0).values
+            cumulative_grid_revenue = np.cumsum(sold_mw * spot_price * dt_h_steps)
+        else:
+            if sold_col is None:
+                logger.warning("Electricity-sale power column missing. Electricity revenue set to zero.")
+            if price_col is None:
+                logger.warning("Electricity-sale price column missing. Electricity revenue set to zero.")
+            cumulative_grid_revenue = np.zeros(len(df_plot), dtype=float)
+
+    cumulative_total_revenue = cumulative_h2_value + cumulative_grid_revenue
     
     # --- CAPEX / OPEX Extraction ---
     metrics = df.attrs.get('metrics', {})
@@ -2271,11 +2315,14 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     n_years = int(year_idx.max()) + 1 if len(year_idx) > 0 else 1
     years = np.arange(n_years)
 
-    # Yearly revenue (delta cumulative H2)
+    # Yearly revenues (delta cumulative values)
     year_series = pd.Series(year_idx)
-    cum_series = pd.Series(cumulative_h2)
-    last_by_year = cum_series.groupby(year_series).last().reindex(years, fill_value=0.0)
-    revenue_per_year = last_by_year.diff().fillna(last_by_year).values * h2_price
+    h2_value_series = pd.Series(cumulative_h2_value)
+    grid_value_series = pd.Series(cumulative_grid_revenue)
+    h2_last_by_year = h2_value_series.groupby(year_series).last().reindex(years, fill_value=0.0)
+    grid_last_by_year = grid_value_series.groupby(year_series).last().reindex(years, fill_value=0.0)
+    h2_revenue_per_year = h2_last_by_year.diff().fillna(h2_last_by_year).values
+    grid_revenue_per_year = grid_last_by_year.diff().fillna(grid_last_by_year).values
 
     # Lifecycle event costs split by source (PEM/SOEC)
     event_costs_time_pem = np.zeros(len(hours))
@@ -2344,7 +2391,7 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         capex_per_year[0] = capex
 
     cumulative_opex_time = base_opex * (hours / 8760.0) + np.cumsum(event_costs_time_total)
-    net_profit = cumulative_value - capex - cumulative_opex_time
+    net_profit = cumulative_total_revenue - capex - cumulative_opex_time
 
     # --- Plot ---
     profit_color = get_viz_config('styling.colors.profit', '#2c3e50')
@@ -2359,7 +2406,7 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         row_heights=[0.65, 0.35],
         subplot_titles=(
             "Cumulative Net Profit (Time-Based OPEX)",
-            "Annual Revenue vs Cost Sources"
+            "Annual Revenue Sources vs Cost Sources"
         )
     )
 
@@ -2373,14 +2420,14 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         hovertemplate='Net Profit: %{y:,.0f}<extra></extra>'
     ), row=1, col=1)
 
-    # Cumulative H2 Value (Reference)
+    # Cumulative Total Revenue (Reference)
     fig.add_trace(ScatterType(
         x=hours,
-        y=cumulative_value,
+        y=cumulative_total_revenue,
         mode='lines',
-        name='Cumulative H2 Value',
+        name='Cumulative Total Revenue',
         line=dict(color=value_color, width=1.5, dash='dot'),
-        hovertemplate='H2 Value: %{y:,.0f}<extra></extra>'
+        hovertemplate='Total Revenue: %{y:,.0f}<extra></extra>'
     ), row=1, col=1)
 
     # Break-even line
@@ -2390,9 +2437,16 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     x_years = years + 1
     fig.add_trace(go.Bar(
         x=x_years,
-        y=revenue_per_year,
+        y=h2_revenue_per_year,
         name='H2 Revenue',
         marker_color='#2ecc71'
+    ), row=2, col=1)
+
+    fig.add_trace(go.Bar(
+        x=x_years,
+        y=grid_revenue_per_year,
+        name='Electricity Sale Revenue',
+        marker_color='#3498db'
     ), row=2, col=1)
 
     fig.add_trace(go.Bar(
@@ -2436,7 +2490,7 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     )
 
     fig.update_layout(
-        title=kwargs.get('title', 'Cumulative Net Profit (H2 Value - CAPEX - OPEX)'),
+        title=kwargs.get('title', 'Cumulative Net Profit (Revenue - CAPEX - OPEX)'),
         template='plotly_white',
         hovermode='x unified',
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
