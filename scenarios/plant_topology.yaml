@@ -151,8 +151,7 @@ nodes:
       steam_input_ratio_kg_per_kg_h2: 10.3
       power_first_step_mw: 0.12
       ramp_step_mw: 0.24
-      lifecycle: 61320 # 5 years lifecycle for degradation reset
-      process_step: 10
+      lifecycle: 61320 
     connections:
       - source_port: "h2_out"
         target_name: "SOEC_H2_Interchanger_1"
