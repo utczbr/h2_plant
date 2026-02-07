@@ -2157,6 +2157,14 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         
         cumulative_h2 = np.cumsum(step_mass)
     
+    purification_yield = kwargs.get('purification_yield', 1.0)
+    try:
+        purification_yield = float(purification_yield)
+    except (TypeError, ValueError):
+        purification_yield = 1.0
+    if purification_yield > 0 and purification_yield != 1.0:
+        cumulative_h2 = cumulative_h2 * purification_yield
+
     cumulative_value = cumulative_h2 * h2_price
     
     # --- CAPEX / OPEX Extraction ---
