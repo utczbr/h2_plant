@@ -13,6 +13,8 @@ __pycache__/
 
 # Outputs
 simulation_output/
+scenarios/simulation_output_5000/
+scenarios/simulation_output_ATR+SOEC+PEM_(30-103,37)/
 output/
 test_reports/
 vendor/

@@ -303,6 +303,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'cooling_manager_glycol_duty_kw': np.float64,
                 'cooling_manager_cw_supply_temp_c': np.float64,
                 'cooling_manager_cw_duty_kw': np.float64,
+                'cooling_manager_tower_fan_power_kw': np.float64,
+                'cooling_manager_glycol_fan_power_kw': np.float64,
+                'cooling_manager_power_kw': np.float64,
                 'integrated_global_efficiency': np.float64,
                 'P_soec_grid_mw': np.float64,
                 'P_pem_grid_mw': np.float64,
@@ -367,6 +370,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'cooling_manager_glycol_duty_kw': np.float64,
                 'cooling_manager_cw_supply_temp_c': np.float64,
                 'cooling_manager_cw_duty_kw': np.float64,
+                'cooling_manager_tower_fan_power_kw': np.float64,
+                'cooling_manager_glycol_fan_power_kw': np.float64,
+                'cooling_manager_power_kw': np.float64,
                 'integrated_global_efficiency': np.float64,
                 'P_soec_grid_mw': np.float64,
                 'P_pem_grid_mw': np.float64,
@@ -1397,6 +1403,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             history_store['cooling_manager_glycol_duty_kw'][local_idx] = getattr(cooling_manager, 'glycol_duty_kw', 0.0)
             history_store['cooling_manager_cw_supply_temp_c'][local_idx] = getattr(cooling_manager, 'cw_supply_temp_c', 0.0)
             history_store['cooling_manager_cw_duty_kw'][local_idx] = getattr(cooling_manager, 'cw_duty_kw', 0.0)
+            tower_fan_power_kw = getattr(cooling_manager, 'tower_fan_power_kw', 0.0)
+            glycol_fan_power_kw = getattr(cooling_manager, 'glycol_fan_power_kw', 0.0)
+            total_cooling_power_kw = getattr(cooling_manager, 'power_kw', None)
+            if total_cooling_power_kw is None:
+                total_cooling_power_kw = tower_fan_power_kw + glycol_fan_power_kw
+            history_store['cooling_manager_tower_fan_power_kw'][local_idx] = tower_fan_power_kw
+            history_store['cooling_manager_glycol_fan_power_kw'][local_idx] = glycol_fan_power_kw
+            history_store['cooling_manager_power_kw'][local_idx] = total_cooling_power_kw
 
         # 3. Optimized Component Recording Loop
         for rec in self._recorders:

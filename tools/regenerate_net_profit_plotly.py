@@ -63,6 +63,8 @@ CAPEX_VARIANT_SUFFIX = {
     "base": "_Capex_Base",
     "high": "_Capex_High",
 }
+DEFAULT_DISCOUNT_RATE = 0.08
+DEFAULT_PROJECT_LIFETIME_YEARS = 20
 
 
 def _resolve_history_chunks(
@@ -327,6 +329,87 @@ def _find_topology_path(output_dir: Path) -> Optional[Path]:
     return None
 
 
+def _find_economics_parameters_path(output_dir: Path) -> Optional[Path]:
+    candidates = [
+        output_dir / "economics_parameters.yaml",
+        output_dir.parent / "economics_parameters.yaml",
+        output_dir.parent / "scenarios" / "economics_parameters.yaml",
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _load_financial_horizon(output_dir: Path) -> Tuple[float, int]:
+    discount_rate = DEFAULT_DISCOUNT_RATE
+    project_lifetime_years = DEFAULT_PROJECT_LIFETIME_YEARS
+    config_path = _find_economics_parameters_path(output_dir)
+
+    if config_path is None:
+        logger.warning(
+            "economics_parameters.yaml not found; using defaults "
+            f"(discount_rate={discount_rate}, project_lifetime_years={project_lifetime_years})."
+        )
+        return discount_rate, project_lifetime_years
+
+    try:
+        data = yaml.safe_load(config_path.read_text()) or {}
+    except Exception as e:
+        logger.warning(
+            f"Failed to read economics_parameters.yaml ({config_path}): {e}. "
+            f"Using defaults (discount_rate={discount_rate}, project_lifetime_years={project_lifetime_years})."
+        )
+        return discount_rate, project_lifetime_years
+
+    raw_discount = data.get("discount_rate", discount_rate)
+    raw_years = data.get("project_lifetime_years", project_lifetime_years)
+
+    try:
+        discount_rate = float(raw_discount)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid discount_rate in economics_parameters.yaml (%r). Using default %s.",
+            raw_discount,
+            DEFAULT_DISCOUNT_RATE,
+        )
+        discount_rate = DEFAULT_DISCOUNT_RATE
+
+    if discount_rate <= -1.0:
+        logger.warning(
+            "discount_rate <= -1.0 in economics_parameters.yaml (%s). Using default %s.",
+            discount_rate,
+            DEFAULT_DISCOUNT_RATE,
+        )
+        discount_rate = DEFAULT_DISCOUNT_RATE
+
+    try:
+        project_lifetime_years = int(raw_years)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid project_lifetime_years in economics_parameters.yaml (%r). Using default %s.",
+            raw_years,
+            DEFAULT_PROJECT_LIFETIME_YEARS,
+        )
+        project_lifetime_years = DEFAULT_PROJECT_LIFETIME_YEARS
+
+    if project_lifetime_years <= 0:
+        logger.warning(
+            "project_lifetime_years <= 0 in economics_parameters.yaml (%s). Using default %s.",
+            project_lifetime_years,
+            DEFAULT_PROJECT_LIFETIME_YEARS,
+        )
+        project_lifetime_years = DEFAULT_PROJECT_LIFETIME_YEARS
+
+    logger.info(
+        "Using financial horizon: discount_rate=%s, project_lifetime_years=%s (source: %s)",
+        discount_rate,
+        project_lifetime_years,
+        config_path,
+    )
+    return discount_rate, project_lifetime_years
+
+
 def _load_lifecycle_hours(topology_path: Optional[Path]) -> Tuple[Optional[float], Optional[float]]:
     if topology_path is None or not topology_path.exists():
         logger.warning("plant_topology.yaml not found; skipping lifecycle-based OPEX spikes.")
@@ -512,9 +595,12 @@ def regenerate_net_profit_plotly(
     config_candidates.extend([output_dir / "Economics", output_dir.parent / "Economics"])
     opex_config_path = _find_config(config_candidates, "opex_config.yaml")
     pem_reserve_pct, soec_reserve_pct = _load_opex_reserves(opex_config_path)
+    discount_rate, project_lifetime_years = _load_financial_horizon(output_dir)
 
     kwargs = {}
     kwargs["opex"] = opex
+    kwargs["discount_rate"] = discount_rate
+    kwargs["project_lifetime_years"] = project_lifetime_years
     logger.info(f"Using OPEX: {opex:,.0f}")
     if h2_price_eur_kg is not None:
         kwargs["h2_price_eur_kg"] = h2_price_eur_kg

@@ -1274,129 +1274,177 @@ def plot_dispatch_strategy(df: pd.DataFrame, **kwargs) -> go.Figure:
 @log_graph_errors
 def plot_power_breakdown_pie(df: pd.DataFrame, **kwargs) -> go.Figure:
     """
-    Donut chart showing Total Energy Consumption breakdown.
-    Designed to be compact for academic thesis use.
-    
-    Calculates Total Energy (MWh) for each subsystem over the simulation period.
+    Donut chart showing electrical energy consumption breakdown.
+
+    Uses explicit electrical tags and timestep integration to avoid
+    counting thermal duties or aggregate dispatch/market columns.
     """
     _check_dependencies()
-    
-    # -------------------------
-    # 1) Category definitions
-    # -------------------------
-    storage_compression_comps = [
-        'LP_Compressor_S1', 'LP_Intercooler_1',
-        'HP_Compressor_S2', 'HP_Intercooler_2',
-        'HP_Compressor_S3', 'HP_Intercooler_3',
-        'HP_Compressor_S4', 'HP_Intercooler_4',
-        'HP_Compressor_S5', 'Truck_Station'
-    ]
-    pem_comps = [
-        'PEM_Electrolyzer', 'PEM_H2_KOD_1', 'PEM_H2_KOD_2', 'PEM_H2_Coalescer_1',
-        'PEM_H2_ElectricBoiler_1', 'PEM_H2_Deoxo_1', 'PEM_H2_KOD_3',
-        'PEM_H2_ElectricBoiler_2', 'PEM_H2_PSA_1', 'PEM_O2_KOD_1', 
-        'PEM_O2_KOD_2', 'PEM_O2_Coalescer_1', 'PEM_O2_ElectricBoiler'
-    ]
-    soec_comps = [
-        'SOEC_Cluster', 'SOEC_H2_Interchanger_1', 'SOEC_H2_KOD_1', 'SOEC_H2_Cyclone_1',
-        'SOEC_H2_Compressor_S1', 'SOEC_H2_Compressor_S2', 'SOEC_H2_Cyclone_2',
-        'SOEC_H2_Compressor_S3', 'SOEC_H2_Cyclone_3', 'SOEC_H2_Compressor_S4',
-        'SOEC_H2_Cyclone_4', 'SOEC_H2_Compressor_S5', 'SOEC_H2_Cyclone_5',
-        'SOEC_H2_Compressor_S6', 'SOEC_H2_Deoxo_1', 'SOEC_H2_Coalescer_2',
-        'SOEC_H2_ElectricBoiler_PSA', 'SOEC_H2_PSA_1',
-        'SOEC_O2_Interchanger_1', 'SOEC_O2_compressor_1', 'SOEC_O2_compressor_2',
-        'SOEC_O2_compressor_3', 'SOEC_O2_compressor_4',
-        'SOEC_Steam_Boiler', 'SOEC_Steam_Compressor_1', 'SOEC_Steam_Drycooler',
-        'SOEC_Steam_Compressor_2', 'SOEC_Feed_Pump', 'SOEC_H2_Boiler'
-    ]
-    atr_comps = [
-        'ATR_Plant', 'ATR_H01_Boiler', 'ATR_H02_Boiler', 'ATR_H04_Boiler',
-        'ATR_O2_Compressor', 'ATR_PSA_1', 'ATR_H2_Compressor_1', 'ATR_H2_Compressor_2',
-        'Biogas_Source', 'Biogas_Compressor_1', 'Biogas_Compressor_2', 'Biogas_Compressor_3'
-    ]
-    water_comps = [
-        'Water_Source', 'Water_Purifier', 'UltraPure_Tank',
-        'ATR_Feed_Pump', 'PEM_Water_Pump', 'SOEC_Drain_Pump',
-        'SOEC_DRAIN_PUMP_1', 'SOEC_DRAIN_PUMP_2',
-        'ATR_Drain_Pump_1', 'ATR_Drain_Pump_2'
-    ]
+    if df is None or df.empty:
+        return _empty_figure("No energy consumption data found")
 
-    # Categories initialization (MWh)
-    categories = {
-        'Storage & Compression': 0.0,
-        'PEM': 0.0,
-        'SOEC': 0.0,
-        'ATR': 0.0,
-        'Water Treatment': 0.0,
-        'Cooling': 0.0
-    }
+    category_order = [
+        'Cooling',
+        'Compression',
+        'Storage',
+        'Water treatment',
+        'ATR',
+        'PEM',
+        'SOEC',
+    ]
+    categories_kwh = {name: 0.0 for name in category_order}
 
-    # -------------------------
-    # 2) Calculate Energy
-    # -------------------------
-    # Determine simulation duration in hours
-    dt_seconds = df.attrs.get('dt_seconds', 60.0)
-    total_duration_hours = len(df) * dt_seconds / 3600.0
-    
-    # If minute column exists, try to be more precise
+    # Build timestep in hours (same length as dataframe rows).
+    dt_seconds = float(df.attrs.get('dt_seconds', 60.0))
+    dt_default_h = dt_seconds / 3600.0 if dt_seconds > 0 else (1.0 / 60.0)
     if 'minute' in df.columns and len(df) > 1:
-        total_duration_hours = (df['minute'].max() - df['minute'].min() + (dt_seconds/60.0)) / 60.0
+        minute_vals = pd.to_numeric(df['minute'], errors='coerce').to_numpy(dtype=float)
+        dt_h_steps = np.full(len(df), dt_default_h, dtype=float)
+        delta_h = np.diff(minute_vals) / 60.0
+        valid_delta = delta_h[np.isfinite(delta_h) & (delta_h > 0)]
+        if valid_delta.size:
+            dt_fallback_h = float(np.median(valid_delta))
+        else:
+            dt_fallback_h = dt_default_h
+        dt_h_steps[0] = dt_fallback_h
+        if len(df) > 1:
+            dt_h_steps[1:] = delta_h
+        invalid_dt = ~np.isfinite(dt_h_steps) | (dt_h_steps <= 0)
+        if invalid_dt.any():
+            dt_h_steps[invalid_dt] = dt_fallback_h
+    else:
+        dt_h_steps = np.full(len(df), dt_default_h, dtype=float)
 
-    def is_cooling(col_name: str) -> bool:
+    include_suffixes = (
+        '_power_kw',
+        '_electrical_power_kw',
+        '_power_input_kw',
+        '_truck_power_kw',
+    )
+    core_cols = ['P_pem']
+    if 'P_soec_actual' in df.columns:
+        core_cols.append('P_soec_actual')
+    elif 'P_soec' in df.columns:
+        core_cols.append('P_soec')
+
+    excluded_exact = {
+        'P_offer',
+        'P_sold',
+        'P_bop_mw',
+        'P_soec_grid_mw',
+        'P_pem_grid_mw',
+        'P_bop_grid_usage_mw',
+        'bop_grid_import_mw',
+        'compressor_power_kw',
+    }
+    excluded_contains = (
+        'cooling_load_kw',
+        'heat_rejected_kw',
+        'latent_heat_kw',
+        'sensible_heat_kw',
+        'q_transferred_kw',
+        'duty_kw',
+        'q_useful_kw',
+        'price',
+    )
+
+    def _is_candidate(col_name: str) -> bool:
+        if col_name in core_cols:
+            return True
+        if col_name in excluded_exact:
+            return False
         lower = col_name.lower()
-        keywords = ['drycooler', 'chiller', 'intercooler', 'coolingmanager']
-        is_cooling_comp = any(k in lower for k in keywords)
-        is_power = ('fan_power' in lower or 'electrical_power' in lower or
-                    'power_kw' in lower or '_kw' in lower or lower.endswith('kw') or lower.endswith('mw'))
-        return is_cooling_comp and is_power and 'duty' not in lower
+        if any(token in lower for token in excluded_contains):
+            return False
+        if col_name.startswith('soec_module_powers_'):
+            return False
+        return lower.endswith(include_suffixes)
 
-    # Gather power columns
-    cols = df.columns.tolist()
-    power_cols = [c for c in cols if (c.lower().endswith('kw') or c.lower().endswith('mw') or c.startswith('P_'))
-                  and 'price' not in c.lower()]
+    candidate_cols = [col for col in df.columns if _is_candidate(col)]
+    if not candidate_cols:
+        return _empty_figure("No electrical power columns found for breakdown.")
 
-    for col in power_cols:
-        # Get Mean Power in kW
-        mean_kw = df[col].mean()
-        if pd.isna(mean_kw): continue
-        
-        # Convert MW columns to kW
-        if 'mw' in col.lower() or col in ['P_pem', 'P_soec_actual', 'P_offer', 'P_sold', 'P_bop_mw']:
-            mean_kw *= 1000.0
+    cooling_manager_power_cols = {
+        'cooling_manager_tower_fan_power_kw',
+        'cooling_manager_glycol_fan_power_kw',
+        'cooling_manager_power_kw',
+    }
+    has_cooling_manager_power = any(col in df.columns for col in cooling_manager_power_cols)
+    if not has_cooling_manager_power:
+        logger.warning(
+            "Cooling manager electrical power columns not found. "
+            "Cooling slice may be underreported for this dataset."
+        )
 
-        if abs(mean_kw) < 0.001: continue
+    def _classify_category(col_name: str) -> Optional[str]:
+        lower = col_name.lower()
+        if col_name == 'P_pem':
+            return 'PEM'
+        if col_name in ('P_soec_actual', 'P_soec'):
+            return 'SOEC'
 
-        # Calculate Energy for this component (kWh) -> convert to MWh later
-        energy_kwh = mean_kw * total_duration_hours
+        storage_train_compressors = (
+            'lp_compressor_s1',
+            'hp_compressor_s2',
+            'hp_compressor_s3',
+            'hp_compressor_s4',
+            'hp_compressor_s5',
+        )
+        # Explicit override: storage-train compressors belong to Storage.
+        if any(
+            lower.startswith(f"{comp}_") or lower == comp
+            for comp in storage_train_compressors
+        ):
+            return 'Storage'
 
-        col_lower = col.lower()
-        if is_cooling(col):
-            categories['Cooling'] += energy_kwh
-        elif any(col.startswith(comp) for comp in storage_compression_comps):
-            categories['Storage & Compression'] += energy_kwh
-        elif any(col.startswith(comp) for comp in pem_comps) or col == 'P_pem':
-            categories['PEM'] += energy_kwh
-        elif any(col.startswith(comp) for comp in soec_comps) or col in ['P_soec_actual', 'P_soec']:
-            categories['SOEC'] += energy_kwh
-        elif any(col.startswith(comp) for comp in atr_comps):
-            categories['ATR'] += energy_kwh
-        elif any(col.startswith(comp) for comp in water_comps) or 'pump' in col_lower:
-            categories['Water Treatment'] += energy_kwh
+        # Utility-first precedence.
+        if any(token in lower for token in ('drycooler', 'dry_cooler', 'chiller', 'intercooler', 'cooling_manager')):
+            return 'Cooling'
+        if 'compressor' in lower:
+            return 'Compression'
+        if any(token in lower for token in ('lp_', 'hp_', 'storage_tank', 'truck_station')):
+            return 'Storage'
+        if any(token in lower for token in ('water_', 'ultrapure', 'drain_pump', 'feed_pump', 'water_pump', 'purifier')):
+            return 'Water treatment'
 
-    # Convert kWh to MWh
-    for k in categories:
-        categories[k] /= 1000.0
+        if lower.startswith('atr_') or lower.startswith('biogas_'):
+            return 'ATR'
+        if lower.startswith('pem_'):
+            return 'PEM'
+        if lower.startswith('soec_'):
+            return 'SOEC'
+        return None
 
-    # -------------------------
-    # 3) Plotting
-    # -------------------------
-    # Filter zeros
-    labels = [k for k, v in categories.items() if v > 0.01]
-    values = [categories[k] for k in labels]
+    unassigned_cols: List[str] = []
+    for col in candidate_cols:
+        series = pd.to_numeric(df[col], errors='coerce').fillna(0.0).to_numpy(dtype=float)
+        series = np.clip(series, a_min=0.0, a_max=None)
+        if col in ('P_pem', 'P_soec_actual', 'P_soec') or col.lower().endswith('_mw'):
+            series = series * 1000.0
+        energy_kwh = float(np.sum(series * dt_h_steps))
+        if energy_kwh <= 0:
+            continue
+        category = _classify_category(col)
+        if category is None:
+            unassigned_cols.append(col)
+            continue
+        categories_kwh[category] += energy_kwh
+
+    if unassigned_cols:
+        preview = ", ".join(sorted(unassigned_cols)[:6])
+        logger.warning(
+            "Power columns skipped due to unknown category mapping: "
+            f"{preview}{' ...' if len(unassigned_cols) > 6 else ''}"
+        )
+
+    categories_mwh = {k: v / 1000.0 for k, v in categories_kwh.items()}
+
+    labels = [k for k, v in categories_mwh.items() if v > 0.01]
+    values = [categories_mwh[k] for k in labels]
     total_mwh = sum(values)
     
     if total_mwh == 0:
-        return _empty_figure("No energy consumption data found")
+        return _empty_figure("No electrical energy consumption data found")
 
     # Sort slices descending
     sorted_indices = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
@@ -1405,12 +1453,13 @@ def plot_power_breakdown_pie(df: pd.DataFrame, **kwargs) -> go.Figure:
 
     # Colors
     color_map = {
-        'Storage & Compression': '#1f77b4', # Blue
-        'PEM': '#d62728',    # Red
-        'SOEC': '#ff7f0e',   # Orange
-        'ATR': '#2ca02c',    # Green
-        'Water Treatment': '#17becf', # Cyan
-        'Cooling': '#9467bd' # Purple
+        'ATR': '#2ca02c',
+        'PEM': '#d62728',
+        'SOEC': '#ff7f0e',
+        'Storage': '#1f77b4',
+        'Water treatment': '#17becf',
+        'Cooling': '#9467bd',
+        'Compression': '#8c564b',
     }
     colors = [color_map.get(l, '#7f7f7f') for l in labels]
 
@@ -1418,6 +1467,7 @@ def plot_power_breakdown_pie(df: pd.DataFrame, **kwargs) -> go.Figure:
         labels=labels,
         values=values,
         hole=0.6, # Donut style
+        domain=dict(x=[0.12, 0.88], y=[0.20, 0.96]),
         textinfo='label+percent',
         textposition='outside', # cleaner for thesis
         marker=dict(colors=colors, line=dict(color='#FFFFFF', width=2)),
@@ -1434,7 +1484,7 @@ def plot_power_breakdown_pie(df: pd.DataFrame, **kwargs) -> go.Figure:
 
     fig.update_layout(
         title=dict(
-            text=kwargs.get('title', "Plant Energy Consumption Breakdown"),
+            text=kwargs.get('title', "Electrical Energy Consumption Breakdown"),
             x=0.5,
             xanchor='center'
         ),
@@ -1442,14 +1492,28 @@ def plot_power_breakdown_pie(df: pd.DataFrame, **kwargs) -> go.Figure:
         legend=dict(
             orientation="h",
             yanchor="bottom",
-            y=-0.2, # Below chart
+            y=-0.08, # Below chart
             xanchor="center",
             x=0.5
         ),
-        margin=dict(l=20, r=20, t=50, b=20),
-        height=400, # Compact height
+        margin=dict(l=40, r=40, t=70, b=120),
+        height=620,
         template='plotly_white'
     )
+
+    if not has_cooling_manager_power:
+        fig.add_annotation(
+            text=(
+                "Note: cooling_manager fan power columns are missing in this history; "
+                "Cooling may be underreported."
+            ),
+            xref="paper",
+            yref="paper",
+            x=0.5,
+            y=-0.10,
+            showarrow=False,
+            font=dict(size=10, color="#666")
+        )
 
     return fig
 
@@ -2278,11 +2342,37 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     soec_lifecycle_h = kwargs.get('soec_lifecycle_h')
     pem_reserve_pct = kwargs.get('pem_reserve_pct')
     soec_reserve_pct = kwargs.get('soec_reserve_pct')
+    discount_rate = kwargs.get('discount_rate', 0.08)
+    project_lifetime_years = kwargs.get('project_lifetime_years', 20)
+    show_discounted_cashflow = kwargs.get('show_discounted_cashflow', True)
+    show_break_even_markers = kwargs.get('show_break_even_markers', True)
 
     try:
         stack_threshold = float(stack_threshold)
     except (TypeError, ValueError):
         stack_threshold = 0.01
+    try:
+        discount_rate = float(discount_rate)
+    except (TypeError, ValueError):
+        discount_rate = 0.08
+    if discount_rate <= -1.0:
+        logger.warning("Discount rate <= -1.0 is invalid. Using 0.0.")
+        discount_rate = 0.0
+    try:
+        project_lifetime_years = int(project_lifetime_years)
+    except (TypeError, ValueError):
+        project_lifetime_years = 20
+    if project_lifetime_years <= 0:
+        logger.warning("Project lifetime years must be positive. Using 20.")
+        project_lifetime_years = 20
+    if isinstance(show_discounted_cashflow, str):
+        show_discounted_cashflow = show_discounted_cashflow.strip().lower() in {"1", "true", "yes", "y", "on"}
+    else:
+        show_discounted_cashflow = bool(show_discounted_cashflow)
+    if isinstance(show_break_even_markers, str):
+        show_break_even_markers = show_break_even_markers.strip().lower() in {"1", "true", "yes", "y", "on"}
+    else:
+        show_break_even_markers = bool(show_break_even_markers)
 
     def _to_float(val: Optional[float]) -> Optional[float]:
         if val is None:
@@ -2393,6 +2483,52 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     cumulative_opex_time = base_opex * (hours / 8760.0) + np.cumsum(event_costs_time_total)
     net_profit = cumulative_total_revenue - capex - cumulative_opex_time
 
+    # Financial KPIs (NPV + break-even)
+    annual_revenue_per_year = h2_revenue_per_year + grid_revenue_per_year
+    annual_cost_per_year = base_opex_per_year + pem_spike_per_year + soec_spike_per_year
+    operating_cashflow_per_year = annual_revenue_per_year - annual_cost_per_year
+    n_years_available = len(operating_cashflow_per_year)
+    analysis_years = min(project_lifetime_years, n_years_available)
+    if project_lifetime_years > n_years_available:
+        logger.warning(
+            "Project lifetime (%s years) exceeds available history horizon (%s years). "
+            "NPV/break-even computed on available horizon.",
+            project_lifetime_years,
+            n_years_available,
+        )
+
+    analysis_idx = np.arange(1, analysis_years + 1, dtype=float)
+    operating_cf_analysis = operating_cashflow_per_year[:analysis_years]
+    discount_factors = 1.0 / np.power(1.0 + discount_rate, analysis_idx) if analysis_years > 0 else np.array([])
+    discounted_operating_cf = operating_cf_analysis * discount_factors if analysis_years > 0 else np.array([])
+    discounted_cum_cf = -capex + np.cumsum(discounted_operating_cf) if analysis_years > 0 else np.array([-capex], dtype=float)
+    npv = float(discounted_cum_cf[-1]) if discounted_cum_cf.size else float(-capex)
+    x_year_end_hours = analysis_idx * 8760.0 if analysis_years > 0 else np.array([], dtype=float)
+
+    def _find_zero_crossing(x_vals: np.ndarray, y_vals: np.ndarray) -> Optional[float]:
+        if len(x_vals) == 0 or len(y_vals) == 0:
+            return None
+        for idx in range(len(y_vals)):
+            y_cur = y_vals[idx]
+            if np.isfinite(y_cur) and y_cur == 0:
+                return float(x_vals[idx])
+            if idx + 1 >= len(y_vals):
+                continue
+            y_next = y_vals[idx + 1]
+            if not np.isfinite(y_cur) or not np.isfinite(y_next):
+                continue
+            if y_cur < 0 <= y_next:
+                x0 = x_vals[idx]
+                x1 = x_vals[idx + 1]
+                if y_next == y_cur:
+                    return float(x1)
+                frac = (-y_cur) / (y_next - y_cur)
+                return float(x0 + frac * (x1 - x0))
+        return None
+
+    break_even_hour_undiscounted = _find_zero_crossing(hours, net_profit)
+    break_even_hour_discounted = _find_zero_crossing(x_year_end_hours, discounted_cum_cf) if analysis_years > 0 else None
+
     # --- Plot ---
     profit_color = get_viz_config('styling.colors.profit', '#2c3e50')
     value_color = get_viz_config('styling.colors.h2total', '#2ecc71')
@@ -2430,8 +2566,51 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         hovertemplate='Total Revenue: %{y:,.0f}<extra></extra>'
     ), row=1, col=1)
 
+    if show_discounted_cashflow and analysis_years > 0:
+        fig.add_trace(go.Scatter(
+            x=x_year_end_hours,
+            y=discounted_cum_cf,
+            mode='lines+markers',
+            name='Discounted Cumulative Cash Flow',
+            line=dict(color='#8e44ad', width=2, dash='dash'),
+            marker=dict(size=5),
+            hovertemplate='Discounted CF: %{y:,.0f}<extra></extra>'
+        ), row=1, col=1)
+
     # Break-even line
     fig.add_hline(y=0, line=dict(color='#7f8c8d', width=1, dash='dash'), row=1, col=1)
+
+    if show_break_even_markers:
+        if break_even_hour_undiscounted is not None:
+            fig.add_vline(
+                x=break_even_hour_undiscounted,
+                line=dict(color='#16a085', width=1.5, dash='dot'),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(go.Scatter(
+                x=[break_even_hour_undiscounted],
+                y=[0.0],
+                mode='markers',
+                name='Break-even (Undiscounted)',
+                marker=dict(color='#16a085', size=9, symbol='diamond'),
+                hovertemplate='Break-even (undisc.): %{x:,.1f} h<extra></extra>'
+            ), row=1, col=1)
+        if break_even_hour_discounted is not None:
+            fig.add_vline(
+                x=break_even_hour_discounted,
+                line=dict(color='#8e44ad', width=1.5, dash='dot'),
+                row=1,
+                col=1,
+            )
+            fig.add_trace(go.Scatter(
+                x=[break_even_hour_discounted],
+                y=[0.0],
+                mode='markers',
+                name='Break-even (Discounted)',
+                marker=dict(color='#8e44ad', size=9, symbol='x'),
+                hovertemplate='Break-even (disc.): %{x:,.1f} h<extra></extra>'
+            ), row=1, col=1)
 
     # Bottom bar panel
     x_years = years + 1
@@ -2489,13 +2668,59 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
         font=dict(size=10, color="#555")
     )
 
+    if break_even_hour_undiscounted is None:
+        break_even_undisc_label = "Not reached"
+    else:
+        break_even_undisc_label = (
+            f"Year {break_even_hour_undiscounted / 8760.0:.2f} "
+            f"(Hour {break_even_hour_undiscounted:,.0f})"
+        )
+    if break_even_hour_discounted is None:
+        break_even_disc_label = "Not reached"
+    else:
+        break_even_disc_label = (
+            f"Year {break_even_hour_discounted / 8760.0:.2f} "
+            f"(Hour {break_even_hour_discounted:,.0f})"
+        )
+    kpi_text = (
+        f"NPV @{analysis_years}y (r={discount_rate:.2%}): {npv:,.0f} EUR"
+        f"<br>Break-even (undisc.): {break_even_undisc_label}"
+        f"<br>Break-even (disc.): {break_even_disc_label}"
+    )
+    fig.add_annotation(
+        text=kpi_text,
+        xref="paper",
+        yref="paper",
+        x=0.99,
+        y=0.97,
+        xanchor="right",
+        yanchor="top",
+        showarrow=False,
+        align="left",
+        bordercolor="#d0d0d0",
+        borderwidth=1,
+        bgcolor="rgba(255,255,255,0.9)",
+        font=dict(size=10, color="#333")
+    )
+
     fig.update_layout(
         title=kwargs.get('title', 'Cumulative Net Profit (Revenue - CAPEX - OPEX)'),
         template='plotly_white',
         hovermode='x unified',
         legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
         barmode='relative',
-        height=720
+        height=720,
+        meta=dict(
+            npv=npv,
+            break_even_hour_undiscounted=break_even_hour_undiscounted,
+            break_even_year_discounted=(
+                (break_even_hour_discounted / 8760.0)
+                if break_even_hour_discounted is not None
+                else None
+            ),
+            discount_rate=discount_rate,
+            analysis_years=analysis_years,
+        ),
     )
 
     fig.update_xaxes(title_text='Time (hours)', row=1, col=1)
