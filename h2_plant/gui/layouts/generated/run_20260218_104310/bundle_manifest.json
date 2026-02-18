@@ -1,0 +1,18 @@
+{
+  "bundle_dir": "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/gui/layouts/generated/run_20260218_104310",
+  "source_template": "/home/stuart/Documentos/Planta Hidrogenio/h2_plant/gui/layouts/generated/session_20260218_104240",
+  "generated_at": "2026-02-18T13:43:10.578341+00:00",
+  "files": {
+    "topology": "plant_topology.yaml",
+    "economics": "economics_parameters.yaml",
+    "copied": [
+      "physics_parameters.yaml",
+      "data/NL_Prices_2024_15min.csv",
+      "data/producao_horaria_turbina.csv",
+      "simulation_config.yaml",
+      "Economics/equipment_mappings.yaml",
+      "Economics/opex_config.yaml"
+    ]
+  },
+  "scenario_name": "Plant PEM+SOEC+ATR (30 tanks with 103.37 m3 each)"
+}

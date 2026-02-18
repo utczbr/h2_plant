@@ -1,0 +1,8 @@
+timestep_hours: 0.0167
+duration_hours: 24
+start_hour: 0
+checkpoint_interval_hours: 120
+energy_price_file: data/NL_Prices_2024_15min.csv
+wind_data_file: data/producao_horaria_turbina.csv
+dispatch_strategy: ECONOMIC_SPOT
+storage_control_mode: SCHMITT_TRIGGER

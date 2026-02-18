@@ -25,7 +25,7 @@ class ValveNode(ConfigurableNode):
         
         self.add_enum_property(
             'fluid_type',
-            options=['H2', 'N2', 'O2', 'CO2'],
+            options=['H2', 'N2', 'O2', 'CO2', 'H2O', 'CH4', 'CO'],
             default_index=0,
             tab='Control'
         )

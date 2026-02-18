@@ -195,9 +195,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._atr = self._find_atr(registry)
         
         # Lookup Power Transformers for efficiency gross-up
-        self._soec_trafo = registry.get('SOEC_Transformer')
-        self._pem_trafo = registry.get('PEM_Transformer')
-        self._bop_trafo = registry.get('BOP_Transformer')
+        self._soec_trafo = registry.get('SOEC_Transformer') if registry.has('SOEC_Transformer') else None
+        self._pem_trafo = registry.get('PEM_Transformer') if registry.has('PEM_Transformer') else None
+        self._bop_trafo = registry.get('BOP_Transformer') if registry.has('BOP_Transformer') else None
         
         # Cache transformer efficiencies (default 1.0 if no transformer)
         self._η_soec_trafo = self._soec_trafo.efficiency if self._soec_trafo else 1.0
@@ -444,7 +444,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             self._soec_cid = None
 
         # 7. Pre-resolve cooling manager
-        self._cooling_manager = registry.get('cooling_manager') if registry else None
+        self._cooling_manager = registry.get('cooling_manager') if registry and registry.has('cooling_manager') else None
 
         # 8. Pre-resolve economics config
         self._bop_pricing_mode = getattr(context.economics, 'bop_pricing_mode', 'fixed')
@@ -1463,19 +1463,27 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                  m_arrs[i][local_idx] = tank.mass_kg
 
         h2_net_kg_h = 0.0
-        mixer = self._registry.get('H2_Production_Mixer')
+        has_net_h2_source = False
+
+        mixer = self._safe_registry_get('H2_Production_Mixer')
         if mixer:
+            has_net_h2_source = True
             out_stream = mixer.get_output('outlet_stream')
-            if out_stream: h2_net_kg_h = out_stream.mass_flow_kg_h
+            if out_stream:
+                h2_net_kg_h = out_stream.mass_flow_kg_h
         else:
             # Fallback: Sum PSA outputs
             for psa_id in ['PEM_H2_PSA_1', 'SOEC_H2_PSA_1', 'ATR_PSA_1']:
-                psa = self._registry.get(psa_id)
+                psa = self._safe_registry_get(psa_id)
                 if psa:
+                    has_net_h2_source = True
                     stream = psa.get_output('product_outlet')
-                    if stream: h2_net_kg_h += stream.mass_flow_kg_h
-        
-        h2_net_kg = h2_net_kg_h * dt
+                    if stream:
+                        h2_net_kg_h += stream.mass_flow_kg_h
+
+        # If no mixer/PSA references exist in registry, fallback to gross-H2 efficiency
+        # path by keeping h2_net_kg as None.
+        h2_net_kg = (h2_net_kg_h * dt) if has_net_h2_source else None
             
         # 5. Integrated Efficiency (Inlined)
         self._calculate_integrated_efficiency_inline(history_store, local_idx, dt, h2_net_kg)
@@ -1576,6 +1584,14 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
     def _find_atr(self, registry):
         for _, comp in registry.list_components():
             if 'ATR' in comp.__class__.__name__: return comp
+        return None
+
+    def _safe_registry_get(self, component_id: str):
+        """Return component if present, otherwise None."""
+        if not self._registry:
+            return None
+        if self._registry.has(component_id):
+            return self._registry.get(component_id)
         return None
 
     def print_summary(self):

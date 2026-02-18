@@ -54,6 +54,8 @@ class SimulationConfig(BaseModel):
     checkpoint_interval_hours: int = 8
     energy_price_file: str
     wind_data_file: str
+    dispatch_strategy: str = "ECONOMIC_SPOT"
+    storage_control_mode: str = "SCHMITT_TRIGGER"
 
 # --- ECONOMICS MODELS ---
 
@@ -70,6 +72,9 @@ class EconomicsConfig(BaseModel):
     # Dual PPA Pricing Configuration
     ppa_contract_price_eur_mwh: float = 80.0  # Price for guaranteed block
     ppa_variable_price_eur_mwh: float = 55.0  # Price for excess renewable
+    # Project Economics
+    discount_rate: float = 0.08
+    project_lifetime_years: int = 20
 
 # --- MASTER CONTEXT ---
 

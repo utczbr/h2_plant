@@ -106,57 +106,54 @@ class TopologyInferenceEngine:
     # Mapping from node types to system types
     NODE_TYPE_TO_SYSTEM = {
         # Production
-        "ElectrolyzerNode": SystemType.PRODUCTION,
         "PEMStackNode": SystemType.PRODUCTION,
         "SOECStackNode": SystemType.PRODUCTION,
-        "ATRSourceNode": SystemType.PRODUCTION,
-        "ATRReactorNode": SystemType.PRODUCTION,
-        "OxygenSourceNode": SystemType.EXTERNAL,
-        "NaturalGasSupplyNode": SystemType.EXTERNAL,
-        
-        # Storage
-        "LPTankNode": SystemType.STORAGE,
-        "HPTankNode": SystemType.STORAGE,
-        "OxygenBufferNode": SystemType.STORAGE,
-        "SeparationTankNode": SystemType.STORAGE,
-        
-        # Compression
-        "FillingCompressorNode": SystemType.COMPRESSION,
-        "OutgoingCompressorNode": SystemType.COMPRESSION,
-        "ProcessCompressorNode": SystemType.COMPRESSION,
-        
+        "RectifierNode": SystemType.UTILITIES,
+
         # Thermal
-        "HeatExchangerNode": SystemType.THERMAL,
-        "SteamGeneratorNode": SystemType.THERMAL,
         "ChillerNode": SystemType.THERMAL,
         "DryCoolerNode": SystemType.THERMAL,
-        
+        "InterchangerNode": SystemType.THERMAL,
+        "ElectricBoilerNode": SystemType.THERMAL,
+        "AttemperatorNode": SystemType.THERMAL,
+        "CoolingManagerNode": SystemType.THERMAL,
+
         # Separation
         "PSAUnitNode": SystemType.SEPARATION,
-        "WGSReactorNode": SystemType.SEPARATION,
         "CoalescerNode": SystemType.SEPARATION,
         "KnockOutDrumNode": SystemType.SEPARATION,
         "DeoxoReactorNode": SystemType.SEPARATION,
-        "TSAUnitNode": SystemType.SEPARATION,
-        
-        # Logic & Control
-        "DemandSchedulerNode": SystemType.LOGIC,
-        "EnergyPriceNode": SystemType.LOGIC,
-        "ArbitrageNode": SystemType.LOGIC,
-        
-        # Utilities
-        "BatteryNode": SystemType.UTILITIES,
-        "GridConnectionNode": SystemType.EXTERNAL,
-        "WaterSupplyNode": SystemType.EXTERNAL,
+        "HydrogenMultiCycloneNode": SystemType.SEPARATION,
+        "SeparationTankNode": SystemType.SEPARATION,
+        "SyngasPSANode": SystemType.SEPARATION,
+
+        # Utilities / Flow
         "MixerNode": SystemType.UTILITIES,
-        "WaterMixerNode": SystemType.UTILITIES,
-        
-        # Fluid
-        "RecirculationPumpNode": SystemType.COMPRESSION,
-        "PumpNode": SystemType.COMPRESSION,
-        
-        # Logistics
-        "ConsumerNode": SystemType.LOGIC,
+        "ValveNode": SystemType.UTILITIES,
+        "StreamSplitterNode": SystemType.UTILITIES,
+        "DrainRecorderMixerNode": SystemType.UTILITIES,
+        "SignalMakeupMixerNode": SystemType.UTILITIES,
+        "ProportionalMakeupMixerNode": SystemType.UTILITIES,
+        "OxygenMakeupNode": SystemType.UTILITIES,
+
+        # Water
+        "WaterPurifierNode": SystemType.UTILITIES,
+        "UltraPureWaterTankNode": SystemType.UTILITIES,
+        "ExternalWaterSourceNode": SystemType.UTILITIES,
+        "WaterPumpThermodynamicNode": SystemType.UTILITIES,
+
+        # Storage / Delivery
+        "DetailedTankNode": SystemType.UTILITIES,
+        "DischargeStationNode": SystemType.UTILITIES,
+        "CompressorSingleNode": SystemType.UTILITIES,
+
+        # Reforming
+        "IntegratedATRPlantNode": SystemType.PRODUCTION,
+        "ATRBoilerNode": SystemType.THERMAL,
+        "BiogasSourceNode": SystemType.UTILITIES,
+
+        # Fallback
+        "ScenarioComponentNode": SystemType.UTILITIES,
     }
 
     def __init__(self):
@@ -641,13 +638,6 @@ class TopologyInferenceEngine:
         if not has_production:
             warnings.append("No production nodes detected")
         
-        # Check for missing storage
-        has_storage = any(
-            a.role == "storage" for a in assignments.values()
-        )
-        if not has_storage:
-            warnings.append("No storage nodes detected")
-        
         return warnings
 
     def _collect_metadata(self) -> Dict[str, Any]:
@@ -660,45 +650,6 @@ class TopologyInferenceEngine:
                 m.system_type for m in self.nodes.values()
             )],
         }
-
-    def detect_arbitrage_topology(self) -> str:
-        """
-        Detect the connected topology for the Arbitrage Node.
-        Returns:
-            'SOEC_ONLY': If Arbitrage is connected to SOEC but not PEM.
-            'SOEC_PEM': If Arbitrage is connected to both SOEC and PEM.
-            'UNKNOWN': If Arbitrage node is not found or connections are unclear.
-        """
-        arbitrage_node_id = None
-        for node_id, metadata in self.nodes.items():
-            if metadata.node_type == "ArbitrageNode":
-                arbitrage_node_id = node_id
-                break
-        
-        if not arbitrage_node_id:
-            return "UNKNOWN"
-            
-        # Check downstream connections
-        connected_types = set()
-        if arbitrage_node_id in self.graph:
-            for target_id in self.graph[arbitrage_node_id]:
-                target_metadata = self.nodes.get(target_id)
-                if target_metadata:
-                    connected_types.add(target_metadata.node_type)
-        
-        has_soec = "SOECStackNode" in connected_types or "ElectrolyzerNode" in connected_types # Assuming ElectrolyzerNode is SOEC base
-        has_pem = "PEMStackNode" in connected_types
-        
-        # Also check for 'ElectrolyzerNode' which might be generic, check properties if needed
-        # But for now, rely on type names.
-        
-        if has_soec and has_pem:
-            return "SOEC_PEM"
-        elif has_soec:
-            return "SOEC_ONLY"
-        else:
-            return "UNKNOWN"
-
 
 # Convenience functions
 def extract_nodes_edges_from_graph(node_graph) -> Tuple[List[Dict], List[Dict]]:

@@ -1,290 +1,124 @@
-
 """
-Storage component nodes.
-Refactored to follow the new collapsible pattern.
+Storage and delivery nodes.
+Covers: DetailedTank, DischargeStation, CompressorSingle.
 """
-
 from h2_plant.gui.nodes.base_node import ConfigurableNode
 
-class LPTankNode(ConfigurableNode):
+
+class DetailedTankNode(ConfigurableNode):
+    """High-pressure hydrogen storage tank bank."""
     __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'LP Tank'
+    NODE_NAME = 'Detailed Tank'
 
     def __init__(self):
-        super(LPTankNode, self).__init__()
+        super(DetailedTankNode, self).__init__()
         self.enable_collapse()
 
     def _init_ports(self):
         self.add_input('h2_in', flow_type='hydrogen')
+        self.add_input('demand_signal', flow_type='default')
         self.add_output('h2_out', flow_type='hydrogen')
 
     def _init_properties(self):
-        self.add_text_property('component_id', default='LP-Array-1', tab='Properties')
+        self.add_text_property('component_id', default='DT-1', tab='Properties')
 
-        # LP Tank Array Tab
-        self.add_float_property(
-            'tank_count', default=4.0, min_val=1.0, unit='tanks', tab='LP Tank Array'
+        self.add_integer_property(
+            'n_tanks', default=30, min_val=1, max_val=200,
+            unit='', tab='Detailed Tank'
         )
         self.add_float_property(
-            'capacity_per_tank_kg', default=50.0, min_val=1.0, unit='kg', tab='LP Tank Array'
+            'volume_per_tank_m3', default=103.0, min_val=1.0,
+            unit='m³', tab='Detailed Tank'
         )
         self.add_float_property(
-            'operating_pressure_bar', default=30.0, min_val=1.0, max_val=100.0, unit='bar', tab='LP Tank Array'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=5.0, tab='LP Tank Array'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=95.0, tab='LP Tank Array'
+            'max_pressure_bar', default=70.0, min_val=1.0,
+            unit='bar', tab='Detailed Tank'
         )
         self.add_float_property(
-            'ambient_temp_c', default=20.0, min_val=-40.0, max_val=60.0, unit='°C', tab='LP Tank Array'
+            'initial_pressure_bar', default=1.0, min_val=0.0,
+            unit='bar', tab='Detailed Tank'
+        )
+        self.add_float_property(
+            'min_discharge_pressure_bar', default=40.0, min_val=0.0,
+            unit='bar', tab='Detailed Tank'
+        )
+        self.add_float_property(
+            'ambient_temp_k', default=298.15, min_val=200.0, max_val=350.0,
+            unit='K', tab='Detailed Tank'
         )
 
-        # Custom Tab
-        self.add_color_property('node_color', default=(0, 255, 255), tab='Custom')
+        self.add_color_property('node_color', default=(120, 180, 120), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=80)
+        self.add_spacer('collapse_spacer', height=60)
 
-class HPTankNode(ConfigurableNode):
+
+class DischargeStationNode(ConfigurableNode):
+    """Truck discharge / filling station for hydrogen delivery."""
     __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'HP Tank'
+    NODE_NAME = 'Discharge Station'
 
     def __init__(self):
-        super(HPTankNode, self).__init__()
-        self.enable_collapse()
-
-    def _init_ports(self):
-        self.add_input('h2_in', flow_type='compressed_h2')
-        self.add_output('h2_out', flow_type='compressed_h2')
-
-    def _init_properties(self):
-        self.add_text_property('component_id', default='HP-Array-1', tab='Properties')
-
-        # HP Tank Array Tab
-        self.add_float_property(
-            'tank_count', default=8.0, min_val=1.0, unit='tanks', tab='HP Tank Array'
-        )
-        self.add_float_property(
-            'capacity_per_tank_kg', default=200.0, min_val=1.0, unit='kg', tab='HP Tank Array'
-        )
-        self.add_float_property(
-            'operating_pressure_bar', default=350.0, min_val=100.0, max_val=900.0, unit='bar', tab='HP Tank Array'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=5.0, tab='HP Tank Array'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=95.0, tab='HP Tank Array'
-        )
-        self.add_float_property(
-            'ambient_temp_c', default=20.0, min_val=-40.0, max_val=60.0, unit='°C', tab='HP Tank Array'
-        )
-        self.add_text_property(
-            'material_type', default='Type IV Composite', tab='HP Tank Array'
-        )
-
-        # Custom Tab
-        self.add_color_property('node_color', default=(0, 200, 255), tab='Custom')
-        self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=80)
-
-class LPTankArrayNode(ConfigurableNode):
-    __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'LP Tank Array'
-
-    def __init__(self):
-        super(LPTankArrayNode, self).__init__()
+        super(DischargeStationNode, self).__init__()
         self.enable_collapse()
 
     def _init_ports(self):
         self.add_input('h2_in', flow_type='hydrogen')
-        self.add_output('h2_out', flow_type='hydrogen')
+        self.add_output('demand_signal', flow_type='default')
 
     def _init_properties(self):
-        self.add_text_property('component_id', default='LP-Array-1', tab='Properties')
-        self.create_property('model', value='array', widget_type=0) # Hidden implementation flag
+        self.add_text_property('component_id', default='DS-1', tab='Properties')
 
-        # LP Tank Array Tab
-        self.add_float_property(
-            'tank_count', default=4.0, min_val=1.0, unit='tanks', tab='LP Tank Array'
+        self.add_integer_property(
+            'n_stations', default=5, min_val=1, max_val=50,
+            unit='', tab='Discharge Station'
         )
         self.add_float_property(
-            'capacity_per_tank_kg', default=50.0, min_val=1.0, unit='kg', tab='LP Tank Array'
+            'truck_capacity_kg', default=280.0, min_val=10.0,
+            unit='kg', tab='Discharge Station'
         )
         self.add_float_property(
-            'operating_pressure_bar', default=30.0, min_val=1.0, max_val=100.0, unit='bar', tab='LP Tank Array'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=5.0, tab='LP Tank Array'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=95.0, tab='LP Tank Array'
+            'delivery_pressure_bar', default=500.0, min_val=1.0,
+            unit='bar', tab='Discharge Station'
         )
         self.add_float_property(
-            'ambient_temp_c', default=20.0, min_val=-40.0, max_val=60.0, unit='°C', tab='LP Tank Array'
+            'max_fill_rate_kg_min', default=1.5, min_val=0.1,
+            unit='kg/min', tab='Discharge Station'
         )
 
-        # Custom Tab
-        self.add_color_property('node_color', default=(0, 255, 255), tab='Custom')
+        self.add_color_property('node_color', default=(200, 160, 100), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=80)
+        self.add_spacer('collapse_spacer', height=60)
 
-class LPEnhancedTankNode(ConfigurableNode):
+
+class CompressorSingleNode(ConfigurableNode):
+    """Single-stage compressor for gas pressurisation."""
     __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'LP Tank Dynamic'
+    NODE_NAME = 'Single Compressor'
 
     def __init__(self):
-        super(LPEnhancedTankNode, self).__init__()
+        super(CompressorSingleNode, self).__init__()
         self.enable_collapse()
 
     def _init_ports(self):
-        self.add_input('h2_in', flow_type='hydrogen')
-        self.add_output('h2_out', flow_type='hydrogen')
+        self.add_input('inlet', flow_type='gas')
+        self.add_output('outlet', flow_type='gas')
 
     def _init_properties(self):
-        self.add_text_property('component_id', default='LP-Dynamic-1', tab='Properties')
-        self.create_property('model', value='enhanced', widget_type=0)
+        self.add_text_property('component_id', default='COMP-1', tab='Properties')
 
-        # LP Tank Dynamic Tab
-        # Note: Dynamic tank mimics array config for now to match backend schema, 
-        # but logically it's a single volume. Backend calculates volume from count * capacity.
         self.add_float_property(
-            'tank_count', default=1.0, min_val=1.0, unit='Virtual Units', tab='LP Tank Dynamic'
+            'max_flow_kg_h', default=1000.0, min_val=1.0,
+            unit='kg/h', tab='Compressor'
         )
         self.add_float_property(
-            'capacity_per_tank_kg', default=200.0, min_val=1.0, unit='kg (Total)', tab='LP Tank Dynamic'
+            'outlet_pressure_bar', default=30.0, min_val=1.0,
+            unit='bar', tab='Compressor'
         )
         self.add_float_property(
-            'operating_pressure_bar', default=30.0, min_val=1.0, max_val=100.0, unit='bar', tab='LP Tank Dynamic'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=5.0, tab='LP Tank Dynamic'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=95.0, tab='LP Tank Dynamic'
+            'max_temp_c', default=180.0, min_val=50.0, max_val=500.0,
+            unit='°C', tab='Compressor'
         )
 
-        # Custom Tab
-        self.add_color_property('node_color', default=(0, 255, 200), tab='Custom')
+        self.add_color_property('node_color', default=(200, 180, 140), tab='Custom')
         self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=80)
-
-class HPTankArrayNode(ConfigurableNode):
-    __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'HP Tank Array'
-
-    def __init__(self):
-        super(HPTankArrayNode, self).__init__()
-        self.enable_collapse()
-
-    def _init_ports(self):
-        self.add_input('h2_in', flow_type='compressed_h2')
-        self.add_output('h2_out', flow_type='compressed_h2')
-
-    def _init_properties(self):
-        self.add_text_property('component_id', default='HP-Array-1', tab='Properties')
-        self.create_property('model', value='array', widget_type=0)
-
-        # HP Tank Array Tab
-        self.add_float_property(
-            'tank_count', default=8.0, min_val=1.0, unit='tanks', tab='HP Tank Array'
-        )
-        self.add_float_property(
-            'capacity_per_tank_kg', default=200.0, min_val=1.0, unit='kg', tab='HP Tank Array'
-        )
-        self.add_float_property(
-            'operating_pressure_bar', default=350.0, min_val=100.0, max_val=900.0, unit='bar', tab='HP Tank Array'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=5.0, tab='HP Tank Array'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=95.0, tab='HP Tank Array'
-        )
-        self.add_float_property(
-            'ambient_temp_c', default=20.0, min_val=-40.0, max_val=60.0, unit='°C', tab='HP Tank Array'
-        )
-        self.add_text_property(
-            'material_type', default='Type IV Composite', tab='HP Tank Array'
-        )
-
-        # Custom Tab
-        self.add_color_property('node_color', default=(0, 200, 255), tab='Custom')
-        self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=80)
-
-class HPEnhancedTankNode(ConfigurableNode):
-    __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'HP Tank Dynamic'
-
-    def __init__(self):
-        super(HPEnhancedTankNode, self).__init__()
-        self.enable_collapse()
-
-    def _init_ports(self):
-        self.add_input('h2_in', flow_type='compressed_h2')
-        self.add_output('h2_out', flow_type='compressed_h2')
-
-    def _init_properties(self):
-        self.add_text_property('component_id', default='HP-Dynamic-1', tab='Properties')
-        self.create_property('model', value='enhanced', widget_type=0)
-
-        # HP Tank Dynamic Tab
-        self.add_float_property(
-            'tank_count', default=1.0, min_val=1.0, unit='Virtual Units', tab='HP Tank Dynamic'
-        )
-        self.add_float_property(
-            'capacity_per_tank_kg', default=1600.0, min_val=1.0, unit='kg (Total)', tab='HP Tank Dynamic'
-        )
-        self.add_float_property(
-            'operating_pressure_bar', default=350.0, min_val=100.0, max_val=900.0, unit='bar', tab='HP Tank Dynamic'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=5.0, tab='HP Tank Dynamic'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=95.0, tab='HP Tank Dynamic'
-        )
-
-        # Custom Tab
-        self.add_color_property('node_color', default=(0, 180, 255), tab='Custom')
-        self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=80)
-
-class OxygenBufferNode(ConfigurableNode):
-    __identifier__ = 'nodes.Storage'
-    NODE_NAME = 'Oxygen Buffer'
-
-    def __init__(self):
-        super(OxygenBufferNode, self).__init__()
-        self.enable_collapse()
-
-    def _init_ports(self):
-        self.add_input('o2_in', flow_type='oxygen')
-        self.add_output('o2_out', flow_type='oxygen')
-
-    def _init_properties(self):
-        self.add_text_property('component_id', default='O2-Buffer-1', tab='Properties')
-
-        # Oxygen Buffer Tab
-        self.add_float_property(
-            'capacity_kg', default=500.0, min_val=1.0, unit='kg', tab='Oxygen Buffer'
-        )
-        self.add_float_property(
-            'operating_pressure_bar', default=10.0, min_val=1.0, max_val=50.0, unit='bar', tab='Oxygen Buffer'
-        )
-        self.add_percentage_property(
-            'min_fill_level', default=10.0, tab='Oxygen Buffer'
-        )
-        self.add_percentage_property(
-            'max_fill_level', default=90.0, tab='Oxygen Buffer'
-        )
-        self.add_float_property(
-            'ambient_temp_c', default=20.0, min_val=-40.0, max_val=60.0, unit='°C', tab='Oxygen Buffer'
-        )
-
-        # Custom Tab
-        self.add_color_property('node_color', default=(255, 200, 0), tab='Custom')
-        self.add_text_property('custom_label', default='', tab='Custom')
-        self.add_spacer('collapse_spacer', height=70)
+        self.add_spacer('collapse_spacer', height=60)

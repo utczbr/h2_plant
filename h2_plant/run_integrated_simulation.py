@@ -63,6 +63,184 @@ def _resolve_guaranteed_power_mw(scenarios_dir: str, default: float = 10.0) -> f
     return guaranteed_power_mw
 
 
+def run_with_dispatch_context(
+    context,
+    *,
+    hours: Optional[int] = None,
+    data_dir: Optional[str] = None,
+    output_dir: Optional[Path] = None,
+    strategy: Optional[str] = None,
+    resume_from_hour: Optional[int] = None,
+    resume_checkpoint_path: Optional[Path] = None,
+    load_history: bool = True,
+    allow_graph_dispatch_fallback: bool = False,
+    return_registry: bool = False,
+):
+    """
+    Shared simulation core — runs the engine from a pre-loaded SimulationContext.
+
+    This is the single source of truth for engine assembly, dispatch strategy
+    selection, and history retrieval.  Both the CLI (``run_with_dispatch_strategy``)
+    and the GUI ``SimulationWorker`` delegate to this function.
+
+    Args:
+        context: Loaded SimulationContext (from ConfigLoader or GraphToConfigAdapter).
+        hours: Override simulation duration in hours (default: from context).
+        data_dir: Base directory for resolving relative data file paths (energy prices,
+            wind data).  When *None*, the parent directory of ``energy_price_file``
+            is used.
+        output_dir: Directory for engine output files (default: ./simulation_output).
+        strategy: Dispatch strategy override (CLI > context > 'ECONOMIC_SPOT').
+        resume_from_hour: Hour to resume from (passed through to engine).
+        resume_checkpoint_path: Checkpoint file for resume.
+        load_history: Whether to call ``engine.get_dispatch_history()`` before
+            returning (default: True).
+        allow_graph_dispatch_fallback: When True, missing dispatch-critical components
+            cause a silent fallback to physics-only mode instead of raising.
+            Set True for GUI graph mode; False for CLI and scenario mode.
+        return_registry: When True, return ``(history, registry)`` instead of just
+            ``history``.
+
+    Returns:
+        If ``return_registry`` is False: Dict[str, np.ndarray] history.
+        If ``return_registry`` is True: (history, ComponentRegistry) tuple.
+    """
+    from h2_plant.core.component_registry import ComponentRegistry
+    from h2_plant.core.graph_builder import PlantGraphBuilder
+    from h2_plant.simulation.engine import SimulationEngine
+    from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
+    from h2_plant.data.price_loader import EnergyPriceLoader
+    from h2_plant.config.plant_config import ConnectionConfig, SimulationConfig
+
+    if hours is None:
+        hours = context.simulation.duration_hours
+
+    # 1. Build component graph and populate registry
+    builder = PlantGraphBuilder(context)
+    components = builder.build()
+    registry = ComponentRegistry()
+    for cid, comp in components.items():
+        registry.register(cid, comp)
+
+    # 2. Extract topology connections (NodeConnection → ConnectionConfig)
+    topology_connections = []
+    if hasattr(context, 'topology') and context.topology:
+        for node in context.topology.nodes:
+            for conn in node.connections:
+                topology_connections.append(ConnectionConfig(
+                    source_id=node.id,
+                    source_port=conn.source_port,
+                    target_id=conn.target_name,
+                    target_port=conn.target_port,
+                    resource_type=conn.resource_type,
+                ))
+    logger.info(f"Extracted {len(topology_connections)} topology connections")
+
+    # 3. Create dispatch strategy (two independent fallback paths):
+    #    a) arbitrage_enabled=False → physics-only (no dispatch strategy).
+    #    b) allow_graph_dispatch_fallback=True + missing components → physics-only.
+    dispatch_strategy = None
+    dispatch_requested = (
+        hasattr(context.economics, 'arbitrage_enabled')
+        and context.economics.arbitrage_enabled
+    )
+    _REQUIRED_DISPATCH_IDS = ("SOEC_Transformer", "PEM_Transformer", "BOP_Transformer")
+
+    if dispatch_requested:
+        missing = [cid for cid in _REQUIRED_DISPATCH_IDS if not registry.has(cid)]
+        if missing and allow_graph_dispatch_fallback:
+            logger.warning(
+                "Graph mode: missing dispatch components (%s). "
+                "Falling back to physics-only mode.",
+                ", ".join(missing),
+            )
+            dispatch_requested = False
+        elif missing:
+            raise ValueError(
+                f"Dispatch requires {_REQUIRED_DISPATCH_IDS}; "
+                f"missing: {', '.join(missing)}"
+            )
+
+    if dispatch_requested:
+        dispatch_strategy = HybridArbitrageEngineStrategy()
+        strategy_name = (
+            strategy
+            or getattr(context.simulation, 'dispatch_strategy', None)
+            or 'ECONOMIC_SPOT'
+        ).upper()
+        dispatch_strategy._strategy_override = strategy_name
+        logger.info(f"Dispatch strategy: {strategy_name}")
+    else:
+        logger.info("Running in physics-only mode (no dispatch strategy)")
+
+    # 4. Create SimulationEngine
+    sim_config = SimulationConfig(
+        timestep_hours=context.simulation.timestep_hours,
+        duration_hours=context.simulation.duration_hours,
+        start_hour=0,
+        dispatch_strategy=getattr(context.simulation, 'dispatch_strategy', 'REFERENCE_HYBRID'),
+        checkpoint_interval_hours=getattr(context.simulation, 'checkpoint_interval_hours', 168),
+    )
+    if output_dir is None:
+        output_dir = Path("simulation_output")
+    engine = SimulationEngine(
+        registry=registry,
+        config=sim_config,
+        output_dir=output_dir,
+        topology=topology_connections,
+        dispatch_strategy=dispatch_strategy,
+    )
+
+    # 5. Load price/wind data
+    if data_dir is None:
+        data_dir = str(Path(context.simulation.energy_price_file).parent) or "."
+    loader = EnergyPriceLoader(str(data_dir))
+    total_steps = int(context.simulation.duration_hours * 60)
+    prices, wind = loader.load_data(
+        context.simulation.energy_price_file,
+        context.simulation.wind_data_file,
+        duration_hours=context.simulation.duration_hours,
+        timestep_hours=context.simulation.timestep_hours,
+    )
+    # Pad arrays to full duration if data file is shorter
+    if len(prices) < total_steps:
+        prices = np.tile(prices, int(np.ceil(total_steps / len(prices))))[:total_steps]
+    if len(wind) < total_steps:
+        wind = np.tile(wind, int(np.ceil(total_steps / len(wind))))[:total_steps]
+
+    # 6. Initialize engine and dispatch strategy
+    engine.set_dispatch_data(prices, wind)
+    engine.initialize()
+    engine.initialize_dispatch_strategy(
+        context, total_steps, use_chunked_history=True, resume=bool(resume_from_hour)
+    )
+
+    # 7. Run simulation
+    start_hour = resume_from_hour or 0
+    if resume_from_hour:
+        logger.info(f"Resuming from hour {resume_from_hour}, running to hour {hours}")
+    else:
+        logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
+    engine.run(
+        start_hour=start_hour,
+        end_hour=hours,
+        resume_from_checkpoint=str(resume_checkpoint_path) if resume_checkpoint_path else None,
+    )
+
+    # 8. Optional post-run summary
+    if dispatch_strategy and hasattr(dispatch_strategy, 'print_summary'):
+        dispatch_strategy.print_summary()
+
+    # 9. Retrieve history
+    history = None
+    if load_history:
+        history = engine.get_dispatch_history()
+
+    if return_registry:
+        return history, registry
+    return history
+
+
 def run_with_dispatch_strategy(
     scenarios_dir: str,
     hours: Optional[int] = None,
@@ -113,116 +291,30 @@ def run_with_dispatch_strategy(
         >>> print(f"Total H2: {np.sum(history['h2_kg']):.1f} kg")
     """
     from h2_plant.config.loader import ConfigLoader
-    from h2_plant.core.graph_builder import PlantGraphBuilder
-    from h2_plant.core.component_registry import ComponentRegistry
-    from h2_plant.simulation.engine import SimulationEngine
-    from h2_plant.core.enums import DispatchStrategyEnum
-    from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
-    from h2_plant.data.price_loader import EnergyPriceLoader
-    from h2_plant.config.plant_config import ConnectionConfig
 
-    # Load configuration
+    # Load configuration context
     logger.info(f"Loading configuration from {scenarios_dir}")
     loader = ConfigLoader(scenarios_dir)
     context = loader.load_context()
 
     if hours is None:
         hours = context.simulation.duration_hours
-
-    # Build component graph
-    builder = PlantGraphBuilder(context)
-    components = builder.build()
-
-    # Create and populate registry
-    registry = ComponentRegistry()
-    for cid, comp in components.items():
-        registry.register(cid, comp)
-
-    # Extract connections from topology nodes
-    # NodeConnection format: {source_port, target_name, target_port, resource_type}
-    # ConnectionConfig format: {source_id, source_port, target_id, target_port, resource_type}
-    topology_connections = []
-    for node in context.topology.nodes:
-        source_id = node.id
-        for conn in node.connections:
-            topology_connections.append(ConnectionConfig(
-                source_id=source_id,
-                source_port=conn.source_port,
-                target_id=conn.target_name,
-                target_port=conn.target_port,
-                resource_type=conn.resource_type
-            ))
-    
-    logger.info(f"Extracted {len(topology_connections)} flow connections from topology")
-
-    # Load dispatch input data
-    data_loader = EnergyPriceLoader(scenarios_dir)
-    prices, wind = data_loader.load_data(
-        context.simulation.energy_price_file,
-        context.simulation.wind_data_file,
-        hours,
-        context.simulation.timestep_hours
-    )
-    total_steps = len(prices)
-
-    # Determine dispatch strategy (CLI > config > default)
-    strategy_name = (strategy or 
-                     getattr(context.simulation, 'dispatch_strategy', None) or 
-                     'ECONOMIC_SPOT').upper()
-    
-    logger.info(f"Using dispatch strategy: {strategy_name}")
-    
-    # Create dispatch strategy with inner strategy based on selection
-    dispatch_strategy = HybridArbitrageEngineStrategy()
-    
-    # Configure inner strategy based on selection
-    # The inner strategy selection will be passed to initialize()
-    dispatch_strategy._strategy_override = strategy_name
-
-    # Create simulation engine with strategy and topology connections
     if output_dir is None:
         output_dir = Path(scenarios_dir) / "simulation_output"
 
-    engine = SimulationEngine(
-        registry=registry,
-        config=context.simulation,
+    # Core: delegate to shared simulation runner (GUI + CLI share the same path)
+    history, registry = run_with_dispatch_context(
+        context,
+        hours=hours,
+        data_dir=scenarios_dir,
         output_dir=output_dir,
-        dispatch_strategy=dispatch_strategy,
-        topology=topology_connections  # Pass extracted connections
+        strategy=strategy,
+        resume_from_hour=resume_from_hour,
+        resume_checkpoint_path=resume_checkpoint_path,
+        load_history=load_history,
+        allow_graph_dispatch_fallback=False,  # CLI is always strict
+        return_registry=True,
     )
-
-    # Initialize engine and strategy
-    engine.initialize()
-    engine.set_dispatch_data(prices, wind)
-    
-    # Use chunked history for simulations > 7 days (memory optimization)
-    # Threshold: 7 days × 24 hours × 60 minutes = 10,080 steps
-    # Always use chunked history for consistent parquet output (enables graph compatibility)
-    use_chunked_history = True  # Previously: total_steps > 10_080
-    engine.initialize_dispatch_strategy(context, total_steps, use_chunked_history=use_chunked_history, resume=bool(resume_from_hour))
-
-    # Run simulation
-    # If we have a checkpoint path, the engine will load it and update current_hour.
-    # We still pass start_hour as a hint or fallback.
-    start_hour = resume_from_hour if resume_from_hour else 0
-    if resume_from_hour:
-        logger.info(f"Resuming simulation from hour {resume_from_hour}, running to hour {hours}")
-    else:
-        logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
-    
-    results = engine.run(
-        start_hour=start_hour,
-        end_hour=hours,
-        resume_from_checkpoint=str(resume_checkpoint_path) if resume_checkpoint_path else None
-    )
-
-    # Get history from dispatch strategy (MOVED to later to allow for streaming export)
-    # history = engine.get_dispatch_history() 
-    history = None # Placeholder
-
-    # Print dispatch summary
-    if dispatch_strategy:
-        dispatch_strategy.print_summary()
     
     # Build connection map from topology (required for report)
     connection_map = {}
@@ -275,7 +367,7 @@ def run_with_dispatch_strategy(
             
             capex_report = capex_generator.generate(
                 registry=registry,
-                monitoring=engine.monitoring if hasattr(engine, 'monitoring') else None,
+                monitoring=None,
                 output_dir=output_dir,
                 simulation_name=getattr(context, 'simulation_name', 'H2 Plant Simulation'),
                 simulation_hours=hours
@@ -435,16 +527,6 @@ def run_with_dispatch_strategy(
 
         except Exception as e:
             logger.warning(f"Failed to export history CSV/NPZ: {e}")
-
-
-    # Visualization Generation (Requires Data) - manually reload since CSV block is disabled
-    if history is None and load_history:
-         try:
-             logger.info("loading history for visualization...")
-             history = engine.get_dispatch_history()
-         except Exception as e:
-             logger.warning(f"Could not load history for visualization: {e}")
-             history = {} 
 
 
     # Generate Scenario Summary Report

@@ -37,7 +37,7 @@ from h2_plant.components.mixing.oxygen_mixer import OxygenMixer
 from h2_plant.components.storage.battery_storage import BatteryStorage
 from h2_plant.components.storage.h2_storage_enhanced import H2StorageTankEnhanced
 from h2_plant.components.water.quality_test import WaterQualityTestBlock
-from h2_plant.components.water.treatment import WaterTreatmentBlock
+from h2_plant.components.water.water_purifier import WaterPurifier as WaterTreatmentBlock
 from h2_plant.components.water.storage import UltrapureWaterStorageTank
 from h2_plant.components.water.water_pump import WaterPumpThermodynamic as WaterPump
 

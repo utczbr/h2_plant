@@ -1,7 +1,7 @@
 """
 Abstract base class for all node types.
 
-Every specific node (ElectrolyzerNode, TankNode, etc.) inherits from this.
+Every concrete GUI node inherits from this class.
 """
 
 from typing import Dict, Any, List, Optional, Callable, Tuple
@@ -421,6 +421,23 @@ class ConfigurableNode(QtBaseNode):
         """
         # NodePropWidgetEnum.COLOR_PICKER = 9
         self.create_property(name, default, widget_type=9, tab=tab)
+
+    def set_property(self, name, value, push_undo=True):
+        """Keep visual node color synchronized with Custom `node_color` edits."""
+        super().set_property(name, value, push_undo=push_undo)
+        if name != "node_color":
+            return
+        rgb = self._coerce_rgb(value)
+        if rgb is None:
+            return
+        setter = getattr(self, "set_color", None)
+        if not callable(setter):
+            return
+        try:
+            setter(*rgb)
+        except Exception:
+            # Best-effort visual sync only; property value is still persisted.
+            return
     
     def get_properties(self) -> Dict[str, Any]:
         """Export node properties as a dict."""
@@ -445,6 +462,22 @@ class ConfigurableNode(QtBaseNode):
                 props[k] = v
                 
         return props
+
+    @staticmethod
+    def _coerce_rgb(value: Any) -> Optional[Tuple[int, int, int]]:
+        if isinstance(value, (tuple, list)) and len(value) >= 3:
+            try:
+                return int(value[0]), int(value[1]), int(value[2])
+            except (TypeError, ValueError):
+                return None
+        if isinstance(value, str):
+            parts = [p.strip() for p in value.split(",")]
+            if len(parts) >= 3:
+                try:
+                    return int(parts[0]), int(parts[1]), int(parts[2])
+                except (TypeError, ValueError):
+                    return None
+        return None
     
     @staticmethod
     def _validate_float(value: Any, 

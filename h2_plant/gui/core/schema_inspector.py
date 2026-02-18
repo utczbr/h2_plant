@@ -34,18 +34,23 @@ class SchemaInspector:
         Get schema for a specific node type.
         
         Example:
-            schema = inspector.get_node_schema("ElectrolyzerNode")
+            schema = inspector.get_node_schema("PEMStackNode")
             # Returns schema for production.electrolyzer properties
         """
         mapping = {
-            "ElectrolyzerNode": ["production", "properties", "electrolyzer"],
-            "ATRSourceNode": ["production", "properties", "atr"],
-            "LPTankNode": ["storage", "properties", "lp_tanks"],
-            "HPTankNode": ["storage", "properties", "hp_tanks"],
-            "FillingCompressorNode": ["compression", "properties", "filling_compressor"],
-            "OutgoingCompressorNode": ["compression", "properties", "outgoing_compressor"],
-            "DemandSchedulerNode": ["demand"],
-            "EnergyPriceNode": ["energy_price"],
+            "PEMStackNode": ["production", "properties", "electrolyzer"],
+            "SOECStackNode": ["production", "properties", "soec"],
+            "RectifierNode": ["production", "properties", "rectifier"],
+            "ChillerNode": ["thermal_components", "properties", "chillers"],
+            "DryCoolerNode": ["thermal_components", "properties", "dry_coolers"],
+            "PSAUnitNode": ["separation", "properties", "psa"],
+            "DeoxoReactorNode": ["separation", "properties", "deoxo"],
+            "CoalescerNode": ["separation", "properties", "coalescer"],
+            "KnockOutDrumNode": ["separation", "properties", "knockout_drum"],
+            "MixerNode": ["flow_control", "properties", "mixer"],
+            "ValveNode": ["flow_control", "properties", "valve"],
+            "WaterPurifierNode": ["water_treatment", "properties", "purifier"],
+            "UltraPureWaterTankNode": ["water_treatment", "properties", "ultrapure_tank"],
         }
         
         path = mapping.get(node_type)

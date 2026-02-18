@@ -19,7 +19,7 @@ class PEMStackNode(ConfigurableNode):
         self.add_input('water_in', flow_type='water')
 
         self.add_output('h2_out', flow_type='hydrogen')
-        self.add_output('o2_out', flow_type='oxygen')
+        self.add_output('oxygen_out', flow_type='oxygen')
         self.add_output('heat_out', flow_type='heat')
 
     def _init_properties(self):
@@ -70,6 +70,12 @@ class RectifierNode(ConfigurableNode):
         self.add_percentage_property(
             'conversion_efficiency', default=98.0, tab='Rectifier'
         )
+        self.add_enum_property(
+            'system_group',
+            options=['SOEC', 'PEM', 'BOP'],
+            default_index=0,
+            tab='Rectifier'
+        )
 
         # Custom Tab
         self.add_color_property('node_color', default=(255, 255, 0), tab='Custom')
@@ -88,7 +94,7 @@ class SOECStackNode(ConfigurableNode):
         self.add_input('power_in', flow_type='electricity')
         self.add_input('steam_in', flow_type='water')
         self.add_output('h2_out', flow_type='hydrogen')
-        self.add_output('o2_out', flow_type='oxygen') # Added Oxygen Output
+        self.add_output('oxygen_out', flow_type='oxygen') # Added Oxygen Output
         self.add_output('heat_out', flow_type='heat')
 
     def _init_properties(self):

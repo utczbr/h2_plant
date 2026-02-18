@@ -107,92 +107,309 @@ class PortDefinition:
 
 
 # Port definitions for all node types
+# SOURCE OF TRUTH: each node class's _init_ports() method.
+# When adding a new node type, mirror its ports here exactly.
 PORT_DEFINITIONS = {
-    "ElectrolyzerNode": {
+    # --- electrolysis.py ---
+    "PEMStackNode": {
         "inputs": [
             PortDefinition("water_in", "water", True, "1", True),
             PortDefinition("power_in", "electricity", True, "1", True),
         ],
         "outputs": [
             PortDefinition("h2_out", "hydrogen", False, "*", False),
-            PortDefinition("o2_out", "oxygen", False, "*", False),
+            PortDefinition("oxygen_out", "oxygen", False, "*", False),
             PortDefinition("heat_out", "heat", False, "*", False),
         ]
     },
-    "ATRSourceNode": {
+    "SOECStackNode": {
         "inputs": [
-            PortDefinition("gas_in", "gas", True, "1", True),
-            PortDefinition("steam_in", "water", True, "?", False),
-            PortDefinition("heat_in", "heat", True, "?", False),
+            PortDefinition("steam_in", "water", True, "1", True),
+            PortDefinition("power_in", "electricity", True, "1", True),
         ],
         "outputs": [
             PortDefinition("h2_out", "hydrogen", False, "*", False),
-            PortDefinition("co2_out", "gas", False, "*", False),
+            PortDefinition("oxygen_out", "oxygen", False, "*", False),
+            PortDefinition("heat_out", "heat", False, "*", False),
         ]
     },
-    "LPTankNode": {
+    "RectifierNode": {
         "inputs": [
-            PortDefinition("inlet", "hydrogen", True, "*", False),
+            PortDefinition("ac_power_in", "electricity", True, "?", False),
         ],
         "outputs": [
-            PortDefinition("outlet", "hydrogen", False, "*", False),
-        ]
-    },
-    "HPTankNode": {
-        "inputs": [
-            PortDefinition("inlet", "compressed_h2", True, "*", False),
+            PortDefinition("dc_power_out", "electricity", False, "*", False),
         ],
-        "outputs": [
-            PortDefinition("outlet", "compressed_h2", False, "*", False),
-        ]
     },
-    "FillingCompressorNode": {
-        "inputs": [
-            PortDefinition("inlet", "hydrogen", True, "1", True),
-        ],
-        "outputs": [
-            PortDefinition("outlet", "compressed_h2", False, "*", False),
-        ]
-    },
-    "OutgoingCompressorNode": {
-        "inputs": [
-            PortDefinition("inlet", "hydrogen", True, "1", True),
-        ],
-        "outputs": [
-            PortDefinition("outlet", "compressed_h2", False, "*", False),
-        ]
-    },
+    # --- separation.py ---
     "PSAUnitNode": {
         "inputs": [
-            PortDefinition("feed", "hydrogen", True, "1", True),
+            PortDefinition("gas_in", "gas", True, "1", True),
         ],
         "outputs": [
-            PortDefinition("h2_pure", "hydrogen", False, "*", False),
-            PortDefinition("h2_tail", "hydrogen", False, "*", False),
+            PortDefinition("purified_gas_out", "gas", False, "*", False),
+            PortDefinition("tail_gas_out", "gas", False, "*", False),
         ]
     },
-    "DemandSchedulerNode": {
-        "inputs": [],
-        "outputs": [
-            PortDefinition("demand", "hydrogen", False, "*", False),
-        ]
-    },
-    "ConsumerNode": {
+    # --- mixing.py ---
+    "MixerNode": {
         "inputs": [
-            PortDefinition("inlet", "hydrogen", True, "*", False),
+            PortDefinition("inlet_1", "default", True, "1", False),
+            PortDefinition("inlet_2", "default", True, "1", False),
         ],
+        "outputs": [
+            PortDefinition("outlet", "default", False, "*", False),
+        ]
+    },
+    "ValveNode": {
+        "inputs": [
+            PortDefinition("inlet", "default", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "default", False, "*", False),
+        ],
+    },
+    "DeoxoReactorNode": {
+        "inputs": [
+            PortDefinition("inlet", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "gas", False, "*", False),
+        ],
+    },
+    "CoalescerNode": {
+        "inputs": [
+            PortDefinition("inlet", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "gas", False, "*", False),
+            PortDefinition("drain", "water", False, "*", False),
+        ],
+    },
+    "KnockOutDrumNode": {
+        "inputs": [
+            PortDefinition("gas_inlet", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("gas_outlet", "gas", False, "*", False),
+            PortDefinition("liquid_drain", "water", False, "*", False),
+        ],
+    },
+    # --- scenario fallback ---
+    "ScenarioComponentNode": {
+        "inputs": [],
         "outputs": []
     },
-    "GridConnectionNode": {
-        "inputs": [],
+    # --- water.py ---
+    "WaterPurifierNode": {
+        "inputs": [
+            PortDefinition("raw_water_in", "water", True, "1", True),
+            PortDefinition("electricity_in", "electricity", True, "?", False),
+        ],
         "outputs": [
-            PortDefinition("power_out", "electricity", False, "*", False),
+            PortDefinition("ultrapure_out", "water", False, "*", False),
         ]
     },
-    "WaterSupplyNode": {
+    "UltraPureWaterTankNode": {
+        "inputs": [
+            PortDefinition("ultrapure_in", "water", True, "*", False),
+        ],
+        "outputs": [
+            PortDefinition("water_out_pem", "water", False, "*", False),
+            PortDefinition("water_out_soec", "water", False, "*", False),
+            PortDefinition("water_out_atr", "water", False, "*", False),
+        ]
+    },
+    # --- thermal.py ---
+    "ChillerNode": {
+        "inputs": [
+            PortDefinition("fluid_in", "gas", True, "1", True),
+        ],
+        "outputs": [
+            PortDefinition("fluid_out", "gas", False, "*", False),
+        ]
+    },
+    "DryCoolerNode": {
+        "inputs": [
+            PortDefinition("fluid_in", "gas", True, "1", False),
+            PortDefinition("electricity_in", "electricity", True, "?", False),
+        ],
+        "outputs": [
+            PortDefinition("fluid_out", "gas", False, "*", False),
+        ]
+    },
+    "InterchangerNode": {
+        "inputs": [
+            PortDefinition("hot_in", "gas", True, "1", False),
+            PortDefinition("cold_in", "water", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("hot_out", "gas", False, "*", False),
+            PortDefinition("cold_out", "water", False, "*", False),
+        ]
+    },
+    "ElectricBoilerNode": {
+        "inputs": [
+            PortDefinition("fluid_in", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("fluid_out", "gas", False, "*", False),
+        ]
+    },
+    "AttemperatorNode": {
+        "inputs": [
+            PortDefinition("steam_in", "water", True, "1", False),
+            PortDefinition("water_in", "water", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("steam_out", "water", False, "*", False),
+        ]
+    },
+    "CoolingManagerNode": {
         "inputs": [],
+        "outputs": [],
+    },
+    # --- separation.py (new) ---
+    "HydrogenMultiCycloneNode": {
+        "inputs": [
+            PortDefinition("inlet", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "gas", False, "*", False),
+            PortDefinition("drain", "water", False, "*", False),
+        ]
+    },
+    "SeparationTankNode": {
+        "inputs": [
+            PortDefinition("mixture_in", "water", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("liquid_out", "water", False, "*", False),
+        ]
+    },
+    "SyngasPSANode": {
+        "inputs": [
+            PortDefinition("gas_in", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("purified_gas_out", "gas", False, "*", False),
+        ]
+    },
+    # --- mixing.py (new) ---
+    "StreamSplitterNode": {
+        "inputs": [
+            PortDefinition("inlet", "default", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet_1", "default", False, "*", False),
+            PortDefinition("outlet_2", "default", False, "*", False),
+        ]
+    },
+    "DrainRecorderMixerNode": {
+        "inputs": [
+            PortDefinition("inlet_1", "water", True, "1", False),
+            PortDefinition("inlet_2", "water", True, "1", False),
+            PortDefinition("inlet_3", "water", True, "1", False),
+            PortDefinition("inlet_4", "water", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "water", False, "*", False),
+        ]
+    },
+    "SignalMakeupMixerNode": {
+        "inputs": [
+            PortDefinition("makeup_water_in", "water", True, "1", False),
+            PortDefinition("drain_in", "water", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("mixture_out", "water", False, "*", False),
+            PortDefinition("demand_signal", "default", False, "*", False),
+        ]
+    },
+    "ProportionalMakeupMixerNode": {
+        "inputs": [
+            PortDefinition("makeup_water_in", "water", True, "1", False),
+            PortDefinition("drain_in", "water", True, "1", False),
+        ],
         "outputs": [
             PortDefinition("water_out", "water", False, "*", False),
+            PortDefinition("demand_signal", "default", False, "*", False),
+        ]
+    },
+    "OxygenMakeupNode": {
+        "inputs": [
+            PortDefinition("inlet", "oxygen", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "oxygen", False, "*", False),
+        ]
+    },
+    # --- water.py (new) ---
+    "ExternalWaterSourceNode": {
+        "inputs": [
+            PortDefinition("control_signal", "default", True, "?", False),
+        ],
+        "outputs": [
+            PortDefinition("water_out", "water", False, "*", False),
+        ]
+    },
+    "WaterPumpThermodynamicNode": {
+        "inputs": [
+            PortDefinition("water_in", "water", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("water_out", "water", False, "*", False),
+        ]
+    },
+    # --- storage.py ---
+    "DetailedTankNode": {
+        "inputs": [
+            PortDefinition("h2_in", "hydrogen", True, "1", False),
+            PortDefinition("demand_signal", "default", True, "?", False),
+        ],
+        "outputs": [
+            PortDefinition("h2_out", "hydrogen", False, "*", False),
+        ]
+    },
+    "DischargeStationNode": {
+        "inputs": [
+            PortDefinition("h2_in", "hydrogen", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("demand_signal", "default", False, "*", False),
+        ]
+    },
+    "CompressorSingleNode": {
+        "inputs": [
+            PortDefinition("inlet", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "gas", False, "*", False),
+        ]
+    },
+    # --- reforming.py ---
+    "IntegratedATRPlantNode": {
+        "inputs": [
+            PortDefinition("inlet", "gas", True, "1", False),
+        ],
+        "outputs": [
+            PortDefinition("syngas_out", "gas", False, "*", False),
+            PortDefinition("o2_signal", "default", False, "*", False),
+        ]
+    },
+    "ATRBoilerNode": {
+        "inputs": [
+            PortDefinition("inlet", "gas", True, "1", False),
+            PortDefinition("o2_signal_in", "default", True, "?", False),
+        ],
+        "outputs": [
+            PortDefinition("outlet", "gas", False, "*", False),
+        ]
+    },
+    "BiogasSourceNode": {
+        "inputs": [],
+        "outputs": [
+            PortDefinition("out", "gas", False, "*", False),
         ]
     },
 }
@@ -426,12 +643,13 @@ class AdvancedValidator:
         
         # Required properties per node type (could be in schema)
         required_properties = {
-            "ElectrolyzerNode": ["max_power_mw", "efficiency"],
-            "ATRSourceNode": ["efficiency"],
-            "LPTankNode": ["capacity_kg", "pressure_bar"],
-            "HPTankNode": ["capacity_kg", "pressure_bar"],
-            "FillingCompressorNode": ["max_flow_kg_h"],
-            "DemandSchedulerNode": ["pattern"],
+            "PEMStackNode": ["rated_power_kw", "efficiency"],
+            "SOECStackNode": ["rated_power_kw"],
+            "RectifierNode": ["max_power_kw", "conversion_efficiency"],
+            "ChillerNode": ["cooling_capacity_kw"],
+            "DryCoolerNode": ["fan_power_kw"],
+            "WaterPurifierNode": ["output_flow_kgh"],
+            "UltraPureWaterTankNode": ["capacity_m3"],
         }
         
         for node_id, node_data in self.nodes.items():
@@ -501,14 +719,14 @@ class AdvancedValidator:
         if dead_ends:
             for node_id in dead_ends:
                 node_type = self.nodes[node_id]["type"]
-                if "Consumer" not in node_type and "Scheduler" not in node_type:
+                if node_type != "ScenarioComponentNode":
                     issues.append(ValidationIssue(
                         id=f"dead_end_{node_id}",
                         type=ValidationType.TOPOLOGY_VALIDITY,
                         level=ValidationLevel.INFO,
                         node_id=node_id,
                         message=f"Node '{node_id}' has no outgoing connections",
-                        suggestion="Connect to a consumer or storage"
+                        suggestion="Connect to a downstream component"
                     ))
         
         return issues
@@ -524,10 +742,7 @@ class AdvancedValidator:
         
         # Check for required systems
         has_production = any(
-            t in node_types for t in ["ElectrolyzerNode", "ATRSourceNode", "PEMStackNode"]
-        )
-        has_storage = any(
-            t in node_types for t in ["LPTankNode", "HPTankNode", "OxygenBufferNode"]
+            t in node_types for t in ["PEMStackNode", "SOECStackNode"]
         )
         
         if not has_production:
@@ -536,18 +751,8 @@ class AdvancedValidator:
                 type=ValidationType.SYSTEM_COMPLETENESS,
                 level=ValidationLevel.ERROR,
                 message="No production sources found",
-                details="Plant must have at least one producer (Electrolyzer, ATR, etc.)",
-                suggestion="Add a production node"
-            ))
-        
-        if not has_storage:
-            issues.append(ValidationIssue(
-                id="no_storage",
-                type=ValidationType.SYSTEM_COMPLETENESS,
-                level=ValidationLevel.WARNING,
-                message="No storage tanks found",
-                details="Typical plants have storage",
-                suggestion="Add storage tank nodes"
+                details="Plant must have at least one PEM or SOEC producer",
+                suggestion="Add a PEMStackNode or SOECStackNode"
             ))
         
         return issues
@@ -562,21 +767,16 @@ class AdvancedValidator:
         for cycle in cycles:
             # Recirculation is OK, but feedback that creates issues is not
             has_producer = any(
-                self.nodes[n]["type"] in ["ElectrolyzerNode", "ATRSourceNode"]
-                for n in cycle
-            )
-            has_storage = any(
-                self.nodes[n]["type"] in ["LPTankNode", "HPTankNode"]
+                self.nodes[n]["type"] in ["PEMStackNode", "SOECStackNode"]
                 for n in cycle
             )
             
-            # Producer -> Storage -> Producer is problematic
-            if has_producer and has_storage:
+            if has_producer:
                 issues.append(ValidationIssue(
                     id=f"feedback_cycle",
                     type=ValidationType.CYCLE_DETECTION,
                     level=ValidationLevel.WARNING,
-                    message="Feedback cycle detected (Producer -> Storage -> Producer)",
+                    message="Feedback cycle detected in production path",
                     details=f"Cycle path: {' -> '.join(cycle)}",
                     suggestion="Verify this is intentional recirculation"
                 ))

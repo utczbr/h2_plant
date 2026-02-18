@@ -1,0 +1,11 @@
+h2_price_eur_kg: 9.6
+arbitrage_enabled: true
+discount_rate: 0.08
+project_lifetime_years: 20
+ppa_contract_price_eur_mwh: 80.0
+ppa_variable_price_eur_mwh: 55.0
+guaranteed_power_mw: 10.0
+h2_non_rfnbo_price_eur_kg: 2.0
+p_grid_max_mw: 10.0
+bop_pricing_mode: fixed
+bop_fixed_price_eur_mwh: 60.0

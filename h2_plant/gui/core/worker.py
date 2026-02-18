@@ -22,14 +22,21 @@ class SimulationWorker(QThread):
     Uses unified SimulationEngine architecture (Phase B1):
     - SimulationEngine: Component lifecycle, stepping, flow propagation
     - HybridArbitrageEngineStrategy: Dispatch decisions, pre-allocated history
+    
+    Supports two modes:
+    - Graph mode: context built from GraphToConfigAdapter
+    - Scenario mode: context loaded from ConfigLoader (scenarios_dir provided)
     """
     progress = Signal(int)
     finished = Signal(dict, object)
     error = Signal(str)
     
-    def __init__(self, context):
+    def __init__(self, context, strategy_override: str = None,
+                 scenarios_dir: str = None):
         super().__init__()
         self.context = context
+        self.strategy_override = strategy_override
+        self.scenarios_dir = scenarios_dir
         self._is_running = True
         
     def run(self):
@@ -38,114 +45,42 @@ class SimulationWorker(QThread):
                 raise ValueError("SimulationContext not provided to worker")
 
             logger.info("Starting unified SimulationEngine...")
-            
-            # === 1. Build Component Graph ===
-            from h2_plant.core.component_registry import ComponentRegistry
-            from h2_plant.core.graph_builder import PlantGraphBuilder
-            
-            builder = PlantGraphBuilder(self.context)
-            components = builder.build()
-            
-            # Create registry and register components
-            registry = ComponentRegistry()
-            for comp_id, comp in components.items():
-                registry.register(comp_id, comp)
 
-            # Register LUT Manager (for legacy plots/enthalpy)
-            from h2_plant.optimization.lut_manager import LUTManager
-            lut = LUTManager()
-            try:
-                lut.initialize()
-                registry.register('lut_manager', lut)
-            except Exception as e:
-                logger.warning(f"Failed to initialize LUTManager: {e}")
+            from h2_plant.run_integrated_simulation import run_with_dispatch_context
 
-            
-            # === 2. Create Dispatch Strategy ===
-            # === 2. Create Dispatch Strategy ===
-            dispatch_strategy = None
-            if hasattr(self.context.economics, 'arbitrage_enabled') and self.context.economics.arbitrage_enabled:
-                from h2_plant.control.engine_dispatch import HybridArbitrageEngineStrategy
-                dispatch_strategy = HybridArbitrageEngineStrategy()
-                logger.info("Arbitrage enabled: Using HybridArbitrageEngineStrategy")
+            # Resolve base directory for data files (energy prices, wind data).
+            if self.scenarios_dir:
+                data_dir = self.scenarios_dir
+                output_dir = Path(self.scenarios_dir) / "simulation_output"
             else:
-                logger.info("Arbitrage disabled: Running in manual/physics-only mode")
-            
-            # === 3. Create SimulationEngine ===
-            from h2_plant.simulation.engine import SimulationEngine
-            from h2_plant.config.plant_config import SimulationConfig
-            
-            # Convert context.simulation to SimulationConfig if needed
-            sim_config = SimulationConfig(
-                timestep_hours=self.context.simulation.timestep_hours,
-                duration_hours=self.context.simulation.duration_hours,
-                start_hour=0
-            )
-            
-            output_dir = Path("simulation_output")
-            engine = SimulationEngine(
-                registry=registry,
-                config=sim_config,
+                data_dir = str(Path(self.context.simulation.energy_price_file).parent) or "."
+                output_dir = Path("simulation_output")
+
+            if not self._is_running:
+                logger.info("Simulation cancelled before start")
+                return
+
+            # Graph mode (no scenarios_dir) uses fallback; scenario mode is strict.
+            dispatch_history, registry = run_with_dispatch_context(
+                self.context,
+                data_dir=data_dir,
                 output_dir=output_dir,
-                dispatch_strategy=dispatch_strategy
+                strategy=self.strategy_override,
+                allow_graph_dispatch_fallback=not bool(self.scenarios_dir),
+                return_registry=True,
             )
-            
-            # === 4. Load Price/Wind Data ===
-            from h2_plant.data.price_loader import EnergyPriceLoader
-            
-            data_dir = Path(self.context.simulation.energy_price_file).parent
-            loader = EnergyPriceLoader(str(data_dir))
-            
+
+            if not self._is_running:
+                logger.info("Simulation cancelled after engine run")
+                return
+
             total_steps = int(self.context.simulation.duration_hours * 60)
-            prices, wind = loader.load_data(
-                self.context.simulation.energy_price_file,
-                self.context.simulation.wind_data_file,
-                duration_hours=self.context.simulation.duration_hours,
-                timestep_hours=self.context.simulation.timestep_hours
-            )
-            
-            # Ensure arrays are correct length
-            if len(prices) < total_steps:
-                prices = np.tile(prices, int(np.ceil(total_steps / len(prices))))[:total_steps]
-            if len(wind) < total_steps:
-                wind = np.tile(wind, int(np.ceil(total_steps / len(wind))))[:total_steps]
-            
-            # === 5. Initialize Engine with Dispatch Strategy ===
-            engine.set_dispatch_data(prices, wind)
-            engine.initialize()
-            engine.initialize_dispatch_strategy(self.context, total_steps)
-            
-            # === 6. Run Simulation ===
-            logger.info(f"Running simulation for {self.context.simulation.duration_hours} hours...")
-            _ = engine.run(
-                start_hour=0,
-                end_hour=self.context.simulation.duration_hours
-            )
-            
-            # === 7. Get Dispatch History for Plotting ===
-            # The plotter expects a flat dict of arrays, not the nested engine results
-            dispatch_history = engine.get_dispatch_history()
-            
-            if dispatch_history:
-                # Convert numpy arrays to lists for plotter compatibility
-                results = {}
-                for key, arr in dispatch_history.items():
-                    if isinstance(arr, np.ndarray):
-                        results[key] = arr.tolist()
-                    else:
-                        results[key] = arr
-            else:
-                logger.warning("No dispatch history available, using empty results")
-                results = {}
-            
-            # === 8. Add required keys for plotter ===
-            # Map dispatch history keys to expected plotter keys
+            results = dict(dispatch_history or {})
             results = self._normalize_results(results, total_steps)
-            
-            # Emit Results
+
             logger.info("Simulation completed successfully!")
             self.finished.emit(results, registry)
-            
+
         except Exception as e:
             logger.error(f"Simulation failed: {e}")
             logger.error(traceback.format_exc())
@@ -156,10 +91,12 @@ class SimulationWorker(QThread):
         Normalize result keys for plotter compatibility.
         
         Maps SimulationEngine/DispatchStrategy keys to plotter expected keys.
+        Values remain as NumPy arrays where possible; list fallbacks are
+        created only for missing keys (constant fills).
         """
         # Ensure minute index exists
         if 'minute' not in results:
-            results['minute'] = list(range(total_steps))
+            results['minute'] = np.arange(total_steps)
         
         # Map power keys
         key_mappings = {
@@ -175,7 +112,7 @@ class SimulationWorker(QThread):
             if src_key in results and dst_key not in results:
                 results[dst_key] = results[src_key]
         
-        # Ensure required keys exist with defaults
+        # Ensure required keys exist with zero-filled arrays
         required_defaults = {
             'P_soec': 0.0,
             'P_pem': 0.0,
@@ -190,10 +127,10 @@ class SimulationWorker(QThread):
         
         for key, default in required_defaults.items():
             if key not in results:
-                results[key] = [default] * total_steps
+                results[key] = np.full(total_steps, default)
         
         return results
             
     def stop(self):
+        """Request cooperative cancellation of the simulation."""
         self._is_running = False
-

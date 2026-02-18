@@ -1,0 +1,152 @@
+# OPEX Configuration
+# Based on "CAPEX e OPEX - Cópia de OPEX.pdf" methodology
+# 
+# Strategies:
+#   - variable: Price × Quantity (from simulation)
+#   - fixed: Manual fixed annual cost
+#   - factor: % of base value (FCI, Labor)
+#   - turton_labor: Turton formula for operator estimation
+#   - scaling: Production-scaled costs
+
+scenario_name: "H2 Plant - Base Case"
+
+opex_items:
+
+  # ===========================================================================
+  # VARIABLE COSTS (Simulation-Driven)
+  # ===========================================================================
+
+  - name: "Electricity Consumption"
+    category: "Variable"
+    strategy: "variable"
+    resource_id: "power_consumption_kw"  # Matches simulation column pattern
+    metric: "sum"                         # Sum over simulation period
+    price: 0.25                           # €0.25/kWh (PPA estimate)
+    unit: "kWh"
+    notes:
+      - "PPA contract with wind farm"
+      - "Price includes grid balancing"
+
+  - name: "Process Water (Makeup)"
+    category: "Variable"
+    strategy: "variable"
+    resource_id: "Water_Source"           # External water source flow
+    metric: "sum"
+    price: 0.002                          # €1.97/m³ ≈ €0.002/kg
+    unit: "kg"
+    notes:
+      - "Municipal supply for electrolysis makeup"
+
+  - name: "Biogas Feed"
+    category: "Variable"
+    strategy: "variable"
+    resource_id: "Biogas_Source"
+    metric: "sum"
+    price: 0.03                           # €/kg biogas
+    unit: "kg"
+    notes:
+      - "Local waste-to-biogas plant supply"
+      - "Price includes transport"
+
+  - name: "Cooling Water (Chiller)"
+    category: "Variable"
+    strategy: "variable"
+    resource_id: "cooling_duty"
+    metric: "sum"
+    price: 0.0001                         # Minimal cost (air cooling primary)
+    unit: "kWh_th"
+
+  # ===========================================================================
+  # FIXED COSTS (Labor & Overhead)
+  # ===========================================================================
+
+  - name: "Operating Labor (Turton)"
+    category: "Fixed"
+    strategy: "turton_labor"
+    turton_P: 0                           # No particulate steps
+    turton_Nnp: 75                        # 75 non-particulate process steps
+    shifts: 4.8                           # 5-shift system for 24/7 (4.8 effective)
+    hours_per_year: 2080                  # Hours per operator per year
+    price: 25.0                           # €25/hour base wage
+    notes:
+      - "Turton formula: N = (6.29 + 31.7*P² + 0.23*Nnp)^0.5"
+      - "Includes shift premium"
+
+  # Alternative: Manual override from PDF Source 10
+  # Uncomment to use instead of Turton formula
+  # - name: "Total Staffing (Manual)"
+  #   category: "Fixed"
+  #   strategy: "fixed"
+  #   price: 1744840.0
+  #   notes:
+  #     - "From detailed staffing model"
+
+  - name: "Supervisory & Technical Staff"
+    category: "Fixed"
+    strategy: "factor"
+    base_reference: "Labor"
+    price: 0.25                           # 25% of direct labor
+    notes:
+      - "Includes shift supervisors and engineers"
+
+  - name: "Laboratory & QC"
+    category: "Fixed"
+    strategy: "factor"
+    base_reference: "Labor"
+    price: 0.10                           # 10% of direct labor
+    notes:
+      - "H2 purity testing, water quality"
+
+  - name: "Administration & Overhead"
+    category: "Fixed"
+    strategy: "factor"
+    base_reference: "Labor"
+    price: 0.60                           # 60% of direct labor
+    notes:
+      - "Includes management, HR, IT, legal"
+
+  - name: "Insurance & Local Tax"
+    category: "Fixed"
+    strategy: "factor"
+    base_reference: "FCI"
+    price: 0.03                           # 3% of FCI
+    notes:
+      - "Property insurance, liability, municipal tax"
+
+  # ===========================================================================
+  # MAINTENANCE COSTS
+  # ===========================================================================
+
+  - name: "General Maintenance (FCI %)"
+    category: "Maintenance"
+    strategy: "factor"
+    base_reference: "FCI"
+    price: 0.07                           # 7% of FCI
+    notes:
+      - "Industry standard for chemical plants"
+      - "Includes labor, spares, consumables"
+
+  - name: "Catalyst Replacement (ATR)"
+    category: "Maintenance"
+    strategy: "fixed"
+    price: 2000.0                         # €6000 every 3 years, annualized
+    notes:
+      - "Reformer catalyst life: 3 years"
+
+  - name: "Stack Replacement Reserve (PEM)"
+    category: "Maintenance"
+    strategy: "factor"
+    base_reference: "FCI"
+    price: 0.015                          # 1.5% of FCI
+    notes:
+      - "PEM stack degradation reserve"
+      - "Based on 60,000 hour stack life"
+
+  - name: "Stack Replacement Reserve (SOEC)"
+    category: "Maintenance"
+    strategy: "factor"
+    base_reference: "FCI"
+    price: 0.02                           # 2% of FCI
+    notes:
+      - "SOEC stack degradation reserve"
+      - "Higher due to thermal cycling"
