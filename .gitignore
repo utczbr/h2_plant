@@ -34,3 +34,6 @@ simulation_output_20_years/
 history_chunks/
 simulation_output_3_scenarios.zip
 # removed to allow tracking of LFS cache files
+benchmark_output
+.claude
+.benchmarks
