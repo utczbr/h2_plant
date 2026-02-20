@@ -530,7 +530,15 @@ class UnifiedGraphExecutor:
                         f"{len(df)} rows x {len(df.columns)} cols"
                     )
                 else:
-                    df = pd.read_parquet(cache_path, columns=columns_to_load)
+                    # use_threads=False: sequential column decompression avoids parallel
+                    # decompression buffer spikes (each column's tmp buffer freed before next).
+                    # self_destruct=True: PyArrow frees each Arrow column buffer as it is
+                    # converted to a numpy array, keeping peak at ~1× final size instead of
+                    # ~2× (Arrow table + Pandas DataFrame overlapping in memory).
+                    arrow_table = pf.read(columns=columns_to_load, use_threads=False)
+                    df = arrow_table.to_pandas(self_destruct=True)
+                    del arrow_table
+                    gc.collect()
                     logger.info(f"Loaded cache: {len(df)} rows x {len(df.columns)} columns")
 
                 # Normalize loaded data
