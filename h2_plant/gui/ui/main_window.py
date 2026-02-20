@@ -1115,6 +1115,10 @@ class PlantEditorWindow(QMainWindow):
         self._generated_bundle_dir = None          # Path to last-exported bundle
         self._template_source_manifest = None      # original scenarios/ reference
         self._economics_editing_connected = False   # guard for cellChanged signal
+
+        # Zone overlay state (visual swimlane rectangles)
+        self._visual_layout: dict | None = None    # visual_layout metadata from topology_analysis
+        self._zone_overlay_items: list = []         # QGraphicsItem refs for cleanup
         
         # Validation Timer
         self.validation_timer = QTimer()
@@ -1403,6 +1407,13 @@ class PlantEditorWindow(QMainWindow):
         toggle_palette_action = QAction("Toggle Nodes Panel", self)
         toggle_palette_action.triggered.connect(lambda: self.palette_dock.setVisible(not self.palette_dock.isVisible()))
         view_menu.addAction(toggle_palette_action)
+
+        view_menu.addSeparator()
+
+        auto_layout_action = QAction("Auto-Layout (Report Mode)", self)
+        auto_layout_action.setStatusTip("Recalculate zone-based layout and redraw swimlane overlays")
+        auto_layout_action.triggered.connect(self._run_auto_layout_report_mode)
+        view_menu.addAction(auto_layout_action)
 
         # VALIDATION MENU
         validation_menu = menubar.addMenu("Validation")
@@ -2275,10 +2286,12 @@ class PlantEditorWindow(QMainWindow):
     # ---- FILE OPERATIONS ----
     def new_layout(self):
         """Create a new empty layout."""
-        reply = QMessageBox.question(self, "New Layout", 
+        reply = QMessageBox.question(self, "New Layout",
                                      "Clear current layout?",
                                      QMessageBox.Yes | QMessageBox.No)
         if reply == QMessageBox.Yes:
+            self._clear_zone_overlays()
+            self._visual_layout = None
             self.graph.clear_session()
             self._restore_topology_analysis(None)
     
@@ -2440,6 +2453,12 @@ class PlantEditorWindow(QMainWindow):
             snapshot = self.persistence_mgr.load(str(prebuilt_path))
             self.persistence_mgr.restore_to_graph(self.graph, snapshot)
             self._restore_topology_analysis(snapshot.topology_analysis)
+            # Apply angle pipe routing for prebuilt report-mode layouts
+            try:
+                from NodeGraphQt.constants import PipeLayoutEnum
+                self.graph.set_pipe_style(PipeLayoutEnum.ANGLE)
+            except Exception:
+                pass
 
             repo_scenarios_dir = Path(__file__).resolve().parents[3] / "scenarios"
             fallback_manifest = {
@@ -2729,6 +2748,149 @@ class PlantEditorWindow(QMainWindow):
                 pass  # not connected
         self._economics_editing_connected = False
 
+    # ---- ZONE OVERLAY RENDERING ----
+
+    def _draw_zone_overlays(self, visual_layout: dict) -> None:
+        """Draw decorative swimlane rectangles for each process zone on the graph scene.
+
+        Overlays are fixed-position QGraphicsRectItem items placed behind all nodes.
+        They reflect the initial import positions and are not updated when nodes are dragged.
+        """
+        from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsTextItem
+        from PySide6.QtGui import QColor, QPen, QFont
+        from PySide6.QtCore import Qt
+
+        self._clear_zone_overlays()
+
+        scene = self.graph.scene()
+        if scene is None:
+            return
+
+        zones = visual_layout.get("zones", {})
+        for zone_name, zone_rect in zones.items():
+            x = float(zone_rect.get("x", 0.0))
+            y = float(zone_rect.get("y", 0.0))
+            w = float(zone_rect.get("w", 200.0))
+            h = float(zone_rect.get("h", 200.0))
+            color_list = zone_rect.get("color", [200, 200, 200])
+            r, g, b = int(color_list[0]), int(color_list[1]), int(color_list[2])
+
+            rect_item = QGraphicsRectItem(x, y, w, h)
+            bg_color = QColor(r, g, b, 60)   # semi-transparent fill
+            border_color = QColor(r, g, b, 160)
+            rect_item.setBrush(bg_color)
+            rect_item.setPen(QPen(border_color, 2))
+            rect_item.setZValue(-100)  # behind all nodes
+            scene.addItem(rect_item)
+            self._zone_overlay_items.append(rect_item)
+
+            label_item = QGraphicsTextItem(zone_name)
+            font = QFont()
+            font.setBold(True)
+            font.setPointSize(9)
+            label_item.setFont(font)
+            label_item.setDefaultTextColor(QColor(r // 2, g // 2, b // 2, 220))
+            label_item.setPos(x + 8, y + 4)
+            label_item.setZValue(-99)
+            scene.addItem(label_item)
+            self._zone_overlay_items.append(label_item)
+
+        logger.debug("Drew %d zone overlays", len(zones))
+
+    def _clear_zone_overlays(self) -> None:
+        """Remove all zone overlay items from the graph scene."""
+        scene = self.graph.scene() if hasattr(self, "graph") else None
+        for item in self._zone_overlay_items:
+            try:
+                if scene is not None:
+                    scene.removeItem(item)
+            except Exception:
+                pass
+        self._zone_overlay_items = []
+
+    def _apply_zone_colors(self, visual_layout: dict) -> None:
+        """Apply zone-based background colors to nodes after they are placed in the graph."""
+        from h2_plant.gui.core.visual_layout_policy import BLOCK_COLORS, ZONE_COLORS
+        node_zone_map = visual_layout.get("node_zone_map", {})
+        for node in self.graph.all_nodes():
+            node_id = node.name() if hasattr(node, "name") else str(node)
+            # Try component_id property first (canonical ID)
+            try:
+                node_id = node.get_property("component_id") or node_id
+            except Exception:
+                pass
+            zone = node_zone_map.get(node_id)
+            if zone:
+                color = ZONE_COLORS.get(zone) or BLOCK_COLORS.get(zone)
+                if color:
+                    r, g, b = color
+                    try:
+                        node.set_color(r, g, b)
+                    except Exception:
+                        pass
+
+    def _run_auto_layout_report_mode(self) -> None:
+        """Recalculate report-mode layout for the current scenario and redraw overlays.
+
+        Only works when a scenario manifest is active (i.e., a scenario has been imported).
+        Node positions are updated; overlays are redrawn from fresh layout data.
+        """
+        manifest = self._scenario_manifest
+        if not manifest or not manifest.get("scenarios_dir"):
+            QMessageBox.information(
+                self,
+                "Auto-Layout",
+                "No active scenario. Open a prebuilt visual twin or import a scenario first.",
+            )
+            return
+
+        scenarios_dir = manifest.get("scenarios_dir", "")
+        topology_file = manifest.get("topology_file", "plant_topology.yaml")
+        # topology_file may be relative to scenarios_dir
+        from pathlib import Path as _Path
+        tp = _Path(topology_file)
+        if not tp.is_absolute():
+            topology_file = str(_Path(scenarios_dir) / tp)
+
+        try:
+            from h2_plant.gui.core.scenario_visual_importer import ScenarioVisualImporter as _SVI
+            model = _SVI.build_visual_model(
+                scenarios_dir=scenarios_dir,
+                topology_file=topology_file,
+                layout_mode="report_v1",
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Auto-Layout Error", f"Layout calculation failed:\n{exc}")
+            return
+
+        # Apply new positions to live graph nodes
+        from NodeGraphQt.constants import PipeLayoutEnum
+        node_id_to_node = {
+            (n.get_property("component_id") or n.name()): n
+            for n in self.graph.all_nodes()
+        }
+        for visual_node in model.nodes:
+            live_node = node_id_to_node.get(visual_node.id)
+            if live_node is not None:
+                live_node.set_pos(visual_node.x, visual_node.y)
+
+        # Set angle pipe routing
+        try:
+            self.graph.set_pipe_style(PipeLayoutEnum.ANGLE)
+        except Exception:
+            pass
+
+        # Redraw overlays
+        vl = model.metadata.get("visual_layout")
+        if vl:
+            self._visual_layout = dict(vl)
+            self._draw_zone_overlays(self._visual_layout)
+            self._apply_zone_colors(self._visual_layout)
+
+        self.graph.fit_to_selection()
+
+    # ---- TOPOLOGY ANALYSIS PAYLOAD ----
+
     def _build_topology_analysis_payload(self):
         """Collect additive snapshot metadata for scenario-imported layouts."""
         if not self._scenario_manifest:
@@ -2745,6 +2907,8 @@ class PlantEditorWindow(QMainWindow):
             payload["generated_bundle_manifest"] = {
                 "bundle_dir": str(self._generated_bundle_dir),
             }
+        if self._visual_layout is not None:
+            payload["visual_layout"] = dict(self._visual_layout)
         return payload
 
     def _check_manifest_hash_drift(self):
@@ -2781,6 +2945,10 @@ class PlantEditorWindow(QMainWindow):
 
     def _restore_topology_analysis(self, topology_analysis):
         """Restore scenario metadata from snapshot payload."""
+        # Always clear existing overlays before (re)loading.
+        self._clear_zone_overlays()
+        self._visual_layout = None
+
         if not topology_analysis or not topology_analysis.get("scenario_manifest"):
             self._scenario_manifest = None
             self._scenario_economics = {}
@@ -2829,6 +2997,16 @@ class PlantEditorWindow(QMainWindow):
             bundle_meta = topology_analysis.get("generated_bundle_manifest")
             if bundle_meta and bundle_meta.get("bundle_dir"):
                 self._generated_bundle_dir = Path(bundle_meta["bundle_dir"])
+
+        # Restore zone overlay from persisted visual_layout (present only in report_v1 layouts)
+        vl = topology_analysis.get("visual_layout")
+        if vl and isinstance(vl, dict) and vl.get("zones"):
+            self._visual_layout = dict(vl)
+            try:
+                self._draw_zone_overlays(self._visual_layout)
+                self._apply_zone_colors(self._visual_layout)
+            except Exception as overlay_exc:
+                logger.warning("Zone overlay rendering failed (non-fatal): %s", overlay_exc)
 
     def _populate_scenario_economics_table(self):
         economics = self._scenario_economics or {}

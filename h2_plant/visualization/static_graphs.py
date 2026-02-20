@@ -199,12 +199,20 @@ def _detect_component_stream_type(df: pd.DataFrame, comp_name: str) -> str:
     # For now, return Mixed
     return 'Mixed'
 
-def normalize_history(history: Union[Dict[str, Any], pd.DataFrame]) -> pd.DataFrame:
+def normalize_history(
+    history: Union[Dict[str, Any], pd.DataFrame],
+    inplace: bool = True
+) -> pd.DataFrame:
     """
-    Normalizes the history dictionary or DataFrame to ensure consistent keys for plotting.
+    Normalize history data to ensure consistent keys for plotting.
+
+    Args:
+        history: History dictionary or DataFrame.
+        inplace: If True and `history` is a DataFrame, mutate it directly to
+            avoid an additional copy. If False, operate on a copy.
     """
     if isinstance(history, pd.DataFrame):
-        df = history.copy()
+        df = history if inplace else history.copy()
     else:
         df = pd.DataFrame(history)
     
@@ -243,7 +251,7 @@ def normalize_history(history: Union[Dict[str, Any], pd.DataFrame]) -> pd.DataFr
     if 'minute' not in df.columns:
         df['minute'] = df.index
     
-    if 'soec_module_powers' in history:
+    if isinstance(history, dict) and 'soec_module_powers' in history:
         df.attrs['soec_module_powers'] = history['soec_module_powers']
         
     return df
@@ -4745,4 +4753,3 @@ def create_storage_pressure_heatmap_figure(matrices: Dict[str, np.ndarray], dpi:
     ax.set_yticks(range(rows))
     
     return fig
-

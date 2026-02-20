@@ -112,8 +112,29 @@ def run_with_dispatch_context(
     from h2_plant.data.price_loader import EnergyPriceLoader
     from h2_plant.config.plant_config import ConnectionConfig, SimulationConfig
 
-    if hours is None:
-        hours = context.simulation.duration_hours
+    run_start_hour = resume_from_hour or 0
+    run_end_hour = hours if hours is not None else context.simulation.duration_hours
+    run_duration_hours = run_end_hour - run_start_hour
+    if run_duration_hours <= 0:
+        raise ValueError(
+            f"Invalid run window: start_hour={run_start_hour}, "
+            f"end_hour={run_end_hour}, duration_hours={run_duration_hours}. "
+            "Expected a positive duration."
+        )
+    total_steps = int(run_duration_hours * 60)
+    if total_steps <= 0:
+        raise ValueError(
+            f"Invalid dispatch horizon: duration_hours={run_duration_hours} produced "
+            f"total_steps={total_steps}. Expected at least 1 step."
+        )
+    logger.info(
+        "Resolved run window: start_hour=%s, end_hour=%s, duration_hours=%s, "
+        "total_dispatch_steps=%s",
+        run_start_hour,
+        run_end_hour,
+        run_duration_hours,
+        total_steps,
+    )
 
     # 1. Build component graph and populate registry
     builder = PlantGraphBuilder(context)
@@ -176,7 +197,7 @@ def run_with_dispatch_context(
     # 4. Create SimulationEngine
     sim_config = SimulationConfig(
         timestep_hours=context.simulation.timestep_hours,
-        duration_hours=context.simulation.duration_hours,
+        duration_hours=run_duration_hours,
         start_hour=0,
         dispatch_strategy=getattr(context.simulation, 'dispatch_strategy', 'REFERENCE_HYBRID'),
         checkpoint_interval_hours=getattr(context.simulation, 'checkpoint_interval_hours', 168),
@@ -195,18 +216,51 @@ def run_with_dispatch_context(
     if data_dir is None:
         data_dir = str(Path(context.simulation.energy_price_file).parent) or "."
     loader = EnergyPriceLoader(str(data_dir))
-    total_steps = int(context.simulation.duration_hours * 60)
     prices, wind = loader.load_data(
         context.simulation.energy_price_file,
         context.simulation.wind_data_file,
-        duration_hours=context.simulation.duration_hours,
+        duration_hours=run_duration_hours,
         timestep_hours=context.simulation.timestep_hours,
     )
-    # Pad arrays to full duration if data file is shorter
-    if len(prices) < total_steps:
-        prices = np.tile(prices, int(np.ceil(total_steps / len(prices))))[:total_steps]
-    if len(wind) < total_steps:
-        wind = np.tile(wind, int(np.ceil(total_steps / len(wind))))[:total_steps]
+
+    orig_price_len = len(prices)
+    orig_wind_len = len(wind)
+    if orig_price_len == 0 or orig_wind_len == 0:
+        raise ValueError(
+            f"Dispatch data is empty (prices={orig_price_len}, wind={orig_wind_len}). "
+            "Cannot run dispatch simulation."
+        )
+
+    # Repeat profile extension policy: tile cyclically to full run horizon.
+    if orig_price_len < total_steps:
+        prices = np.tile(prices, int(np.ceil(total_steps / orig_price_len)))[:total_steps]
+        logger.info(
+            "Profile extension applied: prices tiled from %s to %s steps",
+            orig_price_len,
+            len(prices),
+        )
+    elif orig_price_len > total_steps:
+        prices = prices[:total_steps]
+        logger.info(
+            "Profile truncation applied: prices trimmed from %s to %s steps",
+            orig_price_len,
+            len(prices),
+        )
+
+    if orig_wind_len < total_steps:
+        wind = np.tile(wind, int(np.ceil(total_steps / orig_wind_len)))[:total_steps]
+        logger.info(
+            "Profile extension applied: wind tiled from %s to %s steps",
+            orig_wind_len,
+            len(wind),
+        )
+    elif orig_wind_len > total_steps:
+        wind = wind[:total_steps]
+        logger.info(
+            "Profile truncation applied: wind trimmed from %s to %s steps",
+            orig_wind_len,
+            len(wind),
+        )
 
     # 6. Initialize engine and dispatch strategy
     engine.set_dispatch_data(prices, wind)
@@ -216,14 +270,18 @@ def run_with_dispatch_context(
     )
 
     # 7. Run simulation
-    start_hour = resume_from_hour or 0
     if resume_from_hour:
-        logger.info(f"Resuming from hour {resume_from_hour}, running to hour {hours}")
+        logger.info(
+            f"Resuming from hour {run_start_hour}, running to hour {run_end_hour} "
+            f"({total_steps} dispatch steps)"
+        )
     else:
-        logger.info(f"Running simulation for {hours} hours ({total_steps} steps)")
+        logger.info(
+            f"Running simulation for {run_duration_hours} hours ({total_steps} steps)"
+        )
     engine.run(
-        start_hour=start_hour,
-        end_hour=hours,
+        start_hour=run_start_hour,
+        end_hour=run_end_hour,
         resume_from_checkpoint=str(resume_checkpoint_path) if resume_checkpoint_path else None,
     )
 

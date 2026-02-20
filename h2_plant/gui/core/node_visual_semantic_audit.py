@@ -18,26 +18,7 @@ import yaml
 from h2_plant.config.loader import ConfigLoader
 from h2_plant.gui.core.graph_persistence import GraphPersistenceManager
 from h2_plant.gui.core.scenario_param_mapper import backend_to_gui_props
-
-
-PHASE_DEFINITIONS: List[Tuple[str, Tuple[str, ...]]] = [
-    ("Phase 1: Electrolysis & Power Conditioning", ("PEM", "SOEC", "PowerTransformer")),
-    (
-        "Phase 2: Thermal Management",
-        ("Chiller", "DryCooler", "ElectricBoiler", "Interchanger", "CoolingManager", "Attemperator"),
-    ),
-    (
-        "Phase 3: Separation & Gas Purification",
-        ("Coalescer", "KnockOutDrum", "HydrogenMultiCyclone", "DeoxoReactor", "PSA Unit", "SyngasPSA", "SeparationTank"),
-    ),
-    (
-        "Phase 4: Flow Control & Mixing",
-        ("Valve", "Mixer", "DrainRecorderMixer", "SignalMakeupMixer", "ProportionalMakeupMixer", "StreamSplitter", "OxygenMakeupNode"),
-    ),
-    ("Phase 5: Water Supply & Pumping", ("ExternalWaterSource", "WaterPurifier", "UltraPureWaterTank", "WaterPumpThermodynamic")),
-    ("Phase 6: Storage & Delivery", ("DetailedTank", "CompressorSingle", "DischargeStation")),
-    ("Phase 7: Reforming & Feedstock", ("IntegratedATRPlant", "ATR_Boiler", "BiogasSource")),
-]
+from h2_plant.gui.core.visual_layout_policy import PHASE_DEFINITIONS
 
 PHASE_ORDER = {name: idx for idx, (name, _) in enumerate(PHASE_DEFINITIONS)}
 PHASE_BY_TYPE = {backend_type: phase for phase, types in PHASE_DEFINITIONS for backend_type in types}
@@ -802,6 +783,66 @@ def run_audit(
                 observed=missing_edge_geometry,
                 fix_hint="Persist full edge geometry/style payload for visual fidelity.",
             )
+
+    # Zone readability checks (only when visual_layout metadata is present).
+    topology_analysis = dict(snapshot.topology_analysis or {})
+    visual_layout = topology_analysis.get("visual_layout")
+    if visual_layout and isinstance(visual_layout, dict) and visual_layout.get("zones"):
+        from h2_plant.gui.core.visual_layout_policy import ZONE_BY_BACKEND_TYPE as _ZONE_BY_BACKEND_TYPE
+        node_zone_map = visual_layout.get("node_zone_map", {})
+        zones_meta = visual_layout.get("zones", {})
+        for node_id, backend in sorted(backend_by_id.items(), key=lambda item: item[1]["order"]):
+            backend_type = backend["type"]
+            phase = backend["phase"]
+            zone = node_zone_map.get(node_id)
+
+            # Check 1: node should have a valid zone assignment
+            if not zone or zone == "Uncategorised":
+                expected_zone = _ZONE_BY_BACKEND_TYPE.get(backend_type, "")
+                _add_finding(
+                    findings,
+                    phase,
+                    node_id,
+                    backend_type,
+                    "minor",
+                    "missing_visual_zone",
+                    expected=expected_zone or "a named process zone",
+                    observed=zone or "<absent>",
+                    fix_hint=(
+                        "Add this backend_type to PHASE_DEFINITIONS in visual_layout_policy.py "
+                        "or set system_group in the topology YAML."
+                    ),
+                )
+                continue
+
+            # Check 2: node position should fall within its assigned zone bounding box
+            snapshot_node = snapshot.nodes.get(node_id)
+            if snapshot_node is None:
+                continue
+            geometry = dict(snapshot_node.get("geometry", {}) or {})
+            node_x = float(geometry.get("x", 0.0))
+            node_y = float(geometry.get("y", 0.0))
+            zone_rect = zones_meta.get(zone)
+            if zone_rect:
+                zx = float(zone_rect.get("x", 0.0))
+                zy = float(zone_rect.get("y", 0.0))
+                zw = float(zone_rect.get("w", 0.0))
+                zh = float(zone_rect.get("h", 0.0))
+                if not (zx <= node_x <= zx + zw and zy <= node_y <= zy + zh):
+                    _add_finding(
+                        findings,
+                        phase,
+                        node_id,
+                        backend_type,
+                        "minor",
+                        "node_outside_zone",
+                        expected=f"position within zone '{zone}' bbox ({zx:.0f},{zy:.0f},{zw:.0f}x{zh:.0f})",
+                        observed=f"node at ({node_x:.0f},{node_y:.0f})",
+                        fix_hint=(
+                            "Re-run auto-layout (View → Auto-Layout Report Mode) "
+                            "or adjust node position manually."
+                        ),
+                    )
 
     # Phase summaries.
     findings.sort(key=lambda f: _report_sort_key(f, backend_order))

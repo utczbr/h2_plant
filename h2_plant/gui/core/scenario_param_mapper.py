@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, Tuple
 import yaml
 
 
-IMPORT_SURFACE_SCHEMA_VERSION = 1
+IMPORT_SURFACE_SCHEMA_VERSION = 2
 
 
 _FRACTION_KEYS = {"base_efficiency", "efficiency", "isentropic_efficiency", "eta_is", "eta_m"}

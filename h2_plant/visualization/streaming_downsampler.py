@@ -80,11 +80,32 @@ class StreamingDownsampler:
         self, 
         chunks_dir: Path,
         output_cache: Path,
-        required_columns: Optional[List[str]] = None
+        required_columns: Optional[List[str]] = None,
+        write_mode: str = "streaming",
+        return_dataframe: bool = False
     ) -> pd.DataFrame:
         """
         Process all chunks with memory safety.
+
+        Args:
+            chunks_dir: Directory containing parquet chunks.
+            output_cache: Output parquet cache path.
+            required_columns: Optional subset of columns to load.
+            write_mode: "streaming" writes each chunk directly to parquet;
+                "inmemory" keeps legacy concat behavior.
+            return_dataframe: If True, return loaded DataFrame. If False,
+                return an empty DataFrame to avoid a second large allocation.
         """
+        mode = (write_mode or "streaming").lower()
+        if mode not in {"streaming", "inmemory"}:
+            raise ValueError(f"Invalid write_mode='{write_mode}'. Expected 'streaming' or 'inmemory'.")
+
+        # Reset mutable state for repeated calls
+        self.accumulated_chunks = []
+        self.current_memory_mb = 0.0
+        self.current_resolution = self.target_resolution
+        self.is_emergency_mode = False
+
         # Fix: Sort numerically by chunk index (chunk_1, chunk_2, ... chunk_10)
         # Using simple lambda that handles the filename format chunk_N.parquet
         try:
@@ -98,32 +119,104 @@ class StreamingDownsampler:
         if not chunk_files:
             raise ValueError(f"No chunk files found in {chunks_dir}")
         
-        logger.info(f"Processing {len(chunk_files)} chunks with memory budget: {self.max_memory_mb} MB")
-        
-        for i, chunk_file in enumerate(chunk_files):
-            # Memory check before loading
-            if self._check_memory_pressure():
-                logger.warning(f"Memory pressure detected at chunk {i+1}/{len(chunk_files)}")
-                self._emergency_consolidation()
-            
-            # Load and downsample chunk
+        logger.info(
+            f"Processing {len(chunk_files)} chunks with memory budget: {self.max_memory_mb} MB "
+            f"(mode={mode}, return_dataframe={return_dataframe})"
+        )
+
+        pa = None
+        pq = None
+        if mode == "streaming":
             try:
-                chunk_df = self._load_and_downsample_chunk(chunk_file, required_columns)
-                
-                # Accumulate
-                self.accumulated_chunks.append(chunk_df)
-                # Estimate size increase (approximate)
-                self.current_memory_mb += chunk_df.memory_usage(deep=True).sum() / 1e6
-                
-                # Progress
-                if (i + 1) % 10 == 0:
-                    self.monitor.log_usage(f"after processing chunk {i+1}/{len(chunk_files)}")
-                    
-            except Exception as e:
-                logger.error(f"Failed to process chunk {chunk_file}: {e}")
-                continue
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+            except ImportError:
+                logger.warning("pyarrow not available; falling back to in-memory concat mode.")
+                mode = "inmemory"
+
+        output_cache.parent.mkdir(parents=True, exist_ok=True)
+        start_ts = time.time()
+        writer = None
+        target_columns = list(required_columns) if required_columns else None
+        rows_written = 0
+        chunks_written = 0
         
-        # Final concatenation
+        try:
+            for i, chunk_file in enumerate(chunk_files):
+                # Memory check before loading
+                if self._check_memory_pressure():
+                    logger.warning(f"Memory pressure detected at chunk {i+1}/{len(chunk_files)}")
+                    self._emergency_consolidation()
+                
+                # Load and downsample chunk
+                try:
+                    chunk_df = self._load_and_downsample_chunk(chunk_file, required_columns)
+                    if chunk_df.empty:
+                        continue
+                    
+                    if mode == "streaming":
+                        if target_columns is None:
+                            target_columns = list(chunk_df.columns)
+                        else:
+                            for col in target_columns:
+                                if col not in chunk_df.columns:
+                                    chunk_df[col] = float('nan')
+                            extra_cols = [c for c in chunk_df.columns if c not in target_columns]
+                            if extra_cols:
+                                logger.warning(
+                                    "Dropping %d unexpected columns in %s to preserve streaming schema.",
+                                    len(extra_cols),
+                                    chunk_file.name
+                                )
+                            chunk_df = chunk_df[[c for c in target_columns if c in chunk_df.columns]]
+                        
+                        table = pa.Table.from_pandas(chunk_df, preserve_index=False)
+                        if writer is None:
+                            logger.info(f"Writing cache to {output_cache} (streaming parquet writer)...")
+                            writer = pq.ParquetWriter(output_cache, table.schema, compression='snappy')
+                        writer.write_table(table)
+                        rows_written += len(chunk_df)
+                        chunks_written += 1
+                        self.current_memory_mb = chunk_df.memory_usage(deep=True).sum() / 1e6
+                        del table
+                    else:
+                        self.accumulated_chunks.append(chunk_df)
+                        # Estimate size increase (approximate)
+                        self.current_memory_mb += chunk_df.memory_usage(deep=True).sum() / 1e6
+                    
+                    # Progress
+                    if (i + 1) % 10 == 0:
+                        self.monitor.log_usage(f"after processing chunk {i+1}/{len(chunk_files)}")
+                    if (i + 1) % 20 == 0:
+                        gc.collect()
+                    
+                    del chunk_df
+                except Exception as e:
+                    logger.error(f"Failed to process chunk {chunk_file}: {e}")
+                    continue
+            
+            if mode == "streaming":
+                if writer is not None:
+                    writer.close()
+                    writer = None
+                    elapsed = time.time() - start_ts
+                    logger.info(
+                        f"Streaming cache write complete: {rows_written} rows from {chunks_written} chunks "
+                        f"in {elapsed:.1f}s"
+                    )
+                else:
+                    logger.warning("No data accumulated.")
+                    return pd.DataFrame()
+                
+                if return_dataframe:
+                    result_df = pd.read_parquet(output_cache)
+                    return result_df
+                return pd.DataFrame()
+        finally:
+            if writer is not None:
+                writer.close()
+        
+        # Legacy in-memory final concatenation
         logger.info("Concatenating downsampled chunks...")
         if not self.accumulated_chunks:
              logger.warning("No data accumulated.")
@@ -141,8 +234,6 @@ class StreamingDownsampler:
         
         # Save cache
         logger.info(f"Writing cache to {output_cache}...")
-        # Ensure parent directory exists
-        output_cache.parent.mkdir(parents=True, exist_ok=True)
         result_df.to_parquet(output_cache, index=False, compression='snappy')
         
         return result_df

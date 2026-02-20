@@ -208,8 +208,12 @@ def get_component_stream_type(df: pd.DataFrame, component_id: str) -> str:
 # DOWNSAMPLING
 # ==============================================================================
 
-def downsample_dataframe(df: pd.DataFrame, max_points: int = 2000, 
-                          method: str = 'stride') -> pd.DataFrame:
+def downsample_dataframe(
+    df: pd.DataFrame,
+    max_points: int = 2000,
+    method: str = 'stride',
+    copy: bool = False
+) -> pd.DataFrame:
     """
     Downsample a DataFrame for faster plotting.
     
@@ -217,6 +221,7 @@ def downsample_dataframe(df: pd.DataFrame, max_points: int = 2000,
         df: Input DataFrame.
         max_points: Maximum number of rows in output.
         method: 'stride' (simple striding) or 'minmax' (preserves peaks).
+        copy: If True, return a copy; if False, return a sliced view when possible.
         
     Returns:
         Downsampled DataFrame.
@@ -227,7 +232,8 @@ def downsample_dataframe(df: pd.DataFrame, max_points: int = 2000,
     
     if method == 'stride':
         stride = max(1, n // max_points)
-        return df.iloc[::stride].copy()
+        sampled = df.iloc[::stride]
+        return sampled.copy() if copy else sampled
     
     elif method == 'minmax':
         # Preserves local minima and maxima for visual accuracy
@@ -242,11 +248,12 @@ def downsample_dataframe(df: pd.DataFrame, max_points: int = 2000,
                     indices.add(i + chunk.idxmin() - df.index[0])
                     indices.add(i + chunk.idxmax() - df.index[0])
         
-        return df.iloc[sorted(indices)].copy()
+        sampled = df.iloc[sorted(indices)]
+        return sampled.copy() if copy else sampled
     
     else:
         logger.warning(f"Unknown downsampling method: {method}, using stride")
-        return downsample_dataframe(df, max_points, 'stride')
+        return downsample_dataframe(df, max_points, 'stride', copy=copy)
 
 
 def calculate_stride(n_points: int, max_points: int = 2000) -> int:

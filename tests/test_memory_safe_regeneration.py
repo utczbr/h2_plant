@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from h2_plant.visualization.streaming_downsampler import StreamingDownsampler, MemoryMonitor
 from h2_plant.visualization.unified_executor import UnifiedGraphExecutor
 from h2_plant.visualization.graph_catalog import GraphCatalog, GraphMetadata, GraphLibrary, GraphPriority
+from tools import regenerate_graphs as regen_tools
 
 @pytest.fixture
 def empty_catalog():
@@ -59,7 +60,11 @@ class TestStreamingDownsampler:
         )
         
         output_cache = output_dir / "cache.parquet"
-        result_df = downsampler.process_chunks_directory(chunks_dir, output_cache)
+        result_df = downsampler.process_chunks_directory(
+            chunks_dir,
+            output_cache,
+            return_dataframe=True
+        )
         
         # Expected: 2 chunks * (60/10 = 6 rows) = 12 rows
         assert len(result_df) == 12
@@ -79,7 +84,10 @@ class TestStreamingDownsampler:
         # Request specific columns
         required = ['minute', 'temperature']
         result_df = downsampler.process_chunks_directory(
-            chunks_dir, output_cache, required_columns=required
+            chunks_dir,
+            output_cache,
+            required_columns=required,
+            return_dataframe=True
         )
         
         assert 'pressure' not in result_df.columns
@@ -107,7 +115,12 @@ class TestStreamingDownsampler:
         # Mock memory check to force pressure at chunk 2
         # Calls: Chunk 1 (False), Chunk 2 (True), Chunk 3 (True - already in mode)
         with patch.object(downsampler, '_check_memory_pressure', side_effect=[False, True, True]):
-             result_df = downsampler.process_chunks_directory(chunks_dir, output_cache)
+             result_df = downsampler.process_chunks_directory(
+                 chunks_dir,
+                 output_cache,
+                 write_mode='inmemory',
+                 return_dataframe=True
+             )
              
              # Check data presence
              assert len(result_df) > 0
@@ -119,6 +132,26 @@ class TestStreamingDownsampler:
              diffs = result_df['minute'].diff().dropna()
              mean_res = diffs.mean()
              assert mean_res >= 5.0 # Should be closer to 10 than 1
+
+    def test_streaming_mode_avoids_final_concat(self, temp_dirs):
+        chunks_dir, output_dir = temp_dirs
+        create_synthetic_chunk(chunks_dir / "chunk_1.parquet", 0, 60)
+        create_synthetic_chunk(chunks_dir / "chunk_2.parquet", 60, 120)
+
+        downsampler = StreamingDownsampler(max_memory_mb=1000, target_resolution_minutes=10)
+        output_cache = output_dir / "stream_cache.parquet"
+
+        with patch('h2_plant.visualization.streaming_downsampler.pd.concat', side_effect=AssertionError("concat should not be called")):
+            with patch.object(downsampler, '_check_memory_pressure', return_value=False):
+                result_df = downsampler.process_chunks_directory(
+                    chunks_dir,
+                    output_cache,
+                    write_mode='streaming',
+                    return_dataframe=True
+                )
+
+        assert output_cache.exists()
+        assert len(result_df) == 12
 
 class TestMemoryMonitor:
     def test_thresholds(self):
@@ -195,3 +228,112 @@ class TestUnifiedExecutorBatched:
         
         assert results['g1'].status == 'skipped'
         assert 'Insufficient memory' in results['g1'].error
+
+
+class TestUnifiedExecutorMemoryControls:
+    def test_cache_read_applies_downsample_factor(self, temp_dirs, empty_catalog):
+        chunks_dir, output_dir = temp_dirs
+        create_synthetic_chunk(chunks_dir / "chunk_1.parquet", 0, 60)
+        create_synthetic_chunk(chunks_dir / "chunk_2.parquet", 60, 120)
+
+        downsampler = StreamingDownsampler(max_memory_mb=1000, target_resolution_minutes=1)
+        cache_path = output_dir / "cache_full.parquet"
+        downsampler.process_chunks_directory(
+            chunks_dir,
+            cache_path,
+            required_columns=['minute', 'temperature'],
+            write_mode='streaming',
+            return_dataframe=False
+        )
+
+        catalog = empty_catalog
+        meta = GraphMetadata(
+            graph_id="g_temp",
+            title="G Temp",
+            description="Temp graph",
+            function=lambda df, dpi: None,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['minute', 'temperature'],
+            priority=GraphPriority.MEDIUM,
+            category="test",
+            enabled=True
+        )
+        catalog.register(meta)
+
+        executor = UnifiedGraphExecutor(catalog, output_dir)
+        df = executor.load_data(cache_path=cache_path, downsample_factor=2)
+        assert len(df) == 60
+
+    def test_sequential_execution_preserves_df_attrs(self, temp_dirs, empty_catalog):
+        import matplotlib.pyplot as plt
+
+        chunks_dir, output_dir = temp_dirs
+        create_synthetic_chunk(chunks_dir / "chunk_1.parquet", 0, 60)
+
+        downsampler = StreamingDownsampler(max_memory_mb=1000, target_resolution_minutes=1)
+        cache_path = output_dir / "cache_attrs.parquet"
+        downsampler.process_chunks_directory(
+            chunks_dir,
+            cache_path,
+            required_columns=['minute', 'temperature'],
+            write_mode='streaming',
+            return_dataframe=False
+        )
+
+        seen = {}
+
+        def _graph(df, dpi):
+            seen['cfg_value'] = df.attrs.get('config', {}).get('my_key')
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+            ax.plot([0, 1], [0, 1])
+            return fig
+
+        catalog = empty_catalog
+        meta = GraphMetadata(
+            graph_id="g_attr",
+            title="G Attr",
+            description="Attr graph",
+            function=_graph,
+            library=GraphLibrary.MATPLOTLIB,
+            data_required=['minute', 'temperature'],
+            priority=GraphPriority.HIGH,
+            category="test",
+            enabled=True
+        )
+        catalog.register(meta)
+
+        executor = UnifiedGraphExecutor(catalog, output_dir / "graphs")
+        results = executor.execute_sequentially_by_category(
+            cache_path=cache_path,
+            cache_stride=1,
+            timeout_seconds=10,
+            df_attrs={
+                'config': {'my_key': 'my_value'},
+                'viz_config': {'dummy': True},
+            }
+        )
+
+        assert seen['cfg_value'] == 'my_value'
+        assert results['g_attr'].status == 'success'
+
+
+class TestRegeneratePlanningHelpers:
+    def test_auto_mode_chooses_sequential_when_memory_is_tight(self):
+        mode = regen_tools.choose_execution_mode(
+            execution_mode='auto',
+            estimated_df_mb=6000.0,
+            available_mb=10000.0,
+            resolved_columns_count=200,
+            enabled_graphs_count=10
+        )
+        assert mode == 'sequential'
+
+    def test_auto_degrade_stride_selection(self):
+        stride, candidates = regen_tools.choose_cache_stride(
+            max_extra_downsample=8,
+            estimated_df_mb=14000.0,
+            available_mb=10000.0
+        )
+        assert candidates == [1, 2, 4, 8]
+        assert stride == 4

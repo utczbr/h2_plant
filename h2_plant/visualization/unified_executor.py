@@ -475,11 +475,14 @@ class UnifiedGraphExecutor:
                 logger.info(f"Filtered to {len(columns_to_load)} required columns from cache")
                 
                 df = pd.read_parquet(cache_path, columns=columns_to_load)
+                if downsample_factor > 1:
+                    df = df.iloc[::downsample_factor].reset_index(drop=True)
+                    logger.info(f"Applied additional cache stride: {downsample_factor}x")
                 logger.info(f"Loaded cache: {len(df)} rows x {len(df.columns)} columns")
                 
                 # Normalize loaded data
                 from h2_plant.visualization.static_graphs import normalize_history
-                return normalize_history(df)
+                return normalize_history(df, inplace=True)
             except Exception as e:
                 logger.warning(f"Failed to load cache: {e}. Falling back to other sources.")
         
@@ -925,7 +928,10 @@ class UnifiedGraphExecutor:
         chunks_dir: Optional[Path] = None,
         csv_path: Optional[Path] = None,
         downsample_factor: int = 60,
-        timeout_seconds: int = 60
+        timeout_seconds: int = 60,
+        cache_path: Optional[Path] = None,
+        cache_stride: int = 1,
+        df_attrs: Optional[Dict[str, Any]] = None
     ) -> Dict[str, GraphResult]:
         """
         Execute graphs sequentially by category to minimize RAM usage.
@@ -966,7 +972,14 @@ class UnifiedGraphExecutor:
         
         # Pre-fetch available columns to correctly estimate batch sizes
         all_columns = []
-        if chunks_dir is not None:
+        if cache_path is not None and Path(cache_path).exists():
+             try:
+                 import pyarrow.parquet as pq
+                 schema = pq.read_schema(cache_path)
+                 all_columns = schema.names
+             except Exception as e:
+                 logger.warning(f"Could not read cache schema for column counting: {e}")
+        elif chunks_dir is not None:
              chunks_path = Path(chunks_dir)
              chunk_files = sorted(chunks_path.glob('chunk_*.parquet'))
              if chunk_files:
@@ -1041,12 +1054,24 @@ class UnifiedGraphExecutor:
                         history=history,
                         chunks_dir=chunks_dir,
                         csv_path=csv_path,
-                        downsample_factor=downsample_factor
+                        downsample_factor=cache_stride if cache_path is not None else downsample_factor,
+                        cache_path=cache_path
                     )
                     
                     if df.empty:
                         logger.warning(f"No data loaded for batch {i+1} in {cat}")
                         continue
+
+                    if df_attrs:
+                        if 'config' in df_attrs and isinstance(df_attrs['config'], dict):
+                            existing_cfg = df.attrs.get('config', {})
+                            merged_cfg = dict(existing_cfg)
+                            merged_cfg.update(df_attrs['config'])
+                            df.attrs['config'] = merged_cfg
+                        for attr_key, attr_value in df_attrs.items():
+                            if attr_key == 'config':
+                                continue
+                            df.attrs[attr_key] = attr_value
                         
                     # Execute graphs in this batch
                     results = self.execute(
@@ -1231,9 +1256,10 @@ class UnifiedGraphExecutor:
         # Use tqdm if available
         iterator = tqdm(enabled_graphs, desc="Generating graphs") if TQDM_AVAILABLE else enabled_graphs
         
-        for meta in iterator:
+        for graph_num, meta in enumerate(iterator, start=1):
             graph_id = meta.graph_id
             start_time = time.time()
+            fig = None
             
             try:
                 with time_limit(timeout_seconds, graph_id):
@@ -1258,6 +1284,7 @@ class UnifiedGraphExecutor:
                             error='Empty figure (no data plotted)'
                         )
                         plt.close(fig)
+                        fig = None
                         continue
                         
                     # Add Metadata Stamp (pass sim_name explicitly)
@@ -1273,6 +1300,7 @@ class UnifiedGraphExecutor:
                         fig.savefig(output_path, dpi=dpi, bbox_inches='tight', 
                                    facecolor='white', edgecolor='none')
                         plt.close(fig)
+                        fig = None
                         
                     elif meta.library.value == 'plotly':
                         filename = f"{meta.title.replace(' ', '_').replace('/', '_')}.html"
@@ -1289,8 +1317,9 @@ class UnifiedGraphExecutor:
                         # Seaborn or unknown - treat as matplotlib
                         filename = f"{meta.title.replace(' ', '_').replace('/', '_')}.png"
                         output_path = self.output_dir / filename
-                        plt.savefig(output_path, dpi=dpi, bbox_inches='tight')
-                        plt.close('all')
+                        fig.savefig(output_path, dpi=dpi, bbox_inches='tight')
+                        plt.close(fig)
+                        fig = None
                     
                     duration_ms = int((time.time() - start_time) * 1000)
                     results[graph_id] = GraphResult(
@@ -1320,8 +1349,24 @@ class UnifiedGraphExecutor:
                     duration_ms=int((time.time() - start_time) * 1000)
                 )
                 plt.close('all')
+            finally:
+                # Explicitly drop figure references to release memory pressure
+                if fig is not None:
+                    try:
+                        plt.close(fig)
+                    except Exception:
+                        pass
+                    fig = None
+
+                pressure = self.memory_monitor.get_pressure()
+                if pressure > 0.8:
+                    self.memory_monitor.log_usage(f"during graph {graph_id}")
+                if graph_num % 5 == 0 or pressure > 0.8:
+                    gc.collect()
         
         # Summary
+        del df_light
+        gc.collect()
         success = sum(1 for r in results.values() if r.status == 'success')
         failed = sum(1 for r in results.values() if r.status == 'failed')
         timeout = sum(1 for r in results.values() if r.status == 'timeout')

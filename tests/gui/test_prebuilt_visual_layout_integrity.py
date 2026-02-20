@@ -17,7 +17,7 @@ def _assert_snapshot_integrity(snapshot):
     assert len(snapshot.edges) == 143
     assert snapshot.topology_analysis is not None
     assert snapshot.topology_analysis.get("scenario_manifest") is not None
-    assert snapshot.topology_analysis.get("import_surface_schema_version") == 1
+    assert snapshot.topology_analysis.get("import_surface_schema_version") == 2
 
     typed_count = 0
     surfaced_count = 0

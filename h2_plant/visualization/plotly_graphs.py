@@ -2421,21 +2421,25 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     event_costs_year_soec = np.zeros(n_years)
 
     def _apply_events(
-        power_col: Optional[str],
         lifecycle_h: Optional[float],
         cost_per_event: float,
         event_costs_time_out: np.ndarray,
         event_costs_year_out: np.ndarray,
     ) -> None:
-        if power_col is None or lifecycle_h is None or lifecycle_h <= 0 or cost_per_event <= 0:
+        """Place replacement cost spikes at chronological lifecycle boundaries.
+
+        Spikes occur at t = lifecycle_h, 2·lifecycle_h, ... regardless of power state.
+        The prepend_val is seeded from hours[0] so mid-project windowed views do not
+        produce a spurious spike at the first row.  Delta is clamped to ≥0 to protect
+        against negative artefacts from resampled or non-monotonic time axes.
+        """
+        if lifecycle_h is None or lifecycle_h <= 0 or cost_per_event <= 0:
             return
-        power = pd.to_numeric(df_plot[power_col], errors='coerce').fillna(0).values
-        active = power > stack_threshold
-        cum_hours = np.cumsum(active.astype(float) * dt_h)
-        if len(cum_hours) == 0:
+        if len(hours) == 0:
             return
-        events = np.floor(cum_hours / lifecycle_h).astype(int)
-        delta = np.diff(events, prepend=0)
+        events = np.floor(hours / lifecycle_h).astype(int)
+        prepend_val = int(np.floor(hours[0] / lifecycle_h))
+        delta = np.maximum(np.diff(events, prepend=prepend_val), 0)
         if not np.any(delta > 0):
             return
         event_costs_time_out[:] += delta * cost_per_event
@@ -2456,20 +2460,10 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     pem_event_cost = annual_reserve_pem * (pem_lifecycle_h / 8760.0) if pem_lifecycle_h else 0.0
     soec_event_cost = annual_reserve_soec * (soec_lifecycle_h / 8760.0) if soec_lifecycle_h else 0.0
 
-    _apply_events(
-        pem_col,
-        pem_lifecycle_h,
-        pem_event_cost,
-        event_costs_time_pem,
-        event_costs_year_pem,
-    )
-    _apply_events(
-        soec_col,
-        soec_lifecycle_h,
-        soec_event_cost,
-        event_costs_time_soec,
-        event_costs_year_soec,
-    )
+    if pem_col is not None:
+        _apply_events(pem_lifecycle_h, pem_event_cost, event_costs_time_pem, event_costs_year_pem)
+    if soec_col is not None:
+        _apply_events(soec_lifecycle_h, soec_event_cost, event_costs_time_soec, event_costs_year_soec)
 
     event_costs_time_total = event_costs_time_pem + event_costs_time_soec
     base_opex_per_year = np.full(n_years, base_opex, dtype=float)

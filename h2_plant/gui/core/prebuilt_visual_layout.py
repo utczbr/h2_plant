@@ -158,6 +158,8 @@ def build_snapshot(project_name: str, model) -> GraphSnapshot:
         "scenario_equipment_index": dict(model.metadata.get("equipment_index", {})),
         "import_surface_schema_version": IMPORT_SURFACE_SCHEMA_VERSION,
     }
+    if "visual_layout" in model.metadata:
+        topology_analysis["visual_layout"] = dict(model.metadata["visual_layout"])
 
     return GraphSnapshot(
         metadata=metadata,

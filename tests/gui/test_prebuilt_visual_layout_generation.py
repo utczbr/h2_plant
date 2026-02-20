@@ -50,7 +50,7 @@ def test_build_snapshot_preserves_visual_model_metadata():
     assert snapshot.topology_analysis is not None
     assert snapshot.topology_analysis.get("scenario_manifest") is not None
     assert snapshot.topology_analysis.get("scenario_economics") is not None
-    assert snapshot.topology_analysis.get("import_surface_schema_version") == 1
+    assert snapshot.topology_analysis.get("import_surface_schema_version") == 2
 
     pem_node = snapshot.nodes.get("PEM_Electrolyzer", {})
     pem_props = pem_node.get("properties", {})

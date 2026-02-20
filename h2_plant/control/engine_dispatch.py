@@ -757,14 +757,12 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 except Exception:
                     cap = 0.0
             elif isinstance(comp, DetailedTankArray):
-                # Calculate max mass via Ideal Gas Law at max pressure
+                # Use tank's own Real Gas EOS (LUT-backed Helmholtz) for accurate capacity
                 try:
-                    V = comp.volume_per_tank
-                    n = comp.n_tanks
-                    P_max = comp.max_pressure_pa  # Already in Pa
-                    R = 4124.0  # H2 specific gas constant (J/(kg·K))
-                    T = comp.ambient_temp_k  # Use configured ambient temperature
-                    cap = n * (P_max * V) / (R * T)
+                    max_mass_per_tank = comp._max_mass_at_pressure(
+                        comp.max_pressure_pa, comp.volume_per_tank, comp.ambient_temp_k
+                    )
+                    cap = comp.n_tanks * max_mass_per_tank
                 except Exception:
                     cap = 0.0
             
@@ -819,7 +817,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                        f"schedule={'YES' if self._ds_params['is_scheduled'] else 'NO'}")
 
     def _get_aggregate_soc(self) -> Tuple[float, float]:
-        """Calculate Plant-Wide State of Charge (0.0 to 1.0) and current mass."""
+        """
+        Calculate Plant-Wide State of Charge (0.0 to 1.0) and current mass.
+
+        Includes pipeline inventory (compressor buffers + tank pending input)
+        as virtual mass so the APC triggers curtailment early enough to account
+        for the 2+ timestep latency in the processing chain.
+        """
         if self._storage_total_capacity_kg <= 0:
             return 0.0, 0.0
 
@@ -829,15 +833,22 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             if hasattr(comp, 'get_inventory_kg'):
                 current_mass += comp.get_inventory_kg()
             elif hasattr(comp, 'get_total_mass'): # DetailedTankArray
-                val = comp.get_total_mass()
-                # logger.info(f"APC Mass Check: {comp.component_id} via get_total_mass() = {val}")
-                current_mass += val
+                current_mass += comp.get_total_mass()
             elif hasattr(comp, 'masses'):  # TankArray direct
                 current_mass += np.sum(comp.masses)
             elif hasattr(comp, 'mass_kg'):  # Enhanced direct
-                val = comp.mass_kg
-                logger.info(f"APC Mass Check: {comp.component_id} via mass_kg = {val} (Typo/Wrong Branch?)")
                 current_mass += comp.mass_kg
+
+        # Add pipeline inventory: H2 in-flight that will arrive at tank regardless
+        pipeline_kg = 0.0
+        for comp in self._compressors:
+            pipeline_kg += getattr(comp, 'transfer_mass_kg', 0.0)
+        for comp, _ in self._storage_info:
+            pending_rate = getattr(comp, '_h2_in_rate', 0.0)
+            if pending_rate > 0:
+                dt_h = self._context.simulation.timestep_hours if self._context else 0.0167
+                pipeline_kg += pending_rate * dt_h
+        current_mass += pipeline_kg
 
         soc = current_mass / self._storage_total_capacity_kg
         return min(max(soc, 0.0), 1.0), current_mass
@@ -1071,7 +1082,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 production_profile_kg_h=production_forecast_kg_h.astype(np.float64),
                 demand_profile_kg_h=demand_forecast_kg_h,
                 dt_hours=dt,
-                soc_limit_high=0.98,
+                soc_limit_high=0.95,
                 horizon_steps=HORIZON
             )
             
@@ -1091,7 +1102,17 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # E. Modulate Power (Apply action factor to reduce production)
         P_soec_final = result.P_soec * action_factor
         P_pem_final = result.P_pem * action_factor
-        
+
+        # F. Pipeline Latency Safety Clamp
+        # remaining_kg already accounts for pipeline inventory (included in current_mass
+        # via _get_aggregate_soc). Check if current-step production would overshoot.
+        remaining_kg = self._storage_total_capacity_kg - current_mass
+        est_production_kg = (P_soec_final / 37.5 + P_pem_final / 50.0) * dt * 1000.0
+        if remaining_kg < est_production_kg * 1.5:
+            P_soec_final = 0.0
+            P_pem_final = 0.0
+            zone = 3
+
         # If in Critical Zone (3), force_sell to True (Safety Sell)
         if zone == 3:
             self._state.force_sell = True

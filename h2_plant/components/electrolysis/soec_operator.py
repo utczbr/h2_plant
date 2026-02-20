@@ -184,6 +184,17 @@ class SOECOperator(Component):
         # Initialize accumulated hours per module based on starting degradation year
         self.accumulated_hours = np.full(self.num_modules, self.degradation_year * 8760.0, dtype=np.float64)
 
+        # Chronological lifecycle epoch tracking (replacement trigger)
+        self._epoch_bootstrapped: bool = False
+        self.lifecycle_epoch: int = 0
+        # usage-hours within current lifecycle window (resets at each chronological epoch)
+        # Use modulo so pre-aging > 1 lifecycle folds correctly
+        self.module_cycle_hours: np.ndarray = (
+            self.accumulated_hours % self.lifecycle_h
+            if self.lifecycle_h > 0
+            else self.accumulated_hours.copy()
+        )
+
         # Initialize module states
         self._initialize_state()
 
@@ -471,18 +482,33 @@ class SOECOperator(Component):
         if self.rotation_enabled and (int(prev_minute / 60) < int(self.current_minute / 60)):
             self._update_virtual_map()
         
+        # === Chronological Lifecycle Epoch Check ===
+        # Triggers stack replacement at fixed calendar boundaries (floor(t / lifecycle_h)),
+        # independent of how many usage-hours have accumulated.
+        if self.lifecycle_h > 0:
+            new_epoch = int(t // self.lifecycle_h)
+            if not self._epoch_bootstrapped:
+                # First call: seed epoch from current t WITHOUT resetting cycle counters.
+                # Handles fresh starts at t>0 and resumes from old checkpoints.
+                self.lifecycle_epoch = new_epoch
+                self._epoch_bootstrapped = True
+            elif new_epoch > self.lifecycle_epoch:
+                self.lifecycle_epoch = new_epoch
+                self.module_cycle_hours[:] = 0.0   # stack replacement — reset degradation age
+
         # === Per-Module Degradation Update ===
         # Only accumulate hours for modules that are ACTIVE (State > 1)
         for i in range(self.num_modules):
             if self.real_states[i] > 1:  # Active production (not Standby/Off)
                 self.accumulated_hours[i] += self.dt
+                self.module_cycle_hours[i] += self.dt
         
         # Calculate per-module effective age for degradation (Modulo Lifecycle)
         self.module_efficiencies = np.zeros(self.num_modules, dtype=np.float64)
         deg_factors = np.ones(self.num_modules, dtype=np.float64)
         
         for i in range(self.num_modules):
-            effective_hours = self.accumulated_hours[i] % self.lifecycle_h
+            effective_hours = self.module_cycle_hours[i]   # usage-hours in current lifecycle window
             effective_year = effective_hours / 8760.0
             
             # Interpolate efficiency for this module
@@ -498,9 +524,8 @@ class SOECOperator(Component):
             # Fallback to oldest module's efficiency if none active
             self.current_efficiency_kwh_kg = float(self.module_efficiencies[0])
         
-        # Capacity degradation: use max operating hours across fleet for limit calculation
-        max_hours = float(np.max(self.accumulated_hours))
-        fleet_effective_year = (max_hours % self.lifecycle_h) / 8760.0
+        # Capacity degradation: use max cycle-hours across fleet for limit calculation
+        fleet_effective_year = float(np.max(self.module_cycle_hours)) / 8760.0
         cap_percent = float(self._interpolate(fleet_effective_year, DEG_YEARS, DEG_CAPACITY_FACTOR))
         new_capacity_factor = cap_percent / 100.0
         
@@ -765,10 +790,13 @@ class SOECOperator(Component):
             "total_h2_kg": self.total_h2_produced,
             "module_powers": self.real_powers.tolist(),
             "module_states": self.real_states.tolist(),
-            # NEW: Per-module degradation tracking
+            # Per-module degradation tracking
             "module_hours": self.accumulated_hours.tolist(),
             "module_efficiencies": getattr(self, 'module_efficiencies', np.full(self.num_modules, self.bol_efficiency_kwh_kg)).tolist(),
-            "cycle_counts": self.cycle_counts.tolist()
+            "cycle_counts": self.cycle_counts.tolist(),
+            # Chronological lifecycle epoch tracking
+            "lifecycle_epoch": self.lifecycle_epoch,
+            "module_cycle_hours": self.module_cycle_hours.tolist(),
         }
 
     def get_state(self) -> Dict[str, Any]:
@@ -840,6 +868,19 @@ class SOECOperator(Component):
 
         if 'module_hours' in state:
             self.accumulated_hours = np.array(state['module_hours'], dtype=np.float64)
+
+        if 'lifecycle_epoch' in state:
+            self.lifecycle_epoch = int(state['lifecycle_epoch'])
+            self._epoch_bootstrapped = True   # epoch explicitly restored; skip bootstrap
+        if 'module_cycle_hours' in state:
+            self.module_cycle_hours = np.array(state['module_cycle_hours'], dtype=np.float64)
+        else:
+            # Backward compat: derive effective age from accumulated_hours
+            self.module_cycle_hours = (
+                self.accumulated_hours % self.lifecycle_h
+                if self.lifecycle_h > 0
+                else self.accumulated_hours.copy()
+            )
 
         if 'module_efficiencies' in state:
             self.module_efficiencies = np.array(state['module_efficiencies'], dtype=np.float64)

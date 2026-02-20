@@ -154,7 +154,12 @@ class DetailedPEMElectrolyzer(Component):
         # Passed via Pydantic model (if attribute exists, otherwise default)
         else:
             self.lifecycle_h = getattr(config, 'lifecycle', 876000.0)
-            
+
+        # Chronological lifecycle epoch tracking (replacement trigger)
+        self._epoch_bootstrapped: bool = False
+        self.lifecycle_epoch: int = 0
+        self.t_cycle_h: float = 0.0   # usage-hours since last chronological lifecycle reset
+
         self.P_consumed_W = 0.0
         self.m_H2_kg_s = 0.0
         self.m_H2O_kg_s = 0.0
@@ -377,6 +382,19 @@ class DetailedPEMElectrolyzer(Component):
         """
         super().step(t)
 
+        # === Chronological Lifecycle Epoch Check (fires even when OFF/NO_WATER) ===
+        # Must be before the early-return guards below so the reset fires even when idle.
+        if self.lifecycle_h > 0:
+            new_epoch = int(t // self.lifecycle_h)
+            if not self._epoch_bootstrapped:
+                # First call: seed epoch from current t WITHOUT resetting t_cycle_h.
+                # Handles fresh starts at t>0 and resumes from old checkpoints.
+                self.lifecycle_epoch = new_epoch
+                self._epoch_bootstrapped = True
+            elif new_epoch > self.lifecycle_epoch:
+                self.lifecycle_epoch = new_epoch
+                self.t_cycle_h = 0.0   # stack replacement — reset degradation age
+
         P_setpoint_mw = self._target_power_mw
 
         # Clamp to rated capacity
@@ -443,8 +461,8 @@ class DetailedPEMElectrolyzer(Component):
             # ================================================================
             if self.use_polynomials and self.polynomial_list:
                 # Polynomial lookup: O(1) complexity
-                # Apply lifecycle reset for polynomial aging
-                effective_t_op_h = self.t_op_h % self.lifecycle_h
+                # Use t_cycle_h (usage-hours within current lifecycle window)
+                effective_t_op_h = self.t_cycle_h
                 month_index = int(effective_t_op_h / self.H_MES)
                 if month_index >= len(self.polynomial_list):
                     month_index = len(self.polynomial_list) - 1
@@ -510,8 +528,8 @@ class DetailedPEMElectrolyzer(Component):
             # Mass flows from constrained current density
             self.m_H2_kg_s, self.m_O2_kg_s, self.m_H2O_kg_s = phys.calculate_flows(j_op)
 
-            # Cell voltage includes degradation overpotential
-            U_deg = self._calculate_U_deg(self.t_op_h)
+            # Cell voltage includes degradation overpotential (use t_cycle_h for chronological reset)
+            U_deg = self._calculate_U_deg(self.t_cycle_h)
             self.V_cell = phys.calculate_Vcell_base(j_op, self.T, CONST.P_op_default) + U_deg
 
             # Stack and system power
@@ -656,6 +674,7 @@ class DetailedPEMElectrolyzer(Component):
 
         if hasattr(self, 'dt'):
             self.t_op_h += self.dt
+            self.t_cycle_h += self.dt   # cycle age; only reached when ON; resets at epoch
         
         # Calculate Flow Setpoint for cascade control
         # Water consumption rate from Faraday's law (kg/h)
@@ -743,7 +762,7 @@ class DetailedPEMElectrolyzer(Component):
         """
         
         # Apply lifecycle reset logic for degradation lookup
-        effective_t_op_h = t_op_h % self.lifecycle_h
+        effective_t_op_h = t_op_h % self.lifecycle_h if self.lifecycle_h > 0 else t_op_h
         V_cell_degraded = np.interp(effective_t_op_h, self.t_op_h_table, self.v_cell_table)
         U_deg = np.maximum(0.0, V_cell_degraded - self.V_CELL_BOL_NOM)
         return float(U_deg)
@@ -763,7 +782,7 @@ class DetailedPEMElectrolyzer(Component):
             float: Total cell voltage in V.
         """
         base_V = self._calculate_voltage_base(j_op, T)
-        U_deg = self._calculate_U_deg(self.t_op_h)
+        U_deg = self._calculate_U_deg(self.t_cycle_h)
         return base_V + U_deg
 
     def set_power_input_mw(self, P_mw: float) -> None:
@@ -834,8 +853,43 @@ class DetailedPEMElectrolyzer(Component):
             "o2_impurity_ppm_mol": self._calculate_o2_ppm_total_molar(),
             "required_flow_kg_h": self.required_flow_kg_h,
             "target_stoichiometry": self.target_stoichiometry,
-            "h2o_consumption_rate": self.h2o_consumption_rate
+            "h2o_consumption_rate": self.h2o_consumption_rate,
+            # Chronological lifecycle epoch tracking
+            "lifecycle_epoch": self.lifecycle_epoch,
+            "t_cycle_h": self.t_cycle_h,
         }
+
+    def restore_state(self, state: Dict[str, Any]) -> None:
+        """
+        Restore the component's state from a dictionary.
+
+        Handles both new checkpoints (with lifecycle_epoch / t_cycle_h) and old
+        checkpoints that predate the chronological lifecycle feature.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        if 't_op_h' in state:
+            self.t_op_h = float(state['t_op_h'])
+        if 'cumulative_h2_kg' in state:
+            self.cumulative_h2_kg = float(state['cumulative_h2_kg'])
+        if 'cumulative_o2_kg' in state:
+            self.cumulative_o2_kg = float(state['cumulative_o2_kg'])
+        if 'cumulative_energy_kwh' in state:
+            self.cumulative_energy_kwh = float(state['cumulative_energy_kwh'])
+
+        if 'lifecycle_epoch' in state:
+            self.lifecycle_epoch = int(state['lifecycle_epoch'])
+            self._epoch_bootstrapped = True   # epoch explicitly restored; skip bootstrap
+        if 't_cycle_h' in state:
+            self.t_cycle_h = float(state['t_cycle_h'])
+        else:
+            # Backward compat: derive from t_op_h
+            self.t_cycle_h = (
+                self.t_op_h % self.lifecycle_h if self.lifecycle_h > 0 else self.t_op_h
+            )
+
+        logger.info(f"PEMElectrolyzer state restored for component {self.component_id}.")
 
     def _calculate_o2_ppm_total_molar(self) -> float:
         """
