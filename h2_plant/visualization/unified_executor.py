@@ -499,17 +499,39 @@ class UnifiedGraphExecutor:
             try:
                 # Resolve patterns against cache file schema
                 import pyarrow.parquet as pq
-                schema = pq.read_schema(cache_path)
+                import gc
+                pf = pq.ParquetFile(cache_path)
+                schema = pf.schema_arrow  # pyarrow.Schema — same as pq.read_schema()
                 all_columns = schema.names
-                
+
                 columns_to_load = list(self._expand_patterns(required_patterns, all_columns))
                 logger.info(f"Filtered to {len(columns_to_load)} required columns from cache")
-                
-                df = pd.read_parquet(cache_path, columns=columns_to_load)
+
                 if downsample_factor > 1:
-                    df = df.iloc[::downsample_factor].reset_index(drop=True)
-                    logger.info(f"Applied additional cache stride: {downsample_factor}x")
-                logger.info(f"Loaded cache: {len(df)} rows x {len(df.columns)} columns")
+                    # Stream row-group by row-group to avoid loading ALL rows before striding.
+                    # Peak memory = one_row_group × cols × 8B instead of full_file × cols × 8B.
+                    strided_chunks = []
+                    stride_pos = 0  # cumulative row count across groups, used for offset alignment
+                    for rg_idx in range(pf.metadata.num_row_groups):
+                        rg_table = pf.read_row_group(rg_idx, columns=columns_to_load)
+                        rg_df = rg_table.to_pandas()
+                        del rg_table
+                        # Compute which row within this group is the first stride-aligned row
+                        # so that selected rows are exactly downsample_factor apart globally.
+                        offset = (-stride_pos) % downsample_factor
+                        strided_chunks.append(rg_df.iloc[offset::downsample_factor].copy())
+                        stride_pos += len(rg_df)
+                        del rg_df
+                    df = pd.concat(strided_chunks, ignore_index=True)
+                    del strided_chunks
+                    gc.collect()
+                    logger.info(
+                        f"Streamed cache (stride={downsample_factor}x): "
+                        f"{len(df)} rows x {len(df.columns)} cols"
+                    )
+                else:
+                    df = pd.read_parquet(cache_path, columns=columns_to_load)
+                    logger.info(f"Loaded cache: {len(df)} rows x {len(df.columns)} columns")
 
                 # Normalize loaded data
                 from h2_plant.visualization.static_graphs import normalize_history

@@ -500,3 +500,46 @@ class TestRegeneratePlanningHelpers:
         projected = max(50, int(available_mb * 0.85 / (row_count * 8 * 3 / 1e6)))
         assert projected < 1000
         assert projected == max(50, int(available_mb * 0.85 / (row_count * 8 * 3 / 1e6)))
+
+    # -----------------------------------------------------------------------
+    # Streaming row-group stride alignment test
+    # -----------------------------------------------------------------------
+
+    def test_streaming_stride_aligns_across_row_groups(self, temp_dirs, empty_catalog):
+        """Streaming row-group stride produces the same rows as a naive iloc[::stride] on the full file."""
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        _, output_dir = temp_dirs
+        cache_path = output_dir / "cache_multigroup.parquet"
+
+        # 8-row DataFrame with hourly-spaced minutes, written as 2 row groups of 4 rows each
+        df_full = pd.DataFrame({
+            'minute': [float(i * 60) for i in range(8)],
+            'temperature': [float(i) for i in range(8)],
+        })
+        table = pa.Table.from_pandas(df_full, preserve_index=False)
+        pq.write_table(table, cache_path, row_group_size=4)
+        assert pq.ParquetFile(cache_path).metadata.num_row_groups == 2, (
+            "Test setup error: expected 2 row groups"
+        )
+
+        catalog = empty_catalog
+        catalog.register(GraphMetadata(
+            graph_id='g_multigroup', title='G Multigroup', description='Multi-group stride test',
+            function=lambda df, dpi: None, library=GraphLibrary.MATPLOTLIB,
+            data_required=['minute', 'temperature'],
+            priority=GraphPriority.MEDIUM, category='test', enabled=True,
+        ))
+        executor = UnifiedGraphExecutor(catalog, output_dir)
+        df_streamed = executor.load_data(cache_path=cache_path, downsample_factor=2)
+
+        # Group 0 (rows 0-3): offset=(-0)%2=0 -> picks local rows 0,2 -> minutes 0,120
+        # Group 1 (rows 4-7): offset=(-4)%2=0 -> picks local rows 0,2 -> minutes 240,360
+        df_expected = df_full.iloc[::2].reset_index(drop=True)
+
+        assert list(df_streamed['minute'].values) == list(df_expected['minute'].values), (
+            f"Streamed stride: {list(df_streamed['minute'].values)}\n"
+            f"Expected (naive): {list(df_expected['minute'].values)}"
+        )
+        assert len(df_streamed) == len(df_expected)
