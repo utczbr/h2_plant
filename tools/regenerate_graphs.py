@@ -10,6 +10,9 @@ import sys
 import argparse
 import signal
 import gc
+import json
+import shutil
+import time
 import pandas as pd
 import psutil
 from pathlib import Path
@@ -85,11 +88,14 @@ def choose_cache_stride(
     max_extra_downsample: int,
     estimated_df_mb: float,
     available_mb: float,
+    auto_degrade_threshold: float = 0.85,
 ) -> Tuple[Optional[int], List[int]]:
     """
     Select smallest extra stride that satisfies memory target.
 
-    Target: estimated_df_mb / stride <= 0.35 * available_mb
+    Target: estimated_df_mb / stride <= auto_degrade_threshold * available_mb
+    When estimated_df_mb already fits below the threshold, stride=1 is returned
+    (no degradation needed).
     """
     max_stride = max(1, int(max_extra_downsample))
     candidates = [1]
@@ -98,7 +104,7 @@ def choose_cache_stride(
         candidates.append(stride)
         stride *= 2
 
-    target_mb = 0.35 * available_mb
+    target_mb = auto_degrade_threshold * available_mb
     for candidate in candidates:
         if candidate > 0 and (estimated_df_mb / candidate) <= target_mb:
             return candidate, candidates
@@ -170,6 +176,8 @@ def regenerate_graphs_safe(
     execution_mode: str = "auto",
     oom_policy: str = "auto-degrade",
     max_extra_downsample: int = 8,
+    auto_degrade_threshold: float = 0.85,
+    graph_output_mode: str = "atomic",
 ):
     """
     Memory-safe graph regeneration.
@@ -186,7 +194,22 @@ def regenerate_graphs_safe(
     from h2_plant.visualization.streaming_downsampler import StreamingDownsampler, MemoryMonitor
 
     graphs_dir = output_dir / "graphs"
-    graphs_dir.mkdir(parents=True, exist_ok=True)
+    run_start = time.monotonic()
+
+    # Determine active write directory based on output mode.
+    if graph_output_mode == "atomic":
+        active_dir = output_dir / "graphs_staging"
+        if active_dir.exists():
+            shutil.rmtree(active_dir)
+        active_dir.mkdir(parents=True, exist_ok=True)
+    elif graph_output_mode == "clear":
+        if graphs_dir.exists():
+            shutil.rmtree(graphs_dir)
+        graphs_dir.mkdir(parents=True, exist_ok=True)
+        active_dir = graphs_dir
+    else:  # inplace
+        graphs_dir.mkdir(parents=True, exist_ok=True)
+        active_dir = graphs_dir
 
     effective_budget_mb, total_mb, available_mb = compute_effective_memory_budget(max_memory_mb)
 
@@ -211,7 +234,7 @@ def regenerate_graphs_safe(
     cache_path = output_dir / "simulation_history_hourly.parquet"
 
     # Configure executor (early init to compute required columns)
-    executor = UnifiedGraphExecutor(GRAPH_REGISTRY, graphs_dir)
+    executor = UnifiedGraphExecutor(GRAPH_REGISTRY, active_dir)
     executor.configure_from_yaml(viz_config)
     executor.memory_monitor = MemoryMonitor(effective_budget_mb)
 
@@ -246,8 +269,10 @@ def regenerate_graphs_safe(
     if skip_cache or not cache_path.exists():
         if chunks_dir.exists():
             print("Creating downsampled cache from chunks...")
+            cache_builder_mb = max(256, int(effective_budget_mb * 0.85))
+            print(f"  Cache builder memory budget: {cache_builder_mb} MB (85% of effective budget)")
             downsampler = StreamingDownsampler(
-                max_memory_mb=max(256, effective_budget_mb // 2),
+                max_memory_mb=cache_builder_mb,
                 target_resolution_minutes=target_resolution,
             )
             try:
@@ -301,20 +326,25 @@ def regenerate_graphs_safe(
                 max_extra_downsample=max_extra_downsample,
                 estimated_df_mb=estimated_df_mb,
                 available_mb=available_mb_now,
+                auto_degrade_threshold=auto_degrade_threshold,
             )
             if stride is None:
                 print("ERROR: Memory target not reachable even at max extra downsampling.")
                 print(
                     f"  Estimated DF={estimated_df_mb:.0f} MB, Available={available_mb_now:.0f} MB, "
-                    f"Candidates={candidates}"
+                    f"Candidates={candidates}, Threshold={auto_degrade_threshold:.0%}"
                 )
                 print("  Suggestion: reduce enabled graphs or increase runtime memory.")
                 return
             cache_stride = stride
     elif oom_policy == "fail-fast":
-        if estimated_df_mb > (0.35 * available_mb_now):
+        if estimated_df_mb > (auto_degrade_threshold * available_mb_now):
             print("ERROR: Estimated in-memory footprint exceeds fail-fast threshold.")
-            print(f"  Estimated DF={estimated_df_mb:.0f} MB, Threshold={(0.35 * available_mb_now):.0f} MB")
+            print(
+                f"  Estimated DF={estimated_df_mb:.0f} MB, "
+                f"Threshold={auto_degrade_threshold:.0%} × {available_mb_now:.0f} MB "
+                f"= {auto_degrade_threshold * available_mb_now:.0f} MB"
+            )
             print("  Re-run with --oom-policy auto-degrade or larger memory runtime.")
             return
     elif oom_policy == "skip-heavy":
@@ -325,16 +355,21 @@ def regenerate_graphs_safe(
         return
 
     # Skip-heavy can force safer mode under high pressure.
-    if oom_policy == "skip-heavy" and estimated_df_mb > (0.35 * available_mb_now):
+    if oom_policy == "skip-heavy" and estimated_df_mb > (auto_degrade_threshold * available_mb_now):
         selected_mode = "sequential"
 
     print("\nExecution planning:")
     print(f"  Estimated in-memory DF footprint: {estimated_df_mb:.0f} MB")
+    print(f"  Available RAM: {available_mb_now:.0f} MB  (degrade threshold: {auto_degrade_threshold:.0%})")
     print(f"  Enabled graphs: {enabled_graphs_count}")
     print(f"  Resolved columns: {resolved_columns_count}")
     print(f"  Mode: {selected_mode}")
-    print(f"  Additional cache stride: {cache_stride}x")
+    print(f"  Additional cache stride: {cache_stride}x (reason: {'below threshold, no degradation needed' if cache_stride == 1 else 'above threshold, degrading'})")
     print(f"  OOM policy: {oom_policy}")
+    print(f"  Graph output mode: {graph_output_mode}")
+    if graph_output_mode == "atomic":
+        print("  Note: SIGKILL/OOM-kill cannot be caught; no Python traceback will appear."
+              " The staging directory is left intact for diagnostics if the process is killed.")
 
     shared_attrs: Dict[str, Any] = {
         "config": viz_config.get("plant_parameters", {}),
@@ -380,23 +415,6 @@ def regenerate_graphs_safe(
             batch_size=batch_size,
         )
 
-    # Summary
-    success_count = sum(1 for r in results.values() if r.status == 'success')
-    failed_count = sum(1 for r in results.values() if r.status == 'failed')
-    timeout_count = sum(1 for r in results.values() if r.status == 'timeout')
-    skipped_count = sum(1 for r in results.values() if r.status == 'skipped')
-
-    print("\n" + "=" * 60)
-    print("SUMMARY")
-    print(f"  Success:  {success_count}")
-    print(f"  Timeout:  {timeout_count}")
-    print(f"  Skipped:  {skipped_count}")
-    print(f"  Failed:   {failed_count}")
-    print(f"  Output:   {graphs_dir}")
-    print("=" * 60)
-
-    executor.memory_monitor.log_usage("Final")
-
     # Run Daily H2 Production (Special Case)
     try:
         daily_config = viz_config.get('visualization', {}).get('orchestrated_graphs', {}).get('daily_h2_production_average', {})
@@ -405,7 +423,7 @@ def regenerate_graphs_safe(
             from scripts.plot_daily_h2_production import generate_daily_h2_production_graph
 
             csv_path = output_dir / "simulation_history.csv"
-            output_path = graphs_dir / "daily_h2_production.png"
+            output_path = active_dir / "daily_h2_production.png"
 
             if csv_path.exists():
                 with time_limit(timeout_seconds, 'daily_h2_production'):
@@ -415,6 +433,57 @@ def regenerate_graphs_safe(
                 print("  SKIP: simulation_history.csv needed for daily graph")
     except Exception as e:
         print(f"  Failed: {e}")
+
+    # Summary
+    success_count = sum(1 for r in results.values() if r.status == 'success')
+    failed_count = sum(1 for r in results.values() if r.status == 'failed')
+    timeout_count = sum(1 for r in results.values() if r.status == 'timeout')
+    skipped_count = sum(1 for r in results.values() if r.status == 'skipped')
+    duration_s = int(time.monotonic() - run_start)
+
+    # Write run manifest
+    manifest = {
+        "mode": graph_output_mode,
+        "stride": cache_stride,
+        "auto_degrade_threshold": auto_degrade_threshold,
+        "oom_policy": oom_policy,
+        "execution_mode": selected_mode,
+        "success": success_count,
+        "failed": failed_count,
+        "timeout": timeout_count,
+        "skipped": skipped_count,
+        "duration_s": duration_s,
+        "status": "complete",
+    }
+    try:
+        with open(active_dir / "run_manifest.json", "w") as f:
+            json.dump(manifest, f, indent=2)
+    except Exception as e:
+        logger.warning("Could not write run manifest: %s", e)
+
+    # Atomic swap: staging → graphs
+    if graph_output_mode == "atomic":
+        graphs_old = output_dir / "graphs_old"
+        if graphs_old.exists():
+            shutil.rmtree(graphs_old)
+        if graphs_dir.exists():
+            graphs_dir.rename(graphs_old)
+        active_dir.rename(graphs_dir)
+        if graphs_old.exists():
+            shutil.rmtree(graphs_old)
+        print(f"\nAtomic swap complete: graphs_staging → graphs/")
+
+    executor.memory_monitor.log_usage("Final")
+
+    print("\n" + "=" * 60)
+    print("SUMMARY")
+    print(f"  Success:  {success_count}")
+    print(f"  Timeout:  {timeout_count}")
+    print(f"  Skipped:  {skipped_count}")
+    print(f"  Failed:   {failed_count}")
+    print(f"  Duration: {duration_s}s")
+    print(f"  Output:   {graphs_dir}")
+    print("=" * 60)
 
 
 def main():
@@ -466,6 +535,24 @@ def main():
         default=8,
         help='Maximum extra stride for auto-degrade policy (default: 8)'
     )
+    parser.add_argument(
+        '--auto-degrade-threshold',
+        type=float,
+        default=0.85,
+        help='Fraction of available RAM at which auto-degrade triggers (default: 0.85)'
+    )
+    parser.add_argument(
+        '--graph-output-mode',
+        type=str,
+        default='atomic',
+        choices=['atomic', 'clear', 'inplace'],
+        help=(
+            'How to write graph outputs. '
+            'atomic: write to staging then rename (default, interruption-safe); '
+            'clear: wipe graphs/ before starting; '
+            'inplace: write directly (legacy behaviour)'
+        )
+    )
 
     args = parser.parse_args()
 
@@ -493,6 +580,8 @@ def main():
             execution_mode=args.execution_mode,
             oom_policy=args.oom_policy,
             max_extra_downsample=args.max_extra_downsample,
+            auto_degrade_threshold=args.auto_degrade_threshold,
+            graph_output_mode=args.graph_output_mode,
         )
     except KeyboardInterrupt:
         try:

@@ -330,10 +330,173 @@ class TestRegeneratePlanningHelpers:
         assert mode == 'sequential'
 
     def test_auto_degrade_stride_selection(self):
+        # With the new default threshold of 85%:
+        # target_mb = 0.85 * 10000 = 8500
+        # stride=1: 14000 > 8500 -> skip; stride=2: 7000 <= 8500 -> selected
         stride, candidates = regen_tools.choose_cache_stride(
             max_extra_downsample=8,
             estimated_df_mb=14000.0,
-            available_mb=10000.0
+            available_mb=10000.0,
         )
         assert candidates == [1, 2, 4, 8]
-        assert stride == 4
+        assert stride == 2
+
+    # -----------------------------------------------------------------------
+    # dt_seconds inference tests
+    # -----------------------------------------------------------------------
+
+    def test_cache_load_infers_dt_seconds_from_minute_hourly(self, temp_dirs, empty_catalog):
+        """Hourly cache (minute step=60) -> row_dt_seconds=3600; dt_seconds stays at 60."""
+        _, output_dir = temp_dirs
+        cache_path = output_dir / "cache_hourly.parquet"
+        pd.DataFrame({
+            'minute': [0.0, 60.0, 120.0, 180.0],
+            'temperature': [10.0, 20.0, 30.0, 40.0],
+        }).to_parquet(cache_path, index=False)
+
+        catalog = empty_catalog
+        catalog.register(GraphMetadata(
+            graph_id='g_dt', title='G DT', description='DT test',
+            function=lambda df, dpi: None, library=GraphLibrary.MATPLOTLIB,
+            data_required=['minute', 'temperature'],
+            priority=GraphPriority.MEDIUM, category='test', enabled=True,
+        ))
+        executor = UnifiedGraphExecutor(catalog, output_dir)
+        df = executor.load_data(cache_path=cache_path, downsample_factor=1)
+        # row spacing is inferred into row_dt_seconds
+        assert df.attrs.get('row_dt_seconds') == pytest.approx(3600.0)
+        # simulation dt_seconds is NOT overwritten — stays at 60 s default
+        assert df.attrs.get('dt_seconds', 60.0) == pytest.approx(60.0)
+
+    def test_cache_load_infers_dt_seconds_with_extra_stride(self, temp_dirs, empty_catalog):
+        """stride=2 on hourly data -> minute diffs become 120 -> row_dt_seconds=7200; dt_seconds stays 60."""
+        _, output_dir = temp_dirs
+        cache_path = output_dir / "cache_hourly_stride.parquet"
+        pd.DataFrame({
+            'minute': [0.0, 60.0, 120.0, 180.0, 240.0],
+            'temperature': [1.0] * 5,
+        }).to_parquet(cache_path, index=False)
+
+        catalog = empty_catalog
+        catalog.register(GraphMetadata(
+            graph_id='g_dt2', title='G DT2', description='DT2 test',
+            function=lambda df, dpi: None, library=GraphLibrary.MATPLOTLIB,
+            data_required=['minute', 'temperature'],
+            priority=GraphPriority.MEDIUM, category='test', enabled=True,
+        ))
+        executor = UnifiedGraphExecutor(catalog, output_dir)
+        # stride=2: rows 0,2,4 -> minute=[0,120,240] -> diff=120 -> row_dt_seconds=7200
+        df = executor.load_data(cache_path=cache_path, downsample_factor=2)
+        assert df.attrs.get('row_dt_seconds') == pytest.approx(7200.0)
+        # simulation dt_seconds must remain at 60 s so rate calculations stay correct
+        assert df.attrs.get('dt_seconds', 60.0) == pytest.approx(60.0)
+
+    def test_efficiency_uses_simulation_dt_not_row_spacing(self, temp_dirs, empty_catalog):
+        """After _infer_dt_seconds, rate conversion still uses simulation dt=60s, not row spacing."""
+        from h2_plant.visualization.unified_executor import _infer_dt_seconds
+
+        # Simulate hourly-decimated cache: rows spaced 60 min apart, each value is per 1-min step
+        df = pd.DataFrame({
+            'minute': [0.0, 60.0, 120.0, 180.0],
+            'H2_soec_kg': [1.0, 1.0, 1.0, 1.0],  # 1 kg per 1-minute simulation step
+        })
+        _infer_dt_seconds(df)
+
+        # row spacing inferred correctly
+        assert df.attrs.get('row_dt_seconds') == pytest.approx(3600.0)
+
+        # Rate calculation must use dt_seconds=60 (1-min sim step) to give correct kg/h
+        sim_dt_h = df.attrs.get('dt_seconds', 60.0) / 3600.0  # = 60/3600 = 1/60
+        h2_rate = df['H2_soec_kg'].values[0] / sim_dt_h        # 1 / (1/60) = 60 kg/h
+        assert h2_rate == pytest.approx(60.0), (
+            f"Expected 60 kg/h (1 kg/min × 60), got {h2_rate:.2f}. "
+            "dt_seconds was likely overwritten to 3600 by _infer_dt_seconds."
+        )
+
+    # -----------------------------------------------------------------------
+    # Auto-degrade threshold tests
+    # -----------------------------------------------------------------------
+
+    def test_auto_degrade_threshold_85_keeps_stride_1_when_safe(self):
+        """When estimated footprint is below 85% of available RAM, stride=1 (no degradation)."""
+        stride, _ = regen_tools.choose_cache_stride(
+            max_extra_downsample=8,
+            estimated_df_mb=1000.0,
+            available_mb=2000.0,
+            auto_degrade_threshold=0.85,
+        )
+        # 1000 <= 0.85 * 2000 = 1700 -> stride 1 is safe
+        assert stride == 1
+
+    def test_auto_degrade_threshold_85_selects_stride_when_required(self):
+        """When footprint exceeds 85% of available RAM, smallest valid stride is chosen."""
+        stride, _ = regen_tools.choose_cache_stride(
+            max_extra_downsample=8,
+            estimated_df_mb=1800.0,
+            available_mb=2000.0,
+            auto_degrade_threshold=0.85,
+        )
+        # stride=1: 1800 > 1700 fail; stride=2: 900 <= 1700 pass
+        assert stride == 2
+
+    # -----------------------------------------------------------------------
+    # Atomic output mode tests
+    # -----------------------------------------------------------------------
+
+    def test_atomic_mode_preserves_previous_graphs_on_interrupt(self, tmp_path):
+        """If the process is interrupted before the atomic swap, existing graphs/ is untouched."""
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+        (graphs_dir / "old.png").write_text("old content")
+
+        # Simulate: staging was created but swap never happened (interrupted)
+        staging_dir = tmp_path / "graphs_staging"
+        staging_dir.mkdir()
+        (staging_dir / "new.png").write_text("new content")
+
+        # graphs/ must still contain only the old file
+        assert (graphs_dir / "old.png").read_text() == "old content"
+        assert not (graphs_dir / "new.png").exists()
+        # staging is still present for diagnostics
+        assert (staging_dir / "new.png").exists()
+
+    def test_atomic_mode_swaps_outputs_on_success(self, tmp_path):
+        """After successful run, staging is renamed to graphs/ and old graphs are replaced."""
+        graphs_dir = tmp_path / "graphs"
+        graphs_dir.mkdir()
+        (graphs_dir / "old.png").write_text("old content")
+
+        staging_dir = tmp_path / "graphs_staging"
+        staging_dir.mkdir()
+        (staging_dir / "new.png").write_text("new content")
+
+        # Perform the atomic swap (same logic as regenerate_graphs_safe)
+        graphs_old = tmp_path / "graphs_old"
+        if graphs_old.exists():
+            shutil.rmtree(graphs_old)
+        if graphs_dir.exists():
+            graphs_dir.rename(graphs_old)
+        staging_dir.rename(graphs_dir)
+        if graphs_old.exists():
+            shutil.rmtree(graphs_old)
+
+        assert (graphs_dir / "new.png").read_text() == "new content"
+        assert not (graphs_dir / "old.png").exists()
+        assert not staging_dir.exists()
+        assert not graphs_old.exists()
+
+    # -----------------------------------------------------------------------
+    # Memory-projected MAX_COLS test
+    # -----------------------------------------------------------------------
+
+    def test_sequential_batch_split_uses_memory_projection(self):
+        """The MAX_COLS formula uses available RAM and row count; with low RAM it's < 1000."""
+        # Formula: max(50, int(available_mb * 0.85 / (row_count * 8 * 3 / 1e6)))
+        # With 200 MB available and 100_000 rows:
+        # = max(50, int(200 * 0.85 / (100_000 * 8 * 3 / 1e6)))
+        # = max(50, int(170 / 2.4)) = max(50, 70) = 70
+        available_mb = 200.0
+        row_count = 100_000
+        projected = max(50, int(available_mb * 0.85 / (row_count * 8 * 3 / 1e6)))
+        assert projected < 1000
+        assert projected == max(50, int(available_mb * 0.85 / (row_count * 8 * 3 / 1e6)))

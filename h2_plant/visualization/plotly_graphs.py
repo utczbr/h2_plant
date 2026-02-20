@@ -1710,17 +1710,20 @@ def plot_wind_utilization_duration_curve(df: pd.DataFrame, **kwargs) -> go.Figur
 
     from h2_plant.visualization.utils import get_viz_config
 
-    # Get total hours from attrs (for proper X-axis scaling)
+    # Get timestep values.
+    # 'dt_seconds'     = simulation step (60 s) — used for rate/efficiency calculations.
+    # 'row_dt_seconds' = row spacing (3 600 s for hourly cache) — used for duration/energy.
     dt_seconds = df.attrs.get('dt_seconds', 60.0)
-    
+    row_dt = df.attrs.get('row_dt_seconds', dt_seconds)
+
     # Calculate robust total_hours from 'minute' column if available (handles downsampling)
     if 'minute' in df.columns:
-        # Duration = (MaxMinute - MinMinute + dt_minutes) / 60
+        # Duration = (MaxMinute - MinMinute + one_row_spacing) / 60
         t_range_min = df['minute'].max() - df['minute'].min()
-        total_hours = (t_range_min * 60.0 + dt_seconds) / 3600.0
+        total_hours = (t_range_min * 60.0 + row_dt) / 3600.0
     else:
-        # Fallback (underestimates if downsampled)
-        total_hours = len(df) * dt_seconds / 3600.0
+        # Fallback: row count × row spacing
+        total_hours = len(df) * row_dt / 3600.0
     
     # Get wind capacity from config
     WIND_CAPACITY_MW = get_viz_config('plant_parameters.wind_capacity_mw', 20.0)
@@ -1824,8 +1827,9 @@ def plot_wind_utilization_duration_curve(df: pd.DataFrame, **kwargs) -> go.Figur
         )
     
     # Add utilization stats annotation
-    total_available_mwh = wind_available.sum() * dt_seconds / 3600.0
-    total_used_mwh = total_used.sum() * dt_seconds / 3600.0
+    # Use row_dt (row spacing) so each row contributes MW × interval_h MWh correctly.
+    total_available_mwh = wind_available.sum() * row_dt / 3600.0
+    total_used_mwh = total_used.sum() * row_dt / 3600.0
     utilization_pct = (total_used_mwh / total_available_mwh * 100) if total_available_mwh > 0 else 0
     
     fig.update_layout(

@@ -93,6 +93,37 @@ class GraphResult:
     duration_ms: int = 0
 
 
+def _infer_dt_seconds(df: pd.DataFrame) -> None:
+    """Infer the row spacing and store it as df.attrs['row_dt_seconds'].
+
+    'row_dt_seconds' is the time between consecutive rows in the cache (e.g. 3 600 s
+    for an hourly-decimated cache).  It is intentionally stored under a DIFFERENT key
+    from 'dt_seconds' because:
+
+    - 'dt_seconds'     = original simulation timestep (60 s for 1-min simulation).
+                         Used by all rate/efficiency calculations in plotly_graphs.py
+                         (H2_kg / dt_h → kg/h).  Must stay at 60 s.
+    - 'row_dt_seconds' = spacing between cache rows (3 600 s for hourly cache).
+                         Used only for duration/energy calculations that treat each row
+                         as representing a full interval (e.g. MW × row_dt → MWh).
+
+    Mixing the two caused efficiency to read ~1.4 % instead of ~84-89 %.
+    """
+    if 'minute' not in df.columns or len(df) < 2:
+        return
+    diffs = np.diff(df['minute'].values)
+    pos = diffs[diffs > 0]
+    if not pos.size:
+        return
+    inferred = float(np.median(pos)) * 60.0
+    df.attrs['row_dt_seconds'] = inferred
+    horizon_yr = float(df['minute'].max()) / 60.0 / 8760.0
+    logger.info(
+        "Inferred row_dt_seconds=%.0fs (median minute diff=%.1f min, horizon≈%.1f yr)",
+        inferred, float(np.median(pos)), horizon_yr,
+    )
+
+
 class UnifiedGraphExecutor:
     """
     Central executor for all graph generation.
@@ -479,10 +510,12 @@ class UnifiedGraphExecutor:
                     df = df.iloc[::downsample_factor].reset_index(drop=True)
                     logger.info(f"Applied additional cache stride: {downsample_factor}x")
                 logger.info(f"Loaded cache: {len(df)} rows x {len(df.columns)} columns")
-                
+
                 # Normalize loaded data
                 from h2_plant.visualization.static_graphs import normalize_history
-                return normalize_history(df, inplace=True)
+                df = normalize_history(df, inplace=True)
+                _infer_dt_seconds(df)
+                return df
             except Exception as e:
                 logger.warning(f"Failed to load cache: {e}. Falling back to other sources.")
         
@@ -528,7 +561,8 @@ class UnifiedGraphExecutor:
             # Re-attach matrix data to dataframe attributes
             for k, v in matrix_attrs.items():
                 df.attrs[k] = v
-            
+
+            _infer_dt_seconds(df)
             logger.info(f"Loaded in-memory history: {len(df)} rows (downsampled by {downsample_factor}x)")
             return df
         
@@ -683,7 +717,9 @@ class UnifiedGraphExecutor:
                         
                         # Normalize loaded data (create aliases like P_soec)
                         from h2_plant.visualization.static_graphs import normalize_history
-                        
+                        combined_df = normalize_history(combined_df)
+                        _infer_dt_seconds(combined_df)
+
                         if downsample_factor > 1:
                             logger.info(
                                 f"Loaded DataFrame: {total_rows_downsampled} rows "
@@ -692,8 +728,8 @@ class UnifiedGraphExecutor:
                             )
                         else:
                             logger.info(f"Loaded DataFrame: {len(combined_df)} rows x {len(combined_df.columns)} columns")
-                        
-                        return normalize_history(combined_df)
+
+                        return combined_df
                 except Exception as e:
                     logger.warning(f"Failed to load from chunks: {e}. Falling back to CSV.")
         
@@ -970,13 +1006,17 @@ class UnifiedGraphExecutor:
         all_results = {}
         
         
-        # Pre-fetch available columns to correctly estimate batch sizes
+        # Pre-fetch available columns and row count to correctly estimate batch sizes
         all_columns = []
+        cache_row_count: Optional[int] = None
         if cache_path is not None and Path(cache_path).exists():
              try:
                  import pyarrow.parquet as pq
-                 schema = pq.read_schema(cache_path)
-                 all_columns = schema.names
+                 pf = pq.ParquetFile(cache_path)
+                 all_columns = pf.schema_arrow.names
+                 cache_row_count = pf.metadata.num_rows
+                 if cache_stride > 1:
+                     cache_row_count = max(1, cache_row_count // cache_stride)
              except Exception as e:
                  logger.warning(f"Could not read cache schema for column counting: {e}")
         elif chunks_dir is not None:
@@ -994,7 +1034,25 @@ class UnifiedGraphExecutor:
         elif csv_path is not None and csv_path.exists():
              with open(csv_path, 'r') as f:
                  all_columns = f.readline().strip().split(',')
-        
+
+        # Compute memory-aware MAX_COLS for sub-batch sizing.
+        # Formula: available_mb * 0.85 / (rows * 8 bytes/float * overhead 3) → column count.
+        # Falls back to hard cap of 1000 when row count is unknown.
+        try:
+            import psutil as _psutil
+            _avail_mb = _psutil.virtual_memory().available / 1e6
+        except Exception:
+            _avail_mb = 4000.0
+        if cache_row_count and cache_row_count > 0:
+            _projected_max_cols = max(50, int(_avail_mb * 0.85 / (cache_row_count * 8 * 3 / 1e6)))
+            MAX_COLS = min(1000, _projected_max_cols)
+            logger.info(
+                "Sub-batch MAX_COLS=%d (projected from %d rows, %.0f MB available)",
+                MAX_COLS, cache_row_count, _avail_mb,
+            )
+        else:
+            MAX_COLS = 1000
+
         # Process each category
         for cat, graphs_in_cat in by_category.items():
             # Sub-batching to avoid massive column unions (like 'orchestrated' with 7000+ columns)
@@ -1020,8 +1078,7 @@ class UnifiedGraphExecutor:
                 else:
                     g_expanded = g_patterns # Fallback if no schema access
                 
-                # Check if adding this graph exceeds true column limit
-                MAX_COLS = 1000
+                # Check if adding this graph exceeds the memory-projected column limit
                 potential_expanded = current_cols_expanded | g_expanded
                 
                 if current_batch and len(potential_expanded) > MAX_COLS:
@@ -1039,7 +1096,7 @@ class UnifiedGraphExecutor:
             if current_batch:
                 batches.append((current_batch, current_cols_patterns))
             
-            logger.info(f"=== Category: {cat} ({len(graphs_in_cat)} graphs) -> Splitting into {len(batches)} batches ===")
+            logger.info(">>> Starting category: %s (%d graphs, %d batches)", cat, len(graphs_in_cat), len(batches))
             
             for i, (graphs, required) in enumerate(batches):
                 logger.debug(f"   Batch {i+1}/{len(batches)}: {len(graphs)} graphs, ~{len(required)} columns")
@@ -1073,25 +1130,48 @@ class UnifiedGraphExecutor:
                                 continue
                             df.attrs[attr_key] = attr_value
                         
-                    # Execute graphs in this batch
-                    results = self.execute(
-                        df, 
-                        timeout_seconds=timeout_seconds,
-                        target_graphs=graphs
-                    )
+                    # Execute graphs in this batch; split once on MemoryError and retry
+                    def _run_batch(target):
+                        return self.execute(
+                            df,
+                            timeout_seconds=timeout_seconds,
+                            target_graphs=target,
+                        )
+                    try:
+                        results = _run_batch(graphs)
+                    except MemoryError:
+                        gc.collect()
+                        mid = len(graphs) // 2
+                        if mid < 1:
+                            raise
+                        logger.warning(
+                            "MemoryError on batch %d/%d in %s; splitting into two halves and retrying",
+                            i + 1, len(batches), cat,
+                        )
+                        try:
+                            results = _run_batch(graphs[:mid])
+                            results.update(_run_batch(graphs[mid:]))
+                        except MemoryError:
+                            logger.error(
+                                "MemoryError persists after batch split in %s; skipping batch %d",
+                                cat, i + 1,
+                            )
+                            results = {}
                     all_results.update(results)
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to execute batch {i+1} in {cat}: {e}", exc_info=True)
                 finally:
                     # Restore original method
                     self.get_required_columns = original_method
-                    
+
                     # Force cleanup
                     if 'df' in locals():
                         del df
                     gc.collect()
-                
+
+            logger.info("<<< Completed category: %s", cat)
+
         logger.info(f"Sequential execution complete. Total results: {len(all_results)}")
         return all_results
 
