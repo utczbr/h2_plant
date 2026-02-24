@@ -6,6 +6,7 @@ Usage:
     python tools/regenerate_lcoh.py scenarios/simulation_output
     python tools/regenerate_lcoh.py scenarios/simulation_output --economics-dir scenarios/Economics
     python tools/regenerate_lcoh.py scenarios/simulation_output --discount-rate 0.08 --project-years 20
+    python tools/regenerate_lcoh.py scenarios/simulation_output --history-dir /tmp/history_chunks
 """
 
 import argparse
@@ -13,6 +14,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -44,6 +46,26 @@ def _resolve_config_defaults(config_dir: Path) -> dict:
         return {}
 
 
+def _resolve_history_chunks(sim_dir: Path, history_dir: Optional[str]) -> Optional[Path]:
+    def _check_base(base: Path) -> Optional[Path]:
+        if not base.exists() or not base.is_dir():
+            return None
+
+        if base.name.lower() == "history_chunks":
+            if list(base.glob("chunk_*.parquet")):
+                return base
+            return None
+
+        chunks = base / "history_chunks"
+        if chunks.exists() and list(chunks.glob("chunk_*.parquet")):
+            return chunks
+        return None
+
+    if history_dir:
+        return _check_base(Path(history_dir).resolve())
+    return _check_base(sim_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Regenerate discounted LCOH report from CAPEX/OPEX and history."
@@ -72,6 +94,10 @@ def main() -> None:
         "--output-dir", type=str, default=None,
         help="Output directory for lcoh_report.json/csv (default: economics_dir)"
     )
+    parser.add_argument(
+        "--history-dir", type=str, default=None,
+        help="Path to history source (simulation output dir or history_chunks)"
+    )
 
     args = parser.parse_args()
 
@@ -80,9 +106,12 @@ def main() -> None:
         logger.error(f"Simulation output directory not found: {sim_dir}")
         sys.exit(1)
 
-    history_chunks = sim_dir / "history_chunks"
-    if not history_chunks.exists():
-        logger.error(f"history_chunks not found in: {sim_dir}")
+    history_chunks = _resolve_history_chunks(sim_dir, args.history_dir)
+    if not history_chunks:
+        logger.error(
+            "history_chunks not found or empty. "
+            "Provide --history-dir /path/to/history_chunks."
+        )
         sys.exit(1)
 
     economics_dir = Path(args.economics_dir).resolve() if args.economics_dir else (sim_dir / "Economics")
@@ -111,13 +140,17 @@ def main() -> None:
     opex_report = _load_json_report(opex_path, OpexReport)
 
     calc = LcohCalculator()
-    report = calc.generate(LcohInputs(
-        capex_report=capex_report,
-        opex_report=opex_report,
-        history_chunks_dir=history_chunks,
-        discount_rate=float(discount_rate),
-        project_years=int(project_years),
-    ))
+    try:
+        report = calc.generate(LcohInputs(
+            capex_report=capex_report,
+            opex_report=opex_report,
+            history_chunks_dir=history_chunks,
+            discount_rate=float(discount_rate),
+            project_years=int(project_years),
+        ))
+    except ValueError as e:
+        logger.error(f"Failed to generate LCOH report: {e}")
+        sys.exit(1)
 
     output_dir = Path(args.output_dir).resolve() if args.output_dir else economics_dir
     output_dir.mkdir(parents=True, exist_ok=True)

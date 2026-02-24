@@ -34,6 +34,15 @@ class LcohInputs:
 class LcohCalculator:
     """Calculate discounted LCOH for plant and pathways."""
 
+    @staticmethod
+    def _raise_disconnected_mount(path: Path, exc: OSError) -> None:
+        raise ValueError(
+            "History chunks are on a disconnected mount (Errno 107). "
+            f"Failed while reading: {path}. "
+            "Remount the drive or copy history_chunks locally and rerun with "
+            "--history-dir /path/to/history_chunks."
+        ) from exc
+
     def _discount_factor_sum(self, r: float, n: int) -> float:
         if n <= 0:
             return 0.0
@@ -55,13 +64,29 @@ class LcohCalculator:
             raise ValueError(f"No chunk files found in {chunks_dir}")
 
         required_cols = ["minute", "H2_pem_kg", "H2_soec_kg", "H2_atr_kg"]
-        try:
-            import pyarrow.parquet as pq
-            schema_cols = pq.read_schema(chunk_files[0]).names
-        except Exception:
-            df_preview = pd.read_parquet(chunk_files[0], nrows=1)
-            schema_cols = list(df_preview.columns)
+
+        def _schema_columns(first_chunk: Path):
+            try:
+                import pyarrow.parquet as pq
+                return pq.read_schema(first_chunk).names
+            except OSError as e:
+                if getattr(e, "errno", None) == 107:
+                    self._raise_disconnected_mount(first_chunk, e)
+            except Exception:
+                pass
+
+            try:
+                df_preview = pd.read_parquet(first_chunk, nrows=1)
+            except OSError as e:
+                if getattr(e, "errno", None) == 107:
+                    self._raise_disconnected_mount(first_chunk, e)
+                raise
+
+            schema_cols_local = list(df_preview.columns)
             del df_preview
+            return schema_cols_local
+
+        schema_cols = _schema_columns(chunk_files[0])
 
         missing = [c for c in required_cols if c not in schema_cols]
         if missing:
@@ -76,7 +101,12 @@ class LcohCalculator:
         diff_samples = []
 
         for chunk_file in chunk_files:
-            df = pd.read_parquet(chunk_file, columns=required_cols)
+            try:
+                df = pd.read_parquet(chunk_file, columns=required_cols)
+            except OSError as e:
+                if getattr(e, "errno", None) == 107:
+                    self._raise_disconnected_mount(chunk_file, e)
+                raise
             if df.empty:
                 continue
             totals["pem"] += float(pd.to_numeric(df["H2_pem_kg"], errors="coerce").fillna(0).sum())

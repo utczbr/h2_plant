@@ -6,7 +6,7 @@
 To start the graphical interface, run the following command from the project root:
 
 ```bash
-python h2_plant/gui/main.py
+python -m h2_plant.gui.main
 ```
 
 The main window will appear showing:
@@ -106,9 +106,9 @@ Components requiring assignment:
 5. **Collapse the node** when done to keep canvas clean
 
 ### Step 5: Running Simulation
-1. Click **"Run Simulation"** (toolbar)
+1. Click **"Run Simulation"** in the top menu bar
 2. Wait for progress dialog
-3. Review results in Results Dialog
+3. Review results in the **Simulation Report** tab
 
 ---
 

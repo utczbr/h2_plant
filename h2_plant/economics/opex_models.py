@@ -82,6 +82,8 @@ class OpexReport(BaseModel):
     total_fixed_cost: float = Field(0.0, description="Sum of Fixed category")
     total_maintenance_cost: float = Field(0.0, description="Sum of Maintenance category")
     total_opex: float = Field(0.0, description="Total annual OPEX")
+    total_opex_low: Optional[float] = Field(None, description="Low annual OPEX estimate")
+    total_opex_high: Optional[float] = Field(None, description="High annual OPEX estimate")
     
     # Reference Values (from CAPEX)
     fci: float = Field(0.0, description="Fixed Capital Investment (from CAPEX)")

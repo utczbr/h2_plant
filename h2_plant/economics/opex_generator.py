@@ -64,6 +64,42 @@ class OpexGenerator:
         ]
         
         logger.info(f"Loaded {len(self.items)} OPEX items from {config_path}")
+
+    def _apply_uncertainty_bands(
+        self,
+        report: OpexReport,
+        capex_report: Optional[CapexReport],
+    ) -> None:
+        """
+        Apply low/high OPEX uncertainty bands using CAPEX AACE class factors.
+
+        If CAPEX context is missing, low/high are intentionally omitted.
+        """
+        if capex_report is None:
+            logger.warning(
+                "CAPEX report not provided; OPEX uncertainty bands (low/high) will be omitted."
+            )
+            return
+
+        cost_class = getattr(capex_report, "overall_cost_class", None)
+        if cost_class is None:
+            logger.warning(
+                "CAPEX cost class not available; OPEX uncertainty bands (low/high) will be omitted."
+            )
+            return
+
+        try:
+            low_factor, high_factor = cost_class.accuracy_range
+        except Exception as e:
+            logger.warning(f"Could not derive AACE accuracy range for OPEX uncertainty: {e}")
+            return
+
+        try:
+            report.total_opex_low = float(report.total_opex) * float(low_factor)
+            report.total_opex_high = float(report.total_opex) * float(high_factor)
+        except (TypeError, ValueError) as e:
+            logger.warning(f"Could not compute OPEX uncertainty bands: {e}")
+            return
     
     def generate(
         self,
@@ -139,6 +175,7 @@ class OpexGenerator:
         
         # Calculate totals
         report.calculate_totals()
+        self._apply_uncertainty_bands(report, capex_report)
         
         # Export if output_dir provided
         if output_dir:
@@ -150,6 +187,10 @@ class OpexGenerator:
             
             logger.info(f"OPEX report generated: {output_dir}")
             logger.info(f"  Total OPEX: ${report.total_opex:,.0f}/year")
+            if report.total_opex_low is not None and report.total_opex_high is not None:
+                logger.info(
+                    f"  OPEX Range: ${report.total_opex_low:,.0f} - ${report.total_opex_high:,.0f}"
+                )
             logger.info(f"  Variable: ${report.total_variable_cost:,.0f}")
             logger.info(f"  Fixed: ${report.total_fixed_cost:,.0f}")
             logger.info(f"  Maintenance: ${report.total_maintenance_cost:,.0f}")
@@ -257,6 +298,7 @@ class OpexGenerator:
         
         # Calculate totals
         report.calculate_totals()
+        self._apply_uncertainty_bands(report, capex_report)
         
         # Export if output_dir provided
         if output_dir:
@@ -269,6 +311,10 @@ class OpexGenerator:
             elapsed = time.time() - start_time
             logger.info(f"OPEX report generated (streaming) in {elapsed:.1f}s")
             logger.info(f"  Total OPEX: ${report.total_opex:,.0f}/year")
+            if report.total_opex_low is not None and report.total_opex_high is not None:
+                logger.info(
+                    f"  OPEX Range: ${report.total_opex_low:,.0f} - ${report.total_opex_high:,.0f}"
+                )
             logger.info(f"  Variable: ${report.total_variable_cost:,.0f}")
             logger.info(f"  Fixed: ${report.total_fixed_cost:,.0f}")
             logger.info(f"  Maintenance: ${report.total_maintenance_cost:,.0f}")
@@ -353,6 +399,7 @@ class OpexGenerator:
             report.annual_h2_production_kg = h2_entry * annualization_factor
 
         report.calculate_totals()
+        self._apply_uncertainty_bands(report, capex_report)
 
         if output_dir:
             output_path = Path(output_dir)
@@ -364,6 +411,10 @@ class OpexGenerator:
             elapsed = time.time() - start_time
             logger.info(f"OPEX report generated (parquet streaming) in {elapsed:.1f}s")
             logger.info(f"  Total OPEX: ${report.total_opex:,.0f}/year")
+            if report.total_opex_low is not None and report.total_opex_high is not None:
+                logger.info(
+                    f"  OPEX Range: ${report.total_opex_low:,.0f} - ${report.total_opex_high:,.0f}"
+                )
             logger.info(f"  Variable: ${report.total_variable_cost:,.0f}")
             logger.info(f"  Fixed: ${report.total_fixed_cost:,.0f}")
             logger.info(f"  Maintenance: ${report.total_maintenance_cost:,.0f}")
@@ -875,6 +926,10 @@ class OpexGenerator:
             writer.writerow(["Fixed Costs", "", "", "", round(report.total_fixed_cost, 2), "", "", ""])
             writer.writerow(["Maintenance Costs", "", "", "", round(report.total_maintenance_cost, 2), "", "", ""])
             writer.writerow(["TOTAL OPEX", "", "", "", round(report.total_opex, 2), "", "", ""])
+            if report.total_opex_low is not None:
+                writer.writerow(["TOTAL OPEX LOW", "", "", "", round(report.total_opex_low, 2), "", "", ""])
+            if report.total_opex_high is not None:
+                writer.writerow(["TOTAL OPEX HIGH", "", "", "", round(report.total_opex_high, 2), "", "", ""])
             
             # Production metrics
             if report.annual_h2_production_kg > 0:

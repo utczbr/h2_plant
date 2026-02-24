@@ -1,4 +1,3 @@
-import json
 import logging
 import yaml
 """
@@ -12,15 +11,13 @@ from PySide6.QtWidgets import (
     QProgressDialog, QCheckBox, QDialogButtonBox, QScrollArea, QGridLayout, 
     QGroupBox, QHBoxLayout, QSplitter, QSizePolicy, QFrame, QProgressBar,
     QRadioButton, QSpinBox, QButtonGroup, QComboBox, QLineEdit, QFormLayout,
-    QAbstractItemView, QDoubleSpinBox, QPlainTextEdit
+    QAbstractItemView, QDoubleSpinBox, QPlainTextEdit, QToolButton, QStyle
 )
-from PySide6.QtCore import Qt, QTimer, QMimeData, QThread, Signal, QSettings, QRunnable, QThreadPool, QObject, Slot
-from PySide6.QtGui import QColor, QShortcut, QKeySequence, QDrag, QAction
+from PySide6.QtCore import Qt, QTimer, QMimeData, QThread, Signal, Slot, QEvent
+from PySide6.QtGui import QColor, QShortcut, QKeySequence, QDrag, QAction, QPalette
 from NodeGraphQt import NodeGraph, PropertiesBinWidget, NodesPaletteWidget
 import copy
 from pathlib import Path
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 
 # Core Managers
@@ -164,95 +161,6 @@ GRAPH_HIERARCHY = _build_graph_hierarchy()
 # PERFORMANCE OPTIMIZATION - Caching and Lazy Loading
 # ==============================================================================
 
-import hashlib
-from functools import lru_cache
-
-
-class FigureCache:
-    """
-    LRU cache for generated matplotlib figures.
-    
-    Caches figures by (graph_id, data_hash) to avoid regeneration when:
-    - User toggles checkbox off/on
-    - User switches between tabs and returns
-    
-    The cache is invalidated when simulation data changes (new hash).
-    """
-    
-    def __init__(self, max_size: int = 20):
-        self._cache = {}  # (graph_id, data_hash) -> Figure
-        self._access_order = []  # LRU tracking
-        self._max_size = max_size
-        self._current_data_hash = None
-    
-    def get_data_hash(self, simulation_data: dict) -> str:
-        """Generate a hash from simulation data for cache invalidation."""
-        # Use first and last values + length as a quick fingerprint
-        try:
-            keys = list(simulation_data.keys())[:5]
-            sample = str([(k, len(simulation_data.get(k, []))) for k in keys])
-            return hashlib.md5(sample.encode()).hexdigest()[:8]
-        except:
-            return "unknown"
-    
-    def set_data(self, simulation_data: dict):
-        """Update the current data hash, clearing cache if data changed."""
-        new_hash = self.get_data_hash(simulation_data)
-        if new_hash != self._current_data_hash:
-            self.clear()
-            self._current_data_hash = new_hash
-    
-    def get(self, graph_id: str) -> object:
-        """Get cached figure or None."""
-        key = (graph_id, self._current_data_hash)
-        if key in self._cache:
-            # Update LRU order
-            if key in self._access_order:
-                self._access_order.remove(key)
-            self._access_order.append(key)
-            return self._cache[key]
-        return None
-    
-    def put(self, graph_id: str, figure: object):
-        """Cache a figure."""
-        key = (graph_id, self._current_data_hash)
-        
-        # Evict LRU if at capacity
-        while len(self._cache) >= self._max_size and self._access_order:
-            old_key = self._access_order.pop(0)
-            old_fig = self._cache.pop(old_key, None)
-            if old_fig:
-                try:
-                    old_fig.clear()
-                    import matplotlib.pyplot as plt
-                    plt.close(old_fig)
-                except:
-                    pass
-        
-        self._cache[key] = figure
-        self._access_order.append(key)
-    
-    def clear(self):
-        """Clear all cached figures."""
-        for fig in self._cache.values():
-            try:
-                fig.clear()
-                import matplotlib.pyplot as plt
-                plt.close(fig)
-            except:
-                pass
-        self._cache.clear()
-        self._access_order.clear()
-
-
-class GraphWorkerSignals(QObject):
-    """Signals emitted by graph generation workers."""
-    graph_ready = Signal(str, object)  # graph_id, Figure or path
-    error = Signal(str, str)  # graph_id, error_message
-    progress = Signal(int, int, str)  # current, total, graph_name
-    all_complete = Signal(dict)  # graph_id -> file_path
-
-
 class ImageGenerationWorker(QThread):
     """
     Worker thread that generates all graphs as PNG files.
@@ -330,83 +238,6 @@ class ImageGenerationWorker(QThread):
         self._stop_requested = True
 
 
-
-class LazyGraphSlot(QFrame):
-    """
-    Lazy-loading placeholder that triggers graph generation when visible.
-    
-    Uses visibility detection to only generate graphs that are actually
-    in the scroll viewport, dramatically reducing initial load time.
-    """
-    
-    # Signal to request graph generation
-    request_generation = Signal(str)  # graph_id
-    
-    def __init__(self, graph_id: str, graph_name: str, parent=None):
-        super().__init__(parent)
-        self.graph_id = graph_id
-        self.graph_name = graph_name
-        self._generation_requested = False
-        self._is_loaded = False
-        
-        self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-        self.setMinimumHeight(200)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #2a2a2a;
-                border: 1px solid #3a3a3a;
-                border-radius: 6px;
-            }
-        """)
-        
-        self._layout = QVBoxLayout(self)
-        self._layout.setAlignment(Qt.AlignCenter)
-        
-        # Graph name
-        self._name_label = QLabel(graph_name)
-        self._name_label.setStyleSheet("color: #888; font-size: 13px;")
-        self._name_label.setAlignment(Qt.AlignCenter)
-        self._layout.addWidget(self._name_label)
-        
-        # Status label
-        self._status_label = QLabel("Scroll to load")
-        self._status_label.setStyleSheet("color: #555; font-size: 11px;")
-        self._status_label.setAlignment(Qt.AlignCenter)
-        self._layout.addWidget(self._status_label)
-    
-    def check_visibility(self, viewport_rect):
-        """Check if this slot is visible in the viewport and request generation."""
-        if self._generation_requested or self._is_loaded:
-            return
-        
-        # Get global position of this widget
-        my_rect = self.rect()
-        my_global = self.mapToGlobal(my_rect.topLeft())
-        
-        # Safety check: skip if widget hasn't been laid out yet (position 0,0 with small size)
-        if my_global.x() == 0 and my_global.y() == 0 and my_rect.height() < 50:
-            return  # Widget not ready yet
-        
-        my_global_rect = my_rect.translated(my_global.x(), my_global.y())
-        
-        # Check intersection with viewport
-        if viewport_rect.intersects(my_global_rect):
-            self._request_graph()
-    
-    def _request_graph(self):
-        """Request graph generation."""
-        if self._generation_requested:
-            return
-        self._generation_requested = True
-        self._status_label.setText("Loading...")
-        self._status_label.setStyleSheet("color: #2196F3; font-size: 11px;")
-        self.request_generation.emit(self.graph_id)
-    
-    def mark_loaded(self):
-        """Mark this slot as having its graph loaded."""
-        self._is_loaded = True
-
-
 class SimulationReportWidget(QWidget):
     """
     Widget to display simulation reports using pre-generated static images.
@@ -437,6 +268,10 @@ class SimulationReportWidget(QWidget):
         self._tree_items = {}
         self._generation_worker = None
         self._zoom_index = self.DEFAULT_ZOOM_INDEX  # Current zoom level index
+        self._resize_refresh_active = False
+        self._resize_refresh_timer = QTimer(self)
+        self._resize_refresh_timer.setSingleShot(True)
+        self._resize_refresh_timer.timeout.connect(self._refresh_images_after_resize)
         
         # Temp directory for generated images
         import tempfile
@@ -465,7 +300,19 @@ class SimulationReportWidget(QWidget):
         deselect_all_btn = QPushButton("None")
         refresh_btn = QPushButton("Refresh Graphs")
         refresh_btn.setToolTip("Generate selected graphs")
-        refresh_btn.setStyleSheet("font-weight: bold; background-color: #2196F3; color: white;")
+        theme = self._theme_tokens()
+        refresh_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                font-weight: bold;
+                background-color: {theme["accent"]};
+                color: {theme["button_text"]};
+            }}
+            QPushButton:hover {{
+                background-color: {theme["accent_hover"]};
+            }}
+            """
+        )
         
         select_all_btn.clicked.connect(self.select_all_graphs)
         deselect_all_btn.clicked.connect(self.deselect_all_graphs)
@@ -515,7 +362,9 @@ class SimulationReportWidget(QWidget):
         
         self.no_data_label = QLabel("No graphs available. Run simulation first.")
         self.no_data_label.setAlignment(Qt.AlignCenter)
-        self.no_data_label.setStyleSheet("color: gray; font-size: 14px; padding: 50px;")
+        self.no_data_label.setStyleSheet(
+            f"color: {theme['muted_text']}; font-size: 14px; padding: 50px;"
+        )
         self.graphs_layout.addWidget(self.no_data_label)
         self.graphs_layout.addStretch()
         
@@ -526,6 +375,34 @@ class SimulationReportWidget(QWidget):
         self.splitter.setStretchFactor(1, 1)
         
         main_layout.addWidget(self.splitter)
+
+    def _theme_tokens(self) -> dict:
+        """Return report-widget colors derived from ThemeManager/palette."""
+        palette = QApplication.instance().palette() if QApplication.instance() else self.palette()
+        is_dark = palette.color(QPalette.Window).lightness() < 128
+        if is_dark:
+            p = ThemeManager.DARK_PALETTE
+            return {
+                "frame_bg": p["surface"],
+                "border": p["border"],
+                "text": p["foreground"],
+                "muted_text": p["comment"],
+                "accent": p["blue"],
+                "accent_hover": p["button_hover"],
+                "button_text": "#ffffff",
+                "error": p["red"],
+            }
+
+        return {
+            "frame_bg": palette.color(QPalette.Base).name(),
+            "border": palette.color(QPalette.Mid).name(),
+            "text": palette.color(QPalette.Text).name(),
+            "muted_text": palette.color(QPalette.Mid).name(),
+            "accent": palette.color(QPalette.Highlight).name(),
+            "accent_hover": palette.color(QPalette.LinkVisited).name(),
+            "button_text": palette.color(QPalette.HighlightedText).name(),
+            "error": "#b00020",
+        }
     
     def _populate_tree(self):
         """Populate tree with folder hierarchy."""
@@ -654,6 +531,7 @@ class SimulationReportWidget(QWidget):
     
     def _generate_all_graphs(self):
         """Generate all checked graphs as PNG files in background."""
+        theme = self._theme_tokens()
         if self.simulation_data is None:
             self._clear_layout()
             self._show_message("No simulation data. Run simulation first.", "gray")
@@ -668,7 +546,9 @@ class SimulationReportWidget(QWidget):
         # Show progress bar
         self._clear_layout()
         self._progress_label = QLabel("Generating graphs...")
-        self._progress_label.setStyleSheet("color: #888; font-size: 14px;")
+        self._progress_label.setStyleSheet(
+            f"color: {theme['muted_text']}; font-size: 14px;"
+        )
         self._progress_label.setAlignment(Qt.AlignCenter)
         self.graphs_layout.addWidget(self._progress_label)
         
@@ -718,6 +598,7 @@ class SimulationReportWidget(QWidget):
         """Display all generated images for selected graphs."""
         from PySide6.QtGui import QPixmap
         from h2_plant.visualization.graph_catalog import GRAPH_REGISTRY
+        theme = self._theme_tokens()
         
         self._clear_layout()
         
@@ -735,21 +616,25 @@ class SimulationReportWidget(QWidget):
             # Create container frame
             frame = QFrame()
             frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
-            frame.setStyleSheet("""
-                QFrame {
-                    background-color: #2a2a2a;
-                    border: 1px solid #3a3a3a;
+            frame.setStyleSheet(
+                f"""
+                QFrame {{
+                    background-color: {theme["frame_bg"]};
+                    border: 1px solid {theme["border"]};
                     border-radius: 6px;
                     padding: 5px;
-                }
-            """)
+                }}
+                """
+            )
             frame_layout = QVBoxLayout(frame)
             
             # Graph title
             metadata = GRAPH_REGISTRY.get(graph_id)
             title_text = metadata.title if metadata else graph_id
             title = QLabel(title_text)
-            title.setStyleSheet("font-weight: bold; font-size: 14px; color: #eee;")
+            title.setStyleSheet(
+                f"font-weight: bold; font-size: 14px; color: {theme['text']};"
+            )
             title.setAlignment(Qt.AlignCenter)
             frame_layout.addWidget(title)
             
@@ -757,7 +642,9 @@ class SimulationReportWidget(QWidget):
             if not filepath:
                 # Placeholder for not generated yet
                 placeholder = QLabel("Not generated yet.\nClick 'Refresh Graphs' to generate.")
-                placeholder.setStyleSheet("color: #888; font-style: italic; padding: 20px;")
+                placeholder.setStyleSheet(
+                    f"color: {theme['muted_text']}; font-style: italic; padding: 20px;"
+                )
                 placeholder.setAlignment(Qt.AlignCenter)
                 placeholder.setMinimumHeight(200)
                 frame_layout.addWidget(placeholder)
@@ -768,19 +655,21 @@ class SimulationReportWidget(QWidget):
             if filepath.endswith('.html'):
                 # Create a clickable link to open in browser
                 link_btn = QPushButton(f"🔗 Open Interactive Chart: {title_text}")
-                link_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #3a5a8c;
-                        color: white;
+                link_btn.setStyleSheet(
+                    f"""
+                    QPushButton {{
+                        background-color: {theme["accent"]};
+                        color: {theme["button_text"]};
                         border: none;
                         border-radius: 4px;
                         padding: 12px 20px;
                         font-size: 13px;
-                    }
-                    QPushButton:hover {
-                        background-color: #4a6a9c;
-                    }
-                """)
+                    }}
+                    QPushButton:hover {{
+                        background-color: {theme["accent_hover"]};
+                    }}
+                    """
+                )
                 link_btn.setMinimumHeight(50)
                 _path = filepath  # Capture for lambda
                 link_btn.clicked.connect(lambda checked, p=_path: self._open_html_graph(p))
@@ -802,7 +691,7 @@ class SimulationReportWidget(QWidget):
                 image_label.setPixmap(scaled)
             else:
                 image_label.setText("Failed to load image")
-                image_label.setStyleSheet("color: red;")
+                image_label.setStyleSheet(f"color: {theme['error']};")
             
             image_label.setAlignment(Qt.AlignCenter)
             frame_layout.addWidget(image_label)
@@ -813,9 +702,16 @@ class SimulationReportWidget(QWidget):
         self.graphs_layout.addStretch()
     
     def _show_message(self, text, color):
+        theme = self._theme_tokens()
+        color_map = {
+            "gray": theme["muted_text"],
+            "red": theme["error"],
+        }
         self.no_data_label = QLabel(text)
         self.no_data_label.setAlignment(Qt.AlignCenter)
-        self.no_data_label.setStyleSheet(f"color: {color}; font-size: 14px; padding: 50px;")
+        self.no_data_label.setStyleSheet(
+            f"color: {color_map.get(color, color)}; font-size: 14px; padding: 50px;"
+        )
         self.graphs_layout.addWidget(self.no_data_label)
         self.graphs_layout.addStretch()
     
@@ -837,13 +733,45 @@ class SimulationReportWidget(QWidget):
         """Update the zoom level label."""
         zoom_percent = int(self.ZOOM_LEVELS[self._zoom_index] * 100)
         self._zoom_label.setText(f"{zoom_percent}%")
+
+    def _schedule_resize_refresh(self):
+        """Debounce expensive image-rescale refreshes during window resizing."""
+        if self._resize_refresh_active:
+            return
+        if not self.image_paths:
+            return
+        if not self._get_checked_graph_ids():
+            return
+        if self._generation_worker is not None and self._generation_worker.isRunning():
+            return
+        self._resize_refresh_timer.start(120)
+
+    def _refresh_images_after_resize(self):
+        """Repaint graph images at the current viewport width after resize settles."""
+        if self._resize_refresh_active:
+            return
+        if not self.image_paths:
+            return
+        if self._generation_worker is not None and self._generation_worker.isRunning():
+            return
+
+        self._resize_refresh_active = True
+        try:
+            self._display_selected_graphs()
+        finally:
+            self._resize_refresh_active = False
+
+    def resizeEvent(self, event):
+        """Queue graph-rescale refreshes when the report widget size changes."""
+        super().resizeEvent(event)
+        self._schedule_resize_refresh()
     
     def eventFilter(self, obj, event):
         """Filter events to prevent scrolling when CTRL is held."""
-        from PySide6.QtCore import QEvent
-        
-        if obj == self.scroll_area.viewport() and event.type() == QEvent.Wheel:
-            if event.modifiers() == Qt.ControlModifier:
+        if obj == self.scroll_area.viewport():
+            if event.type() == QEvent.Resize:
+                self._schedule_resize_refresh()
+            if event.type() == QEvent.Wheel and event.modifiers() == Qt.ControlModifier:
                 # Handle zoom directly and block scrolling
                 if event.angleDelta().y() > 0:
                     self._zoom_in()
@@ -884,10 +812,15 @@ class SimulationReportWidget(QWidget):
     def cleanup(self):
         """Clean up temp directory."""
         import shutil
+        if self._generation_worker is not None and self._generation_worker.isRunning():
+            self._generation_worker.request_stop()
+            if not self._generation_worker.wait(3000):
+                logger.warning("Graph generation worker did not stop before cleanup.")
+        self._resize_refresh_timer.stop()
         try:
             shutil.rmtree(self._temp_dir)
-        except:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to remove temporary graph directory '%s': %s", self._temp_dir, exc)
 
 
 
@@ -1079,7 +1012,17 @@ class PlantEditorWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("H2 Plant Configuration Editor")
-        self.setGeometry(100, 100, 1400, 900)
+        self._configure_startup_window()
+
+        # Window mode state (for clean fullscreen round-trip)
+        self._windowed_geometry = None
+        self._windowed_was_maximized = False
+        self._fullscreen_action = None
+        self.worker = None
+        self._progress_dialog = None
+        self._fullscreen_reflow_timer = QTimer(self)
+        self._fullscreen_reflow_timer.setSingleShot(True)
+        self._fullscreen_reflow_timer.timeout.connect(self._apply_window_state_reflow)
         
         # Create node graph
         self.graph = NodeGraph()
@@ -1126,6 +1069,10 @@ class PlantEditorWindow(QMainWindow):
         
         # Set central widget with Tabs
         self.central_tabs = QTabWidget()
+        self.central_tabs.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.central_tabs.setMinimumSize(0, 0)
+        self.graph.widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.graph.widget.setMinimumSize(0, 0)
         
         # Tab 1: Graph Editor
         self.central_tabs.addTab(self.graph.widget, "Run Simulation")
@@ -1153,6 +1100,7 @@ class PlantEditorWindow(QMainWindow):
         self.setup_toolbar()
         self.setup_context_menu()
         self.setup_keyboard_shortcuts()
+        self._enforce_resizable_window_constraints()
 
         # Keep equipment panel synced to selected node.
         # Primary: signal-based (instant, zero-cost when idle)
@@ -1169,6 +1117,35 @@ class PlantEditorWindow(QMainWindow):
         # Apply theme
         ThemeManager.apply_theme(self, QApplication.instance(), "dark")
         self.show()
+
+    def _configure_startup_window(self):
+        """Size and center the startup window relative to available screen geometry."""
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            self.resize(1400, 900)
+            return
+
+        available = screen.availableGeometry()
+        target_width = min(available.width(), max(960, int(available.width() * 0.9)))
+        target_height = min(available.height(), max(680, int(available.height() * 0.9)))
+
+        self.resize(target_width, target_height)
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
+
+    def _enforce_resizable_window_constraints(self):
+        """Ensure the main window remains fully resizable in normal mode.
+
+        Note: ``Qt.MSWindowsFixedSizeDialogHint`` is intentionally **not**
+        touched here.  Calling ``setWindowFlag`` triggers native-window
+        recreation on X11/Wayland, which resets the WM size hints and can
+        permanently lock the window to its current size.  The hint is
+        Windows-only anyway, so skipping it is a no-op on Debian.
+        """
+        self.setMaximumSize(16777215, 16777215)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
     
     def register_all_nodes(self):
         """Register all typed node classes (1:1 backend coverage) plus fallback."""
@@ -1415,6 +1392,16 @@ class PlantEditorWindow(QMainWindow):
         auto_layout_action.triggered.connect(self._run_auto_layout_report_mode)
         view_menu.addAction(auto_layout_action)
 
+        view_menu.addSeparator()
+
+        fullscreen_action = QAction("Full Screen", self)
+        fullscreen_action.setShortcut("F11")
+        fullscreen_action.setCheckable(True)
+        fullscreen_action.triggered.connect(self._toggle_fullscreen)
+        view_menu.addAction(fullscreen_action)
+        self._fullscreen_action = fullscreen_action
+        self._sync_fullscreen_action_state()
+
         # VALIDATION MENU
         validation_menu = menubar.addMenu("Validation")
         
@@ -1437,6 +1424,44 @@ class PlantEditorWindow(QMainWindow):
         run_action.triggered.connect(self.run_simulation)
         menubar.addAction(run_action)
 
+        # Explicit top-right window controls (additive to native title bar controls).
+        window_controls = QWidget(menubar)
+        controls_layout = QHBoxLayout(window_controls)
+        controls_layout.setContentsMargins(4, 2, 4, 2)
+        controls_layout.setSpacing(4)
+
+        self.minimize_button = QToolButton(window_controls)
+        self.minimize_button.setText("—")
+        self.minimize_button.setToolTip("Minimize")
+        self.minimize_button.setFixedSize(28, 22)
+        self.minimize_button.clicked.connect(self.showMinimized)
+        controls_layout.addWidget(self.minimize_button)
+
+        self.window_mode_button = QToolButton(window_controls)
+        self.window_mode_button.setFixedSize(28, 22)
+        self.window_mode_button.clicked.connect(
+            lambda _checked=False: self._toggle_fullscreen()
+        )
+        controls_layout.addWidget(self.window_mode_button)
+        self._sync_window_mode_button_state()
+
+        window_controls.setStyleSheet(
+            """
+            QToolButton {
+                border: 1px solid #3e4451;
+                border-radius: 3px;
+                background-color: #3b4048;
+                color: #abb2bf;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QToolButton:hover {
+                background-color: #4b5263;
+            }
+            """
+        )
+        menubar.setCornerWidget(window_controls, Qt.TopRightCorner)
+
 
 
     def setup_toolbar(self):
@@ -1454,7 +1479,179 @@ class PlantEditorWindow(QMainWindow):
     
     def setup_keyboard_shortcuts(self):
         """Setup additional keyboard shortcuts."""
-        QShortcut(QKeySequence(Qt.CTRL | Qt.Key_D), self, self.duplicate_selection)
+        QShortcut(QKeySequence(Qt.Key_F11), self, lambda: self._toggle_fullscreen())
+        QShortcut(QKeySequence(Qt.Key_Escape), self, self._handle_escape_pressed)
+
+    def _handle_escape_pressed(self):
+        """Exit fullscreen quickly without affecting normal window mode."""
+        if self.isFullScreen():
+            self._exit_fullscreen()
+
+    def _enter_fullscreen(self):
+        """Enter fullscreen and preserve the current windowed state."""
+        if self.isFullScreen():
+            return
+
+        self._windowed_was_maximized = self.isMaximized()
+        if not self._windowed_was_maximized:
+            self._windowed_geometry = self.geometry()
+
+        # Save dock visibility so we can restore later, then hide them
+        # so the central canvas can occupy the full screen width.
+        self._saved_dock_visibility = {}
+        for dock in self.findChildren(QDockWidget):
+            self._saved_dock_visibility[dock] = dock.isVisible()
+            dock.hide()
+
+        self.showFullScreen()
+        self._sync_fullscreen_action_state()
+        self._schedule_window_state_reflow(80)
+
+    def _exit_fullscreen(self):
+        """Exit fullscreen and restore the previous windowed/maximized state."""
+        if not self.isFullScreen():
+            self._sync_fullscreen_action_state()
+            return
+
+        self.showNormal()
+        if self._windowed_was_maximized:
+            self.showMaximized()
+        elif self._windowed_geometry is not None and self._windowed_geometry.isValid():
+            self.setGeometry(self._windowed_geometry)
+
+        # Restore dock visibility saved during _enter_fullscreen
+        for dock, was_visible in getattr(self, '_saved_dock_visibility', {}).items():
+            dock.setVisible(was_visible)
+        self._saved_dock_visibility = {}
+
+        self._enforce_resizable_window_constraints()
+        self._sync_fullscreen_action_state()
+        self._schedule_window_state_reflow()
+
+    def _toggle_fullscreen(self, checked=None):
+        """Toggle fullscreen from action state or shortcut."""
+        want_fullscreen = (not self.isFullScreen()) if checked is None else bool(checked)
+        if want_fullscreen:
+            self._enter_fullscreen()
+        else:
+            self._exit_fullscreen()
+
+    def _sync_fullscreen_action_state(self):
+        """Keep the View->Full Screen action synchronized with actual window state."""
+        if self._fullscreen_action is None:
+            return
+        is_fullscreen = self.isFullScreen()
+        if self._fullscreen_action.isChecked() != is_fullscreen:
+            self._fullscreen_action.blockSignals(True)
+            self._fullscreen_action.setChecked(is_fullscreen)
+            self._fullscreen_action.blockSignals(False)
+        self._sync_window_mode_button_state()
+
+    def _sync_window_mode_button_state(self):
+        """Keep the top-right fullscreen/window button icon and tooltip in sync."""
+        if not hasattr(self, "window_mode_button") or self.window_mode_button is None:
+            return
+        if self.isFullScreen():
+            icon = self.style().standardIcon(QStyle.SP_TitleBarNormalButton)
+            tooltip = "Exit Full Screen"
+        else:
+            icon = self.style().standardIcon(QStyle.SP_TitleBarMaxButton)
+            tooltip = "Enter Full Screen"
+        self.window_mode_button.setIcon(icon)
+        self.window_mode_button.setToolTip(tooltip)
+
+    def _schedule_window_state_reflow(self, delay_ms=0):
+        """Debounce window/canvas reflow after fullscreen and state transitions."""
+        self._fullscreen_reflow_timer.start(max(0, int(delay_ms)))
+
+    def _apply_window_state_reflow(self):
+        """Force central layout and graph view to recalculate geometry.
+
+        Performs two passes: an immediate layout activation followed by a
+        secondary 150 ms delayed pass.  This catches late WM geometry
+        propagation that typical Linux X11/Wayland compositors may defer.
+        """
+        self._apply_reflow_pass()
+
+        # Secondary delayed pass — catches geometry changes the WM pushes
+        # after the initial showFullScreen / showNormal completes.
+        QTimer.singleShot(150, self._apply_reflow_pass)
+
+    def _apply_reflow_pass(self):
+        """Single geometry-reflow pass for all managed widgets."""
+        # In fullscreen, explicitly resize the window to the available
+        # screen geometry so the WM has no ambiguity.
+        if self.isFullScreen():
+            screen = self.screen() or QApplication.primaryScreen()
+            if screen is not None:
+                geo = screen.geometry()
+                if self.geometry() != geo:
+                    self.setGeometry(geo)
+
+        central_widget = self.centralWidget()
+        if central_widget is not None:
+            central_widget.updateGeometry()
+            if central_widget.layout() is not None:
+                central_widget.layout().activate()
+
+        if hasattr(self, "central_tabs") and self.central_tabs is not None:
+            self.central_tabs.updateGeometry()
+            self.central_tabs.update()
+
+        graph_widget = getattr(self.graph, "widget", None)
+        if graph_widget is not None:
+            graph_widget.updateGeometry()
+            graph_widget.update()
+
+        viewer = None
+        try:
+            viewer = self.graph.viewer()
+        except Exception as exc:
+            logger.debug("Unable to access graph viewer for reflow: %s", exc)
+
+        if viewer is not None:
+            viewer.updateGeometry()
+            viewport = viewer.viewport() if hasattr(viewer, "viewport") else None
+            if viewport is not None:
+                viewport.updateGeometry()
+                viewport.update()
+            scene = viewer.scene() if hasattr(viewer, "scene") else None
+            if scene is not None:
+                scene.update()
+            viewer.update()
+
+        if hasattr(self, "report_widget") and self.report_widget is not None:
+            self.report_widget.updateGeometry()
+            if hasattr(self.report_widget, "_schedule_resize_refresh"):
+                self.report_widget._schedule_resize_refresh()
+
+        self._sync_fullscreen_action_state()
+
+    def changeEvent(self, event):
+        """Synchronize fullscreen action when window state changes externally."""
+        if event.type() == QEvent.WindowStateChange:
+            self._sync_fullscreen_action_state()
+            self._schedule_window_state_reflow()
+        super().changeEvent(event)
+
+    def closeEvent(self, event):
+        """Stop background work and release temp assets on application close."""
+        self.validation_timer.stop()
+        if hasattr(self, "_selection_poll_timer"):
+            self._selection_poll_timer.stop()
+
+        self._stop_active_simulation_worker(wait_ms=5000)
+        self._fullscreen_reflow_timer.stop()
+
+        if self._progress_dialog is not None:
+            self._progress_dialog.hide()
+            self._progress_dialog.deleteLater()
+            self._progress_dialog = None
+
+        if hasattr(self, "report_widget") and self.report_widget is not None:
+            self.report_widget.cleanup()
+
+        super().closeEvent(event)
 
     def _get_active_workspace_dir(self):
         if not self._scenario_manifest:
@@ -1586,6 +1783,9 @@ class PlantEditorWindow(QMainWindow):
         self._set_opex_expanded(False)
         self._update_capex_editor_actions()
         self._update_opex_editor_actions()
+        
+        layout.addStretch(1)  # Fix vertical height lock by allowing empty space to expand
+        
         return tab
 
     def _collapsed_editor_height(self, editor, lines: int = 3) -> int:
@@ -2457,8 +2657,8 @@ class PlantEditorWindow(QMainWindow):
             try:
                 from NodeGraphQt.constants import PipeLayoutEnum
                 self.graph.set_pipe_style(PipeLayoutEnum.ANGLE)
-            except Exception:
-                pass
+            except Exception as pipe_exc:
+                logger.debug("Could not apply ANGLE pipe layout: %s", pipe_exc)
 
             repo_scenarios_dir = Path(__file__).resolve().parents[3] / "scenarios"
             fallback_manifest = {
@@ -2804,8 +3004,8 @@ class PlantEditorWindow(QMainWindow):
             try:
                 if scene is not None:
                     scene.removeItem(item)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to remove zone overlay item: %s", exc)
         self._zone_overlay_items = []
 
     def _apply_zone_colors(self, visual_layout: dict) -> None:
@@ -2817,8 +3017,8 @@ class PlantEditorWindow(QMainWindow):
             # Try component_id property first (canonical ID)
             try:
                 node_id = node.get_property("component_id") or node_id
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Could not read component_id from node '%s': %s", node, exc)
             zone = node_zone_map.get(node_id)
             if zone:
                 color = ZONE_COLORS.get(zone) or BLOCK_COLORS.get(zone)
@@ -2826,8 +3026,8 @@ class PlantEditorWindow(QMainWindow):
                     r, g, b = color
                     try:
                         node.set_color(r, g, b)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        logger.debug("Could not apply zone color to node '%s': %s", node_id, exc)
 
     def _run_auto_layout_report_mode(self) -> None:
         """Recalculate report-mode layout for the current scenario and redraw overlays.
@@ -2877,8 +3077,8 @@ class PlantEditorWindow(QMainWindow):
         # Set angle pipe routing
         try:
             self.graph.set_pipe_style(PipeLayoutEnum.ANGLE)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Could not apply ANGLE pipe style for auto-layout: %s", exc)
 
         # Redraw overlays
         vl = model.metadata.get("visual_layout")
@@ -2931,8 +3131,8 @@ class PlantEditorWindow(QMainWindow):
                 actual = _sha256_file(candidate)
                 if actual != expected_hash:
                     drifted.append(candidate.name)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to compare hash for '%s': %s", candidate, exc)
         if drifted:
             logger.warning(f"Scenario hash drift: {', '.join(drifted)}")
             QMessageBox.warning(
@@ -3195,26 +3395,41 @@ class PlantEditorWindow(QMainWindow):
         selected = self.graph.selected_nodes()
         if not selected:
             return
-        
+
         offset = 50
         new_nodes = []
-        
+        skipped_props = {"id", "name", "pos"}
+
         for node in selected:
             try:
                 new_node = self.graph.create_node(
                     node.__class__,
                     name=f"{node.name()}_copy",
-                    pos=[node.x_pos() + offset, node.y_pos() + offset]
+                    pos=[node.x_pos() + offset, node.y_pos() + offset],
                 )
-                for prop_name, prop_value in node.properties.items():
+
+                source_props = (
+                    node.get_properties()
+                    if hasattr(node, "get_properties")
+                    else node.properties()
+                )
+                for prop_name, prop_value in dict(source_props).items():
+                    if prop_name in skipped_props or prop_name.startswith("__builtin__"):
+                        continue
                     try:
                         new_node.set_property(prop_name, copy.deepcopy(prop_value))
-                    except:
-                        pass
+                    except Exception as prop_exc:
+                        logger.debug(
+                            "Skipping duplicate property '%s' for node '%s': %s",
+                            prop_name,
+                            node.name(),
+                            prop_exc,
+                        )
+
                 new_nodes.append(new_node)
             except Exception as e:
-                logger.error(f"Error duplicating node: {e}")
-        
+                logger.error("Error duplicating node '%s': %s", node.name(), e)
+
         self.graph.clear_selection()
         for node in new_nodes:
             node.set_selected(True)
@@ -3251,6 +3466,22 @@ class PlantEditorWindow(QMainWindow):
             self.validation_timer.start(2000)
         else:
             self.validation_timer.stop()
+
+    def _stop_active_simulation_worker(self, wait_ms: int = 3000) -> bool:
+        """Request worker stop and wait for completion if currently running."""
+        worker = self.worker
+        if worker is None:
+            return True
+
+        if worker.isRunning():
+            logger.info("Stopping active simulation worker.")
+            worker.stop()
+            if not worker.wait(wait_ms):
+                logger.warning("Simulation worker did not stop within %sms.", wait_ms)
+                return False
+
+        self.worker = None
+        return True
     
     # ---- SIMULATION ----
     def run_simulation(self):
@@ -3261,6 +3492,14 @@ class PlantEditorWindow(QMainWindow):
         - Scenario mode: loads context from scenarios/ directory via ConfigLoader
         - Graph mode: builds context from canvas nodes via GraphToConfigAdapter
         """
+        if self.worker is not None and self.worker.isRunning():
+            QMessageBox.information(
+                self,
+                "Simulation in Progress",
+                "A simulation is already running. Wait for it to finish or cancel it first.",
+            )
+            return
+
         try:
             # 0. Configure Simulation
             dialog = SimulationConfigDialog(self)
@@ -3387,19 +3626,53 @@ class PlantEditorWindow(QMainWindow):
             )
             
             # Setup Progress Dialog with Cancel button
-            progress = QProgressDialog("Running Simulation... Please wait.", "Cancel", 0, 0, self)
+            progress = QProgressDialog("Running simulation... (0%)", "Cancel", 0, 100, self)
             progress.setWindowTitle("Simulation in Progress")
             progress.setWindowModality(Qt.WindowModal)
             progress.setMinimumDuration(0)
+            progress.setAutoClose(False)
+            progress.setAutoReset(False)
+            progress.setValue(0)
+            self._progress_dialog = progress
+            cancel_requested = {"value": False}
+
+            def _disconnect_worker_signals():
+                worker = self.worker
+                if worker is None:
+                    return
+                for signal, callback in (
+                    (worker.progress, on_progress),
+                    (worker.finished, on_finished),
+                    (worker.canceled, on_canceled),
+                    (worker.error, on_error),
+                ):
+                    try:
+                        signal.disconnect(callback)
+                    except (TypeError, RuntimeError) as disconnect_exc:
+                        logger.debug("Signal disconnect skipped: %s", disconnect_exc)
+
+            def _finalize_worker_state():
+                _disconnect_worker_signals()
+                self.worker = None
 
             def on_cancel():
                 if self.worker:
                     logger.info("User requested simulation cancellation")
+                    cancel_requested["value"] = True
+                    progress.setLabelText("Canceling simulation...")
+                    progress.setCancelButton(None)
                     self.worker.stop()
 
-            progress.canceled.connect(on_cancel)
-            
+            def on_progress(value: int):
+                bounded = max(0, min(100, int(value)))
+                progress.setValue(bounded)
+                if cancel_requested["value"]:
+                    progress.setLabelText(f"Canceling simulation... ({bounded}%)")
+                else:
+                    progress.setLabelText(f"Running simulation... ({bounded}%)")
+
             def on_finished(history, registry):
+                progress.setValue(100)
                 progress.accept()
                 
                 # Store registry for legacy reports
@@ -3411,14 +3684,31 @@ class PlantEditorWindow(QMainWindow):
                     self.central_tabs.setCurrentWidget(self.report_widget)
                 
                 QMessageBox.information(self, "Simulation", "Simulation completed successfully!")
-                self.worker = None
+                _finalize_worker_state()
+                if self._progress_dialog is progress:
+                    self._progress_dialog = None
+                progress.deleteLater()
                 
+            def on_canceled():
+                progress.reject()
+                QMessageBox.information(self, "Simulation", "Simulation canceled.")
+                _finalize_worker_state()
+                if self._progress_dialog is progress:
+                    self._progress_dialog = None
+                progress.deleteLater()
+
             def on_error(err_msg):
                 progress.reject()
                 QMessageBox.critical(self, "Simulation Error", f"Failed to run simulation: {err_msg}")
-                self.worker = None
+                _finalize_worker_state()
+                if self._progress_dialog is progress:
+                    self._progress_dialog = None
+                progress.deleteLater()
                 
+            progress.canceled.connect(on_cancel)
+            self.worker.progress.connect(on_progress)
             self.worker.finished.connect(on_finished)
+            self.worker.canceled.connect(on_canceled)
             self.worker.error.connect(on_error)
             
             self.worker.start()

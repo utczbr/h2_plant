@@ -14,6 +14,7 @@ Usage:
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output --downscale hourly
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output --downscale none --history-dir /path/to/history_chunks
+    python tools/regenerate_net_profit_plotly.py scenarios/simulation_output --opex-variant low
 """
 
 import argparse
@@ -62,6 +63,16 @@ CAPEX_VARIANT_SUFFIX = {
     "low": "_Capex_Low",
     "base": "_Capex_Base",
     "high": "_Capex_High",
+}
+OPEX_VARIANT_KEY_MAP = {
+    "base": ("total_opex", "opex", "total_annual_opex", "annual_opex"),
+    "low": ("total_opex_low", "opex_low", "total_annual_opex_low", "annual_opex_low"),
+    "high": ("total_opex_high", "opex_high", "total_annual_opex_high", "annual_opex_high"),
+}
+OPEX_VARIANT_SUFFIX = {
+    "base": "",
+    "low": "_Opex_Low",
+    "high": "_Opex_High",
 }
 DEFAULT_DISCOUNT_RATE = 0.08
 DEFAULT_PROJECT_LIFETIME_YEARS = 20
@@ -509,13 +520,14 @@ def _extract_capex_variants(report_path: Path) -> Optional[Dict[str, float]]:
     return variants
 
 
-def _extract_opex(report_path: Path) -> Optional[float]:
+def _extract_opex(report_path: Path, variant: str = "base") -> Optional[float]:
     try:
         data = json.loads(report_path.read_text())
     except Exception as e:
         logger.warning(f"Failed to read OPEX report {report_path}: {e}")
         return None
-    for key in ("total_opex", "opex", "total_annual_opex", "annual_opex"):
+    keys = OPEX_VARIANT_KEY_MAP.get(variant, OPEX_VARIANT_KEY_MAP["base"])
+    for key in keys:
         val = data.get(key)
         if val is not None:
             try:
@@ -532,6 +544,7 @@ def regenerate_net_profit_plotly(
     downsample_factor: int = 60,
     capex_override: Optional[float] = None,
     opex_override: Optional[float] = None,
+    opex_variant: str = "base",
     economics_dir: Optional[str] = None,
     h2_price_eur_kg: Optional[float] = None,
 ) -> int:
@@ -579,10 +592,19 @@ def regenerate_net_profit_plotly(
     if opex is None:
         opex_path = _find_report(candidates, "opex_report.json")
         if opex_path:
-            opex = _extract_opex(opex_path)
+            opex = _extract_opex(opex_path, variant=opex_variant)
 
     if opex is None:
-        logger.error("OPEX not found. Provide opex_report.json or --opex.")
+        if opex_variant == "base":
+            logger.error("OPEX not found. Provide opex_report.json or --opex.")
+        else:
+            expected_keys = ", ".join(OPEX_VARIANT_KEY_MAP[opex_variant])
+            logger.error(
+                "Requested OPEX variant '%s' not found in opex_report.json. "
+                "Expected one of: %s",
+                opex_variant,
+                expected_keys,
+            )
         return 1
 
     # Load lifecycle + reserve data for spikes
@@ -601,6 +623,13 @@ def regenerate_net_profit_plotly(
     kwargs["opex"] = opex
     kwargs["discount_rate"] = discount_rate
     kwargs["project_lifetime_years"] = project_lifetime_years
+    if opex_override is not None:
+        logger.info(
+            "Using OPEX override (--opex); --opex-variant=%s is ignored for value selection.",
+            opex_variant,
+        )
+    else:
+        logger.info(f"Using OPEX variant: {opex_variant.upper()}")
     logger.info(f"Using OPEX: {opex:,.0f}")
     if h2_price_eur_kg is not None:
         kwargs["h2_price_eur_kg"] = h2_price_eur_kg
@@ -617,6 +646,7 @@ def regenerate_net_profit_plotly(
 
     saved = 0
     base_filename = NET_PROFIT_TITLE.replace(" ", "_").replace("/", "_")
+    opex_suffix = OPEX_VARIANT_SUFFIX.get(opex_variant, "")
     for variant in ("low", "base", "high"):
         capex_val = capex_variants[variant]
         kwargs_variant = dict(kwargs)
@@ -625,7 +655,7 @@ def regenerate_net_profit_plotly(
         logger.info(f"Generating net profit graph for CAPEX {variant.upper()}: {capex_val:,.0f}")
         fig = plot_cumulative_net_profit(df, **kwargs_variant)
 
-        filename = f"{base_filename}{CAPEX_VARIANT_SUFFIX[variant]}.html"
+        filename = f"{base_filename}{CAPEX_VARIANT_SUFFIX[variant]}{opex_suffix}.html"
         output_path = graphs_dir / filename
         fig.write_html(
             str(output_path),
@@ -687,6 +717,11 @@ def main() -> None:
         help="Override OPEX value (EUR/year)"
     )
     parser.add_argument(
+        "--opex-variant", type=str, default="base",
+        choices=["base", "low", "high"],
+        help="OPEX variant from opex_report.json (default: base)"
+    )
+    parser.add_argument(
         "--economics-dir", type=str, default=None,
         help="Directory containing capex_report.json/opex_report.json"
     )
@@ -712,6 +747,7 @@ def main() -> None:
         downsample_factor=downsample_factor,
         capex_override=args.capex,
         opex_override=args.opex,
+        opex_variant=args.opex_variant,
         economics_dir=args.economics_dir,
         h2_price_eur_kg=args.h2_price,
     )

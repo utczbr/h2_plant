@@ -309,6 +309,10 @@ def regenerate_capex(
             print(f"  Scenario:          {opex_report.scenario_name}")
             print(f"  Simulation Hours:  {opex_report.simulation_hours}")
             print(f"  Total OPEX:        €{opex_report.total_opex:>14,.0f}/year")
+            if getattr(opex_report, "total_opex_low", None) is not None:
+                print(f"  OPEX Low:          €{opex_report.total_opex_low:>14,.0f}/year")
+            if getattr(opex_report, "total_opex_high", None) is not None:
+                print(f"  OPEX High:         €{opex_report.total_opex_high:>14,.0f}/year")
             print(f"  Variable:          €{opex_report.total_variable_cost:>14,.0f}")
             print(f"  Fixed:             €{opex_report.total_fixed_cost:>14,.0f}")
             print(f"  Maintenance:       €{opex_report.total_maintenance_cost:>14,.0f}")

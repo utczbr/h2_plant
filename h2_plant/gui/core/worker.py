@@ -29,6 +29,7 @@ class SimulationWorker(QThread):
     """
     progress = Signal(int)
     finished = Signal(dict, object)
+    canceled = Signal()
     error = Signal(str)
     
     def __init__(self, context, strategy_override: str = None,
@@ -38,6 +39,7 @@ class SimulationWorker(QThread):
         self.strategy_override = strategy_override
         self.scenarios_dir = scenarios_dir
         self._is_running = True
+        self._last_progress_pct = -1
         
     def run(self):
         try:
@@ -58,9 +60,22 @@ class SimulationWorker(QThread):
 
             if not self._is_running:
                 logger.info("Simulation cancelled before start")
+                self.canceled.emit()
                 return
 
             # Graph mode (no scenarios_dir) uses fallback; scenario mode is strict.
+            def _cancel_check() -> bool:
+                return not self._is_running
+
+            def _progress_callback(completed_steps: int, total_steps: int, _hour: float) -> None:
+                if total_steps <= 0:
+                    return
+                pct = int((completed_steps * 100) / total_steps)
+                pct = max(0, min(100, pct))
+                if pct != self._last_progress_pct:
+                    self._last_progress_pct = pct
+                    self.progress.emit(pct)
+
             dispatch_history, registry = run_with_dispatch_context(
                 self.context,
                 data_dir=data_dir,
@@ -68,18 +83,26 @@ class SimulationWorker(QThread):
                 strategy=self.strategy_override,
                 allow_graph_dispatch_fallback=not bool(self.scenarios_dir),
                 return_registry=True,
+                progress_callback=_progress_callback,
+                cancel_check=_cancel_check,
             )
 
             if not self._is_running:
                 logger.info("Simulation cancelled after engine run")
+                self.canceled.emit()
                 return
 
             total_steps = int(self.context.simulation.duration_hours * 60)
             results = dict(dispatch_history or {})
             results = self._normalize_results(results, total_steps)
+            self.progress.emit(100)
 
             logger.info("Simulation completed successfully!")
             self.finished.emit(results, registry)
+
+        except KeyboardInterrupt:
+            logger.info("Simulation cancelled by user")
+            self.canceled.emit()
 
         except Exception as e:
             logger.error(f"Simulation failed: {e}")

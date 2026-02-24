@@ -24,7 +24,7 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Callable
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,8 @@ def run_with_dispatch_context(
     load_history: bool = True,
     allow_graph_dispatch_fallback: bool = False,
     return_registry: bool = False,
+    progress_callback: Optional[Callable[[int, int, float], None]] = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ):
     """
     Shared simulation core — runs the engine from a pre-loaded SimulationContext.
@@ -100,6 +102,10 @@ def run_with_dispatch_context(
             Set True for GUI graph mode; False for CLI and scenario mode.
         return_registry: When True, return ``(history, registry)`` instead of just
             ``history``.
+        progress_callback: Optional callback invoked during simulation steps with
+            ``(completed_steps, total_steps, current_hour)``.
+        cancel_check: Optional callback polled before each step. If it returns True,
+            the run is interrupted via ``KeyboardInterrupt``.
 
     Returns:
         If ``return_registry`` is False: Dict[str, np.ndarray] history.
@@ -269,6 +275,28 @@ def run_with_dispatch_context(
         context, total_steps, use_chunked_history=True, resume=bool(resume_from_hour)
     )
 
+    if progress_callback is not None or cancel_check is not None:
+        last_pct = -1
+
+        def _pre_step_callback(hour: float) -> None:
+            nonlocal last_pct
+
+            if cancel_check is not None and cancel_check():
+                raise KeyboardInterrupt("Simulation cancelled by user")
+
+            if progress_callback is None:
+                return
+
+            # pre-step callback fires before processing this minute
+            completed_steps = int(round((hour - run_start_hour) * 60))
+            completed_steps = max(0, min(total_steps, completed_steps))
+            pct = int((completed_steps * 100) / total_steps) if total_steps > 0 else 100
+            if pct != last_pct:
+                last_pct = pct
+                progress_callback(completed_steps, total_steps, hour)
+
+        engine.set_callbacks(pre_step=_pre_step_callback)
+
     # 7. Run simulation
     if resume_from_hour:
         logger.info(
@@ -284,6 +312,9 @@ def run_with_dispatch_context(
         end_hour=run_end_hour,
         resume_from_checkpoint=str(resume_checkpoint_path) if resume_checkpoint_path else None,
     )
+
+    if progress_callback is not None:
+        progress_callback(total_steps, total_steps, float(run_end_hour))
 
     # 8. Optional post-run summary
     if dispatch_strategy and hasattr(dispatch_strategy, 'print_summary'):
@@ -814,12 +845,20 @@ def generate_graphs(
                 if isinstance(opex_data, dict):
                     for key in [
                         "total_opex",
+                        "total_opex_low",
+                        "total_opex_high",
                         "total_fixed_cost",
                         "total_variable_cost",
                         "total_maintenance_cost",
                         "annual_opex",
+                        "annual_opex_low",
+                        "annual_opex_high",
                         "opex_annual",
+                        "opex_annual_low",
+                        "opex_annual_high",
                         "opex",
+                        "opex_low",
+                        "opex_high",
                         "fci",
                     ]:
                         if key in opex_data:
@@ -829,6 +868,12 @@ def generate_graphs(
                     if "total_opex" in opex_data:
                         metrics.setdefault("opex_total", _to_float(opex_data.get("total_opex")))
                         metrics.setdefault("total_annual_opex", _to_float(opex_data.get("total_opex")))
+                    if "total_opex_low" in opex_data:
+                        metrics.setdefault("opex_total_low", _to_float(opex_data.get("total_opex_low")))
+                        metrics.setdefault("total_annual_opex_low", _to_float(opex_data.get("total_opex_low")))
+                    if "total_opex_high" in opex_data:
+                        metrics.setdefault("opex_total_high", _to_float(opex_data.get("total_opex_high")))
+                        metrics.setdefault("total_annual_opex_high", _to_float(opex_data.get("total_opex_high")))
                 else:
                     logger.warning(f"OPEX report JSON did not contain a dict: {opex_path}")
             else:

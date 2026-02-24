@@ -144,12 +144,14 @@ def test_worker_delegates_to_run_with_dispatch_context():
     assembling the engine itself.  This test intercepts the shared core entry
     point to verify the delegation and confirms the engine is set up identically
     to a direct call with the same context."""
-    from h2_plant.run_integrated_simulation import run_with_dispatch_context
-
     calls: list = []
+    progress_values: list[int] = []
 
     def _fake_core(context, *, return_registry=False, **kwargs):
         calls.append({"context": context, "kwargs": kwargs, "return_registry": return_registry})
+        progress_cb = kwargs.get("progress_callback")
+        if progress_cb is not None:
+            progress_cb(30, 60, 0.5)
         if return_registry:
             return {}, _FakeRegistry()
         return {}
@@ -160,6 +162,7 @@ def test_worker_delegates_to_run_with_dispatch_context():
     try:
         context = _make_context(arbitrage_enabled=False)
         worker = SimulationWorker(context=context, scenarios_dir=None)
+        worker.progress.connect(lambda v: progress_values.append(v))
         worker.run()
     finally:
         runner_mod.run_with_dispatch_context = original
@@ -168,6 +171,21 @@ def test_worker_delegates_to_run_with_dispatch_context():
     call = calls[0]
     assert call["context"] is context
     assert call["return_registry"] is True
+    assert callable(call["kwargs"]["progress_callback"])
+    assert callable(call["kwargs"]["cancel_check"])
+    assert any(v >= 50 for v in progress_values), "worker should emit progress updates"
+
+
+def test_worker_emits_canceled_if_stopped_before_run():
+    context = _make_context(arbitrage_enabled=False)
+    worker = SimulationWorker(context=context, scenarios_dir=None)
+    canceled = []
+    worker.canceled.connect(lambda: canceled.append(True))
+
+    worker.stop()
+    worker.run()
+
+    assert canceled == [True]
 
 
 def test_gui_and_cli_shared_core_produce_equivalent_engine_topology():

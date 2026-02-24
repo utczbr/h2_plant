@@ -50,8 +50,8 @@ A modular, dual-path hydrogen production system with advanced simulation capabil
 ## Quick Start
 
 ```bash
-# Install package in development mode
-pip install -e ".[dev]"
+# Install package in development mode (with GUI dependencies)
+pip install -e ".[dev,gui]"
 
 # Create configuration
 cp configs/plant_baseline.yaml configs/my_plant.yaml
@@ -59,6 +59,9 @@ cp configs/plant_baseline.yaml configs/my_plant.yaml
 
 # Run simulation
 python -m h2_plant.simulation.runner configs/my_plant.yaml
+
+# Launch GUI
+python -m h2_plant.gui.main
 ```
 
 ## Running Tests
@@ -107,4 +110,3 @@ tests/
 ├── performance/
 └── e2e/
 ```
-

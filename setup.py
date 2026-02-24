@@ -36,6 +36,12 @@ setup(
             'black>=22.0.0',
             'flake8>=5.0.0',
         ],
+        'gui': [
+            'PySide6>=6.4.0',
+            'NodeGraphQt>=0.6.1',
+            'matplotlib>=3.5.0',
+            'plotly>=5.0.0',
+        ],
         'coolprop': [
             'CoolProp>=6.4.0',  # For LUT generation
         ],

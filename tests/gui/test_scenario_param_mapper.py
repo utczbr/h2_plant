@@ -2,6 +2,8 @@
 Tests for shared scenario parameter mapping helpers.
 """
 
+from pathlib import Path
+
 import pytest
 
 from h2_plant.gui.core.scenario_param_mapper import (
@@ -103,10 +105,7 @@ def test_valve_node_fluid_type_options_cover_lut_fluids():
     Node instantiation is avoided (requires Qt display); we inspect the module
     source directly so the test is safe in headless CI environments.
     """
-    import inspect
-    import importlib
-    mod = importlib.import_module("h2_plant.gui.nodes.valve_node")
-    source = inspect.getsource(mod)
+    source = Path("h2_plant/gui/nodes/valve_node.py").read_text(encoding="utf-8")
     required_fluids = ["H2", "N2", "O2", "CO2", "H2O", "CH4", "CO"]
     for fluid in required_fluids:
         assert f"'{fluid}'" in source or f'"{fluid}"' in source, (
@@ -116,10 +115,7 @@ def test_valve_node_fluid_type_options_cover_lut_fluids():
 
 def test_coalescer_node_gas_type_includes_syngas():
     """CoalescerNode source must include 'Syngas' so ATR-path coalescers round-trip correctly."""
-    import inspect
-    import importlib
-    mod = importlib.import_module("h2_plant.gui.nodes.separation")
-    source = inspect.getsource(mod)
+    source = Path("h2_plant/gui/nodes/separation.py").read_text(encoding="utf-8")
     # Check CoalescerNode specifically — find the class and verify Syngas is present
     assert "'Syngas'" in source or '"Syngas"' in source, (
         "separation.py does not contain 'Syngas' option for CoalescerNode"
