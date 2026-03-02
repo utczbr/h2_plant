@@ -1,0 +1,164 @@
+> 1._Arbitrage_Opportunity_(Interactive) |---> H2_Yield_vs_Available_Wind_Power_(Interactive)
+> Comment:
+===========================================================
+
+> 2._Combined_Efficiency_Overview_(Interactive) |---> System_Efficiency_Comparison_(Interactive)
+> Comment:
+===========================================================
+
+> 3._Effective_PPA_Price_(Interactive) |---> Price_Arbitrage_Overview_(Interactive)
+> Comment:
+===========================================================
+
+> 4._Power_Dispatch_Strategy_(Interactive) |---> H2_Yield_vs_Available_Wind_Power_(Interactive)
+> Comment:
+===========================================================
+
+> 5._Plant_Balance_Schematic 
+> Comment: Transformar isso em uma tabela.
+===========================================================
+
+> 7._RFNBO_Market_Share_(Interactive) |---> RFNBO_Compliance.Overview_(Interactive)
+> Comment:
+===========================================================
+
+> 8._Storage_APC_Control_(Interactive) |---> Storage_Control_&_SOC_
+Status_(Interactive)
+> Comment:
+===========================================================
+
+> 9._Thermal_Load_Breakdown_(Avg)  |---> Thermal_Load_Breakdown_(Interactive)
+> Comment: CONSERTAR! TÁ QUEBRADASSO!
+===========================================================
+
+> 10._Power_Consumption_Breakdown_(Interactive) |---> Energy Consumption Breakdown_(Interactive)
+> Comment:
+===========================================================
+
+> 11._Temporal_Averages_(Interactive) |---> Temporal_Average_Operations_Overview_(Interactive)
+> Comment:
+===========================================================
+
+> 12._Storage_APC_&_Mass_Balance_(Interactive) |---> Storage_Control_&_Mass_Balance_Dynamics.(Interactive)
+> Comment:
+===========================================================
+
+> 13._Temporal_Sums_(Interactive) |---> Temporal_Cumulative_Operations_Overview_(Interactive)
+> Comment:
+===========================================================
+
+> Total_H2_Production_(Stacked) |---> H2.Production.Stack.(Interactive)
+> Comment:
+===========================================================
+
+> Wind_Power_Production_(Time_Series) |---> Wind_Power_Operational_Profile_(Interactive)
+> Comment:
+===========================================================
+
+> Wind_Utilization_Duration_Curve |---> Wind_Power_Duration_Curve_(Interactive)
+> Comment:
+===========================================================
+
+> Arbitrage_Opportunity_(Interactive)
+> Comment: GRÁFICO REPETIDO!
+===========================================================
+
+> ATR_Efficiency_(Interactive) |---> ATR_Efficiency_Analysis_(Interactive)
+> Comment:
+===========================================================
+
+> ATR_Oxygen_Supply_(Interactive) |---> ATR_Oxygen_Supply_Analysis_(Interactive)
+> Comment:
+===========================================================
+
+> Chiller_Cooling_Load_(Interactive) |---> Chiller_Cooling_Analysis_(Interactive)
+> Comment:
+===========================================================
+
+> Chiller_Electrical_Power_(Interactive) |---> Chiller_Electrical_Analysis_(Interactive)
+> Comment:
+===========================================================
+
+> Coalescer_Separation_(Interactive) |---> Coalescer_Separation_Analysis_(Interactive)
+> Comment:
+===========================================================
+
+> Cumulative_H2_Production_(Interactive) |---> Cumulative_H2_Yield_Analysis_(Interactive)
+> Comment:
+===========================================================
+
+
+> Cumulative\_Net\_Profit\_(Interactive)\_Capex\_Base\_Opex\_Low |---> 
+ 	- Economic_Performance_Overview_Base.CAPEX_(Interactive)
+ 	- Economic_Performance_Overview_Low.CAPEX_(Interactive)
+ 	- Economic_Performance_Overview_High.CAPEX_(Interactive)
+> Comment:
+===========================================================
+
+>  Cumulative\_Wind\_Energy |---> Cumulative\_Wind\_Energy\_Analysis\_(Interactive)
+> Comment:
+===========================================================
+
+> Drain\_Mixer\_Comparison\_(Interactive) |---> Drain\_\&\_Mixer\_Analysis\_(Interactive)
+> Comment:
+===========================================================
+
+> Dry\_Cooler\_Performance\_(Interactive) |---> Dry\_Cooling\_Dynamics\_(Interactive)
+> Comment:
+===========================================================
+
+> Energy\_Price\_(Daily\_\&\_Monthly\_Averages) |---> Energy\_Price\_Trends\_Daily.\&.Monthly.Avg\_(Interactive)
+> Comment:
+===========================================================
+
+> Energy\_Price\_(Hourly\_Average) |---> Energy\_Price\_Trends\_Hourly.Avg\_(Interactive)(Interactive)
+> Comment:
+===========================================================
+
+> Integrated_Plant_Efficiency_(Interactive)
+Comment: THERE IS NOTHING IN THE GRAPH ANYWHERE
+===========================================================
+
+> Knock-Out\_Drum\_(Interactive) |---> KOD\_Water\_Removal\_Analysis\_(Interactive)
+> Comment:
+===========================================================
+
+> PEM\_H2\_Production\_Rate |---> PEM\_H2\_Output\_Analysis\_(Interactive)
+> Comment:
+===========================================================
+
+> PEM\_Physics\_\_Efficiency\_Curve |---> PEM\_Efficiency\_Map\_(Interactive)
+> Comment:
+===========================================================
+
+> PEM\_Physics\_\_Polarization\_Curve |---> PEM\_Polarization\_Map\_(Interactive)
+> Comment:
+===========================================================
+
+> PEM\_Physics\_\_Power\_Balance |---> PEM\_Power\_Balance\_Map\_(Interactive)
+> Comment:
+===========================================================
+
+> Power\_Offer\_vs\_PPA\_Analysis |---> PPA\_Price\_Sensitivity\_Map\_(Interactive)
+> Comment:
+===========================================================
+
+> Process\_Train\_Profile\_(Interactive) |---> Plant-wide\_Process\_Profile\_(Interactive)
+> Comment:
+===========================================================
+
+> Renewable\_\&\_Grid\_Energy\_+\_Effective\_PPA\_(Interactive) |---> Strategic\_PPA\_Performance\_Overview\_(Interactive)
+> Comment:
+===========================================================
+
+> RFNBO_Compliance_&_Production_(Interactive)
+Comment: Unnecessary. Can be deactivated.
+===========================================================
+
+> SOEC_Module_Degradation_(Tracking)
+> Comment: It's empty.
+===========================================================
+
+> Wind_Utilization_Duration_Curve
+> Comment: REPEATED. deactivate.
+===========================================================

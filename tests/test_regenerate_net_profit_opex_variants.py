@@ -25,6 +25,10 @@ def _run_regen(
     opex_payload,
     opex_variant=None,
     topology_filename="plant_topology.yaml",
+    topology_subdir=None,
+    topology_payload=None,
+    write_topology=True,
+    opex_cfg_payload=None,
 ):
     output_dir = tmp_path / "simulation_output"
     output_dir.mkdir()
@@ -32,25 +36,30 @@ def _run_regen(
     _write_capex_report(output_dir / "capex_report.json")
     (output_dir / "opex_report.json").write_text(json.dumps(opex_payload), encoding="utf-8")
 
-    topology_payload = {
-        "nodes": [
-            {"id": "pem_1", "type": "PEM", "params": {"lifecycle": 87600}},
-            {"id": "soec_1", "type": "SOEC", "params": {"lifecycle": 61320}},
-        ]
-    }
-    (tmp_path / topology_filename).write_text(
-        yaml.safe_dump(topology_payload, sort_keys=False),
-        encoding="utf-8",
-    )
+    if topology_payload is None:
+        topology_payload = {
+            "nodes": [
+                {"id": "pem_1", "type": "PEM", "params": {"lifecycle": 87600}},
+                {"id": "soec_1", "type": "SOEC", "params": {"lifecycle": 61320}},
+            ]
+        }
+    if write_topology:
+        topology_dir = tmp_path if topology_subdir is None else (tmp_path / topology_subdir)
+        topology_dir.mkdir(parents=True, exist_ok=True)
+        (topology_dir / topology_filename).write_text(
+            yaml.safe_dump(topology_payload, sort_keys=False),
+            encoding="utf-8",
+        )
 
     economics_dir = output_dir / "Economics"
     economics_dir.mkdir(parents=True, exist_ok=True)
-    opex_cfg_payload = {
-        "opex_items": [
-            {"name": "Stack Replacement Reserve (PEM)", "price": 0.015},
-            {"name": "Stack Replacement Reserve (SOEC)", "price": 0.02},
-        ]
-    }
+    if opex_cfg_payload is None:
+        opex_cfg_payload = {
+            "opex_items": [
+                {"name": "Stack Replacement Reserve (PEM)", "price": 0.015},
+                {"name": "Stack Replacement Reserve (SOEC)", "price": 0.02},
+            ]
+        }
     (economics_dir / "opex_config.yaml").write_text(
         yaml.safe_dump(opex_cfg_payload, sort_keys=False),
         encoding="utf-8",
@@ -118,9 +127,9 @@ def test_regenerate_net_profit_default_pairs_capex_and_opex_variants(monkeypatch
     assert rc == 0
     assert sorted(names) == sorted(
         [
-            "Cumulative_Net_Profit_(Interactive)_Capex_Low_Opex_Low.html",
-            "Cumulative_Net_Profit_(Interactive)_Capex_Base_Opex_Base.html",
-            "Cumulative_Net_Profit_(Interactive)_Capex_High_Opex_High.html",
+            "Economic_Performance_Overview_Low.CAPEX_(Interactive).html",
+            "Economic_Performance_Overview_Base.CAPEX_(Interactive).html",
+            "Economic_Performance_Overview_High.CAPEX_(Interactive).html",
         ]
     )
     assert opex_values == [900.0, 1000.0, 1100.0]
@@ -138,9 +147,9 @@ def test_regenerate_net_profit_low_opex_variant_keeps_legacy_uniform_mode(monkey
     assert rc == 0
     assert sorted(names) == sorted(
         [
-            "Cumulative_Net_Profit_(Interactive)_Capex_Low_Opex_Low.html",
-            "Cumulative_Net_Profit_(Interactive)_Capex_Base_Opex_Low.html",
-            "Cumulative_Net_Profit_(Interactive)_Capex_High_Opex_Low.html",
+            "Economic_Performance_Overview_Low.CAPEX_(Interactive).html",
+            "Economic_Performance_Overview_Base.CAPEX_(Interactive).html",
+            "Economic_Performance_Overview_High.CAPEX_(Interactive).html",
         ]
     )
     assert opex_values == [900.0, 900.0, 900.0]
@@ -211,3 +220,84 @@ def test_regenerate_net_profit_uses_pem_soec_topology_fallback(monkeypatch, tmp_
     for kwargs in calls:
         assert kwargs.get("pem_lifecycle_h") == 87600.0
         assert kwargs.get("soec_lifecycle_h") == 61320.0
+
+
+def test_regenerate_net_profit_finds_topology_in_sibling_scenarios_dir(monkeypatch, tmp_path):
+    rc, _graphs_dir, _names, _opex_values, _capex_values, calls = _run_regen(
+        monkeypatch,
+        tmp_path,
+        opex_payload={
+            "total_opex": 1000.0,
+            "total_opex_low": 900.0,
+            "total_opex_high": 1100.0,
+        },
+        topology_subdir="scenarios",
+    )
+    assert rc == 0
+    assert len(calls) == 3
+    for kwargs in calls:
+        assert kwargs.get("pem_lifecycle_h") == 87600.0
+        assert kwargs.get("soec_lifecycle_h") == 61320.0
+
+
+def test_regenerate_net_profit_fails_when_topology_missing(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.ERROR)
+    rc, graphs_dir, names, _opex_values, _capex_values, _calls = _run_regen(
+        monkeypatch,
+        tmp_path,
+        opex_payload={
+            "total_opex": 1000.0,
+            "total_opex_low": 900.0,
+            "total_opex_high": 1100.0,
+        },
+        write_topology=False,
+    )
+    assert rc == 1
+    assert names == []
+    assert len(list(graphs_dir.glob("*.html"))) == 0
+    assert "Topology file not found" in caplog.text
+
+
+def test_regenerate_net_profit_fails_when_lifecycle_missing(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.ERROR)
+    rc, graphs_dir, names, _opex_values, _capex_values, _calls = _run_regen(
+        monkeypatch,
+        tmp_path,
+        opex_payload={
+            "total_opex": 1000.0,
+            "total_opex_low": 900.0,
+            "total_opex_high": 1100.0,
+        },
+        topology_payload={
+            "nodes": [
+                {"id": "pem_1", "type": "PEM", "params": {"lifecycle": 87600}},
+                {"id": "soec_1", "type": "SOEC", "params": {}},
+            ]
+        },
+    )
+    assert rc == 1
+    assert names == []
+    assert len(list(graphs_dir.glob("*.html"))) == 0
+    assert "Missing mandatory lifecycle values in topology" in caplog.text
+
+
+def test_regenerate_net_profit_fails_when_reserve_missing(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.ERROR)
+    rc, graphs_dir, names, _opex_values, _capex_values, _calls = _run_regen(
+        monkeypatch,
+        tmp_path,
+        opex_payload={
+            "total_opex": 1000.0,
+            "total_opex_low": 900.0,
+            "total_opex_high": 1100.0,
+        },
+        opex_cfg_payload={
+            "opex_items": [
+                {"name": "Stack Replacement Reserve (PEM)", "price": 0.015},
+            ]
+        },
+    )
+    assert rc == 1
+    assert names == []
+    assert len(list(graphs_dir.glob("*.html"))) == 0
+    assert "Missing mandatory stack replacement reserves in opex_config.yaml" in caplog.text

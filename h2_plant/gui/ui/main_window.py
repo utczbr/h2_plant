@@ -19,6 +19,7 @@ from PySide6.QtGui import QColor, QShortcut, QKeySequence, QDrag, QAction, QPale
 from NodeGraphQt import NodeGraph, PropertiesBinWidget, NodesPaletteWidget
 import copy
 from pathlib import Path
+from typing import Any, List, Optional, Tuple
 import matplotlib.pyplot as plt
 
 # Core Managers
@@ -56,6 +57,13 @@ from h2_plant.gui.core.economics_editor import (
     load_yaml_text,
     validate_capex_yaml_text,
     validate_opex_yaml_text,
+)
+from h2_plant.gui.core.simulation_results_loader import (
+    ReportTableData,
+    TablePayload,
+    load_capex_data,
+    load_lcoh_data,
+    load_opex_data,
 )
 
 # Node imports
@@ -281,6 +289,8 @@ class SimulationReportWidget(QWidget):
         self.image_labels = {}  # graph_id -> QLabel
         self.image_paths = {}  # graph_id -> file path
         self.simulation_data = None
+        self._results_output_dir: Path | None = None
+        self._results_scenarios_dir: Path | None = None
         self.no_data_label = None
         self._tree_items = {}
         self._generation_worker = None
@@ -297,21 +307,39 @@ class SimulationReportWidget(QWidget):
         self.setup_ui()
     
     def setup_ui(self):
-        """Setup widget UI with QSplitter layout."""
-        main_layout = QHBoxLayout(self)
+        """Setup widget UI with report subtabs."""
+        main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        
+
+        self.results_tabs = QTabWidget()
+        self.graphs_tab = self._build_graphs_tab()
+        self.capex_tab = self._build_capex_tab()
+        self.opex_tab = self._build_opex_tab()
+        self.lcoh_tab = self._build_lcoh_tab()
+
+        self.results_tabs.addTab(self.graphs_tab, "Graphs")
+        self.results_tabs.addTab(self.capex_tab, "CAPEX")
+        self.results_tabs.addTab(self.opex_tab, "OPEX")
+        self.results_tabs.addTab(self.lcoh_tab, "LCOH")
+
+        main_layout.addWidget(self.results_tabs)
+
+    def _build_graphs_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QHBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+
         self.splitter = QSplitter(Qt.Horizontal)
-        
+
         # LEFT PANE: Sidebar
         sidebar_widget = QWidget()
         sidebar_layout = QVBoxLayout(sidebar_widget)
         sidebar_layout.setContentsMargins(5, 5, 5, 5)
-        
+
         title_label = QLabel("Select Graphs")
         title_label.setStyleSheet("font-weight: bold; font-size: 13px;")
         sidebar_layout.addWidget(title_label)
-        
+
         button_layout = QHBoxLayout()
         select_all_btn = QPushButton("All")
         deselect_all_btn = QPushButton("None")
@@ -330,53 +358,53 @@ class SimulationReportWidget(QWidget):
             }}
             """
         )
-        
+
         select_all_btn.clicked.connect(self.select_all_graphs)
         deselect_all_btn.clicked.connect(self.deselect_all_graphs)
         refresh_btn.clicked.connect(self._force_refresh)
-        
+
         button_layout.addWidget(select_all_btn)
         button_layout.addWidget(deselect_all_btn)
         button_layout.addWidget(refresh_btn)
         sidebar_layout.addLayout(button_layout)
-        
+
         # Zoom label (zoom via scroll or keyboard only)
         zoom_layout = QHBoxLayout()
         zoom_layout.addWidget(QLabel("Zoom:"))
-        
+
         self._zoom_label = QLabel("100%")
         self._zoom_label.setAlignment(Qt.AlignCenter)
         self._zoom_label.setToolTip("Use CTRL+wheel or +/- keys to zoom")
-        
+
         zoom_layout.addWidget(self._zoom_label)
         zoom_layout.addStretch()
         sidebar_layout.addLayout(zoom_layout)
-        
+
         self.graph_tree = QTreeWidget()
         self.graph_tree.setHeaderHidden(True)
         self.graph_tree.setIndentation(15)
         self.graph_tree.itemChanged.connect(self._on_tree_item_changed)
         self._populate_tree()
-        
+
         sidebar_layout.addWidget(self.graph_tree, 1)
         sidebar_widget.setMinimumWidth(self.SIDEBAR_MIN_WIDTH)
-        
+
         # RIGHT PANE: Graph display
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        
+
         self.graphs_container = QWidget()
         self.graphs_layout = QVBoxLayout(self.graphs_container)
         self.graphs_layout.setSpacing(12)
         self.graphs_layout.setContentsMargins(8, 8, 8, 8)
-        
+
         self.scroll_area.setWidget(self.graphs_container)
-        
+
         # Install event filter to intercept wheel events on scroll area
         self.scroll_area.viewport().installEventFilter(self)
-        
+
         self.no_data_label = QLabel("No graphs available. Run simulation first.")
         self.no_data_label.setAlignment(Qt.AlignCenter)
         self.no_data_label.setStyleSheet(
@@ -384,14 +412,186 @@ class SimulationReportWidget(QWidget):
         )
         self.graphs_layout.addWidget(self.no_data_label)
         self.graphs_layout.addStretch()
-        
+
         self.splitter.addWidget(sidebar_widget)
         self.splitter.addWidget(self.scroll_area)
         self.splitter.setSizes([self.SIDEBAR_DEFAULT_WIDTH, 800])
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
-        
-        main_layout.addWidget(self.splitter)
+        layout.addWidget(self.splitter)
+        return tab
+
+    def _create_readonly_table(self, columns: Optional[List[str]] = None) -> QTableWidget:
+        table = QTableWidget(0, len(columns or []))
+        if columns:
+            table.setHorizontalHeaderLabels(columns)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QAbstractItemView.NoSelection)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setStretchLastSection(True)
+        return table
+
+    def _build_capex_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        self.capex_status_label = QLabel("CAPEX report not loaded.")
+        self.capex_status_label.setWordWrap(True)
+        layout.addWidget(self.capex_status_label)
+
+        layout.addWidget(QLabel("Summary"))
+        self.capex_summary_table = self._create_readonly_table(["Field", "Value"])
+        layout.addWidget(self.capex_summary_table, 1)
+
+        layout.addWidget(QLabel("Block Summary"))
+        self.capex_blocks_table = self._create_readonly_table([])
+        layout.addWidget(self.capex_blocks_table, 2)
+
+        layout.addWidget(QLabel("Entries"))
+        self.capex_entries_table = self._create_readonly_table([])
+        layout.addWidget(self.capex_entries_table, 3)
+        return tab
+
+    def _build_opex_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        self.opex_report_status_label = QLabel("OPEX report not loaded.")
+        self.opex_report_status_label.setWordWrap(True)
+        layout.addWidget(self.opex_report_status_label)
+
+        layout.addWidget(QLabel("Summary"))
+        self.opex_summary_table = self._create_readonly_table(["Field", "Value"])
+        layout.addWidget(self.opex_summary_table, 1)
+
+        layout.addWidget(QLabel("Items"))
+        self.opex_items_table = self._create_readonly_table([])
+        layout.addWidget(self.opex_items_table, 3)
+        return tab
+
+    def _build_lcoh_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+
+        self.lcoh_status_label = QLabel("LCOH report not loaded.")
+        self.lcoh_status_label.setWordWrap(True)
+        layout.addWidget(self.lcoh_status_label)
+
+        layout.addWidget(QLabel("Summary"))
+        self.lcoh_summary_table = self._create_readonly_table(["Field", "Value"])
+        layout.addWidget(self.lcoh_summary_table, 1)
+
+        layout.addWidget(QLabel("Variants"))
+        self.lcoh_variants_table = self._create_readonly_table([])
+        layout.addWidget(self.lcoh_variants_table, 2)
+
+        layout.addWidget(QLabel("Pathway Metrics"))
+        self.lcoh_pathways_table = self._create_readonly_table([])
+        layout.addWidget(self.lcoh_pathways_table, 2)
+
+        layout.addWidget(QLabel("LCOH Breakdown"))
+        self.lcoh_breakdown_table = self._create_readonly_table([])
+        layout.addWidget(self.lcoh_breakdown_table, 2)
+
+        layout.addWidget(QLabel("Warnings"))
+        self.lcoh_warnings_table = self._create_readonly_table([])
+        layout.addWidget(self.lcoh_warnings_table, 1)
+        return tab
+
+    def set_results_source(
+        self,
+        output_dir: Path | str | None,
+        scenarios_dir: Path | str | None = None,
+    ) -> None:
+        """Set report-file source directories used by CAPEX/OPEX/LCOH subtabs."""
+        self._results_output_dir = Path(str(output_dir)).resolve() if output_dir else None
+        self._results_scenarios_dir = Path(str(scenarios_dir)).resolve() if scenarios_dir else None
+        self.refresh_results_tables()
+
+    def _stringify_value(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, float):
+            if abs(value) >= 1000:
+                return f"{value:,.4f}".rstrip("0").rstrip(".")
+            return f"{value:.6f}".rstrip("0").rstrip(".")
+        return str(value)
+
+    def _populate_summary_table(self, table: QTableWidget, rows: List[Tuple[str, Any]]) -> None:
+        table.clear()
+        table.setColumnCount(2)
+        table.setHorizontalHeaderLabels(["Field", "Value"])
+        table.setRowCount(len(rows))
+        for row_idx, (field_name, value) in enumerate(rows):
+            table.setItem(row_idx, 0, QTableWidgetItem(str(field_name)))
+            table.setItem(row_idx, 1, QTableWidgetItem(self._stringify_value(value)))
+
+    def _populate_detail_table(self, table: QTableWidget, payload: Optional[TablePayload]) -> None:
+        table.clear()
+        if payload is None:
+            table.setColumnCount(0)
+            table.setRowCount(0)
+            return
+        table.setColumnCount(len(payload.columns))
+        table.setHorizontalHeaderLabels(payload.columns)
+        table.setRowCount(len(payload.rows))
+        for row_idx, row_values in enumerate(payload.rows):
+            for col_idx, value in enumerate(row_values):
+                table.setItem(row_idx, col_idx, QTableWidgetItem(self._stringify_value(value)))
+
+    def _clear_results_table_set(self, *tables: QTableWidget) -> None:
+        for table in tables:
+            table.clear()
+            table.setRowCount(0)
+            table.setColumnCount(0)
+
+    def _status_text(self, name: str, data: ReportTableData) -> str:
+        source = str(data.source_path) if data.source_path else "(not found)"
+        if data.status == "ok":
+            return f"{name}: loaded from {source}"
+        if data.status == "missing":
+            return f"{name}: {data.message} (searched from {source})"
+        return f"{name}: {data.message} (source: {source})"
+
+    def refresh_results_tables(self) -> None:
+        """Reload CAPEX/OPEX/LCOH table data from report files."""
+        capex = load_capex_data(self._results_output_dir, self._results_scenarios_dir)
+        self.capex_status_label.setText(self._status_text("CAPEX", capex))
+        if capex.status == "ok":
+            self._populate_summary_table(self.capex_summary_table, capex.summary_rows)
+            self._populate_detail_table(self.capex_blocks_table, capex.tables.get("blocks"))
+            self._populate_detail_table(self.capex_entries_table, capex.tables.get("entries"))
+        else:
+            self._populate_summary_table(self.capex_summary_table, [])
+            self._clear_results_table_set(self.capex_blocks_table, self.capex_entries_table)
+
+        opex = load_opex_data(self._results_output_dir, self._results_scenarios_dir)
+        self.opex_report_status_label.setText(self._status_text("OPEX", opex))
+        if opex.status == "ok":
+            self._populate_summary_table(self.opex_summary_table, opex.summary_rows)
+            self._populate_detail_table(self.opex_items_table, opex.tables.get("items"))
+        else:
+            self._populate_summary_table(self.opex_summary_table, [])
+            self._clear_results_table_set(self.opex_items_table)
+
+        lcoh = load_lcoh_data(self._results_output_dir, self._results_scenarios_dir)
+        self.lcoh_status_label.setText(self._status_text("LCOH", lcoh))
+        if lcoh.status == "ok":
+            self._populate_summary_table(self.lcoh_summary_table, lcoh.summary_rows)
+            self._populate_detail_table(self.lcoh_variants_table, lcoh.tables.get("variants"))
+            self._populate_detail_table(self.lcoh_pathways_table, lcoh.tables.get("pathways"))
+            self._populate_detail_table(self.lcoh_breakdown_table, lcoh.tables.get("breakdown"))
+            self._populate_detail_table(self.lcoh_warnings_table, lcoh.tables.get("warnings"))
+        else:
+            self._populate_summary_table(self.lcoh_summary_table, [])
+            self._clear_results_table_set(
+                self.lcoh_variants_table,
+                self.lcoh_pathways_table,
+                self.lcoh_breakdown_table,
+                self.lcoh_warnings_table,
+            )
 
     def _theme_tokens(self) -> dict:
         """Return report-widget colors derived from ThemeManager/palette."""
@@ -3732,6 +3932,16 @@ class PlantEditorWindow(QMainWindow):
                 
                 # Pass simulation data directly to report widget (no disk I/O)
                 if hasattr(self, 'report_widget'):
+                    if scenarios_dir:
+                        effective_output_dir = Path(scenarios_dir) / "simulation_output"
+                        effective_scenarios_dir = Path(scenarios_dir)
+                    else:
+                        effective_output_dir = Path("simulation_output")
+                        effective_scenarios_dir = None
+                    self.report_widget.set_results_source(
+                        output_dir=effective_output_dir,
+                        scenarios_dir=effective_scenarios_dir,
+                    )
                     self.report_widget.set_simulation_data(history)
                     self.central_tabs.setCurrentWidget(self.report_widget)
                 

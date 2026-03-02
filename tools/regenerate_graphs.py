@@ -434,6 +434,23 @@ def regenerate_graphs_safe(
     except Exception as e:
         print(f"  Failed: {e}")
 
+    # Run CAPEX net-profit regeneration with standardized filenames.
+    try:
+        from tools.regenerate_net_profit_plotly import regenerate_net_profit_plotly
+
+        print("\nGenerating CAPEX net-profit variants...")
+        rc = regenerate_net_profit_plotly(
+            output_dir=output_dir,
+            graphs_dir=active_dir,
+            downsample_factor=target_resolution,
+        )
+        if rc == 0:
+            print("  OK: net-profit CAPEX variants generated")
+        else:
+            print(f"  SKIP/FAIL: net-profit CAPEX generation returned rc={rc}")
+    except Exception as e:
+        print(f"  Failed net-profit CAPEX generation: {e}")
+
     # Summary
     success_count = sum(1 for r in results.values() if r.status == 'success')
     failed_count = sum(1 for r in results.values() if r.status == 'failed')

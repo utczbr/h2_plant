@@ -27,6 +27,7 @@ def test_run_simulation_wires_progress_and_cancel_signals():
     assert "progress.canceled.connect(on_cancel)" in source
     assert "self.worker.progress.connect(on_progress)" in source
     assert "self.worker.canceled.connect(on_canceled)" in source
+    assert "self.report_widget.set_results_source(" in source
 
 
 def test_close_event_and_worker_stop_helper_present():

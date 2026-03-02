@@ -52,8 +52,10 @@ visualization:
   # Explicitly enable/disable specific graphs by ID
   graphs:
     # Interactive Plotly graphs (enabled for dual-mode generation)
-    arbitrage_opportunity_interactive: true
+    arbitrage_opportunity_interactive: false
     pem_h2_production_over_time: true
+    rfnbo_compliance_plotly: false
+    net_profit_plotly: false
     
     # Plotly twins (matching Matplotlib counterparts)
     dispatch_plotly: true
@@ -67,9 +69,9 @@ visualization:
     temporal_averages: true
     effective_ppa_plotly: true
     process_train_profile_plotly: true
-    integrated_global_efficiency_plotly: true
+    integrated_global_efficiency_plotly: false
     combined_efficiency_plotly: true
-    soec_module_degradation_plotly: true
+    soec_module_degradation_plotly: false
 
   # ========================================================================
   # PLANT METADATA (Used for Graph Calculations)
@@ -92,7 +94,7 @@ visualization:
     production_time_series:
       enabled: true
       plots:
-        - title: "PEM H2 Production Rate"
+        - title: "PEM_H2_Output_Analysis_(Interactive)"
           components: ["PEM"]
           variable: "h2_production"
         - title: "SOEC H2 Production Rate"
@@ -102,7 +104,7 @@ visualization:
     production_stacked:
       enabled: true
       plots:
-        - title: "Total H2 Production Stacked"
+        - title: "H2.Production.Stack.(Interactive)"
           components: ["PEM", "SOEC_Cluster"]
           variable: "h2_production"
         - title: "Oxygen Production Stacked"
@@ -115,7 +117,7 @@ visualization:
     production_cumulative:
       enabled: false  
       plots:
-        - title: "Cumulative H2 Production"
+        - title: "Cumulative_H2_Yield_Analysis_(Interactive)"
           components: ["PEM", "SOEC_Cluster"]
 
     daily_h2_production_average:
@@ -199,25 +201,25 @@ visualization:
     dispatch_stack:
       enabled: true
       plots:
-        - title: "Power Dispatch Strategy"
+        - title: "H2_Yield_vs_Available_Wind_Power_(Interactive)_Dispatch"
           components: []
     
     economics_pie:
       enabled: true
       plots:
-        - title: "Power Consumption Breakdown"
+        - title: "Energy Consumption Breakdown_(Interactive)"
           components: ["PEM", "SOEC_Cluster", "Compressor_S1", "Chiller_1", "O2_Chiller"]
 
     economics_scatter:
       enabled: true
       plots:
-        - title: "Arbitrage Opportunity"
+        - title: "H2_Yield_vs_Available_Wind_Power_(Interactive)"
           components: []
 
     effective_ppa:
       enabled: true
       plots:
-        - title: "Effective PPA Price"
+        - title: "Price_Arbitrage_Overview_(Interactive)"
           components: []
           ppa_contract_price: 80.0
           ppa_variable_price: 55.0
@@ -295,7 +297,7 @@ visualization:
     storage_apc:
       enabled: true
       plots:
-        - title: "Storage APC Control"
+        - title: "Storage_Control_&_SOC_Status_(Interactive)"
           description: "State of Charge, control zones, and power modulation factor"
           components: ["H2_Storage_Tank"]
     
@@ -636,7 +638,7 @@ visualization:
     legacy_temporal:
       enabled: true
       plots:
-        - title: "Temporal Averages"
+        - title: "Temporal_Average_Operations_Overview_(Interactive)"
           components: []
 
     # =========================================================================
@@ -681,13 +683,13 @@ visualization:
     legacy_chiller:
       enabled: true
       plots:
-        - title: "Chiller Cooling Load"
+        - title: "Chiller_Cooling_Analysis_(Interactive)"
           components: []
     
     legacy_dry_cooler:
       enabled: true
       plots:
-        - title: "Dry Cooler Performance"
+        - title: "Dry_Cooling_Dynamics_(Interactive)"
           components: []
     
     legacy_q_breakdown:
@@ -702,13 +704,13 @@ visualization:
     legacy_coalescer:
       enabled: true
       plots:
-        - title: "Coalescer Separation"
+        - title: "Coalescer_Separation_Analysis_(Interactive)"
           components: []
     
     legacy_kod:
       enabled: true
       plots:
-        - title: "Knock-Out Drum"
+        - title: "KOD_Water_Removal_Analysis_(Interactive)"
           components: []
     
     legacy_drains_discarded:

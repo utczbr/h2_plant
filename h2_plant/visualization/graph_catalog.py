@@ -441,7 +441,7 @@ class GraphCatalog:
         # 1. Dispatch Strategy (Twin for legacy 'dispatch')
         self.register(GraphMetadata(
             graph_id='dispatch_plotly',
-            title='4. Power Dispatch Strategy (Interactive)',
+            title='H2_Yield_vs_Available_Wind_Power_(Interactive)_Dispatch',
             description='Stacked power consumption and grid sales',
             function=pg.plot_dispatch_strategy,
             library=GraphLibrary.PLOTLY,
@@ -454,7 +454,7 @@ class GraphCatalog:
         # 2. Cumulative Production (Twin for 'cumulative_h2')
         self.register(GraphMetadata(
             graph_id='cumulative_h2_plotly',
-            title='Cumulative H2 Production (Interactive)',
+            title='Cumulative_H2_Yield_Analysis_(Interactive)',
             description='Cumulative hydrogen production from both systems',
             function=pg.plot_cumulative_production,
             library=GraphLibrary.PLOTLY,
@@ -471,7 +471,7 @@ class GraphCatalog:
         # 2b. ATR Oxygen Supply (New)
         self.register(GraphMetadata(
             graph_id='atr_oxygen_supply_plotly',
-            title='ATR Oxygen Supply (Interactive)',
+            title='ATR_Oxygen_Supply_Analysis_(Interactive)',
             description='Stacked O2 supply to ATR from PEM and external sources',
             function=pg.plot_atr_oxygen_supply,
             library=GraphLibrary.PLOTLY,
@@ -491,7 +491,7 @@ class GraphCatalog:
         # 3. Energy Pie (Twin for 'energy_pie')
         self.register(GraphMetadata(
             graph_id='energy_pie_plotly',
-            title='10. Power Consumption Breakdown (Interactive)',
+            title='Energy Consumption Breakdown_(Interactive)',
             description='Pie chart showing power distribution',
             function=pg.plot_power_breakdown_pie,
             library=GraphLibrary.PLOTLY,
@@ -516,7 +516,7 @@ class GraphCatalog:
         # 4. Arbitrage (Twin for 'arbitrage')
         self.register(GraphMetadata(
             graph_id='arbitrage_plotly',
-            title='1. Arbitrage Opportunity (Interactive)',
+            title='H2_Yield_vs_Available_Wind_Power_(Interactive)',
             description='Interactive dual-axis chart of H2 production vs Prices',
             function=pg.plot_arbitrage_opportunity,
             library=GraphLibrary.PLOTLY,
@@ -531,7 +531,7 @@ class GraphCatalog:
         # 5b. ATR Efficiency (New)
         self.register(GraphMetadata(
             graph_id='atr_efficiency_plotly',
-            title='ATR Efficiency (Interactive)',
+            title='ATR_Efficiency_Analysis_(Interactive)',
             description='ATR Chemical and Global Efficiency over time',
             function=pg.plot_atr_efficiency_timeline,
             library=GraphLibrary.PLOTLY,
@@ -552,13 +552,13 @@ class GraphCatalog:
             data_required=['integrated_global_efficiency'],
             priority=GraphPriority.HIGH,
             category='performance',
-            enabled=True
+            enabled=False
         ))
 
         # Combined Efficiency Graph
         self.register(GraphMetadata(
             graph_id='combined_efficiency_plotly',
-            title='2. Combined Efficiency Overview (Interactive)',
+            title='System_Efficiency_Comparison_(Interactive)',
             description='Comparative view of PEM, SOEC, ATR, and Global Plant efficiencies',
             function=pg.plot_all_efficiencies,
             library=GraphLibrary.PLOTLY,
@@ -573,7 +573,7 @@ class GraphCatalog:
         # 6. Wind Duration (New/Twin)
         self.register(GraphMetadata(
             graph_id='wind_duration_plotly',
-            title='Wind Utilization Duration Curve',
+            title='Wind_Power_Duration_Curve_(Interactive)',
             description='Duration curve of wind power usage',
             function=pg.plot_wind_utilization_duration_curve,
             library=GraphLibrary.PLOTLY,
@@ -586,7 +586,7 @@ class GraphCatalog:
         # 6b. Wind Power Production (New)
         self.register(GraphMetadata(
             graph_id='wind_power_production_plotly',
-            title='Wind Power Production (Time Series)',
+            title='Wind_Power_Operational_Profile_(Interactive)',
             description='Available, utilized, and curtailed wind power over time',
             function=pg.plot_wind_power_production_timeline,
             library=GraphLibrary.PLOTLY,
@@ -599,7 +599,7 @@ class GraphCatalog:
         # 6c. Cumulative Wind Energy (New)
         self.register(GraphMetadata(
             graph_id='wind_energy_cumulative_plotly',
-            title='Cumulative Wind Energy',
+            title='Cumulative_Wind_Energy_Analysis_(Interactive)',
             description='Cumulative available, utilized, and curtailed wind energy',
             function=pg.plot_wind_energy_cumulative,
             library=GraphLibrary.PLOTLY,
@@ -615,7 +615,7 @@ class GraphCatalog:
         # 7. Storage APC (Twin for 'storage_apc')
         self.register(GraphMetadata(
             graph_id='storage_apc_plotly',
-            title='8. Storage APC Control (Interactive)',
+            title='Storage_Control_&_SOC_Status_(Interactive)',
             description='State of Charge, control zones, and power modulation factor',
             function=pg.plot_storage_apc,  # P2 FIX: Now points to dedicated implementation
             library=GraphLibrary.PLOTLY,
@@ -628,7 +628,7 @@ class GraphCatalog:
         # Enhanced Storage APC (2-Panel)
         self.register(GraphMetadata(
             graph_id='storage_apc_enhanced_plotly',
-            title='12. Storage APC & Mass Balance (Interactive)',
+            title='Storage_Control_&_Mass_Balance_Dynamics.(Interactive)',
             description='Detailed view of Storage SOC, APC Control Factor, and H2 Production vs Demand',
             function=pg.plot_storage_apc_enhanced,
             library=GraphLibrary.PLOTLY,
@@ -646,7 +646,7 @@ class GraphCatalog:
         # 8. Temporal Averages (Twin for 'temporal_averages')
         self.register(GraphMetadata(
             graph_id='temporal_averages',  # P2 FIX: Renamed from _plotly to match requirements
-            title='11. Temporal Averages (Interactive)',
+            title='Temporal_Average_Operations_Overview_(Interactive)',
             description='Hourly aggregated price, power, H2 data',
             function=pg.plot_temporal_averages,  # P2 FIX: Now points to dedicated implementation
             library=GraphLibrary.PLOTLY,
@@ -659,7 +659,7 @@ class GraphCatalog:
         # 8b. Temporal Sums (New Requested Graph)
         self.register(GraphMetadata(
             graph_id='temporal_sums',
-            title='13. Temporal Sums (Interactive)',
+            title='Temporal_Cumulative_Operations_Overview_(Interactive)',
             description='Aggregated Totals: Energy (MWh) and H2 Mass (kg) by Hour/Day/Month',
             function=pg.plot_temporal_sums,
             library=GraphLibrary.PLOTLY,
@@ -673,7 +673,7 @@ class GraphCatalog:
         # 9. Effective PPA (Twin for 'effective_ppa')
         self.register(GraphMetadata(
             graph_id='effective_ppa_plotly',
-            title='3. Effective PPA Price (Interactive)',
+            title='Price_Arbitrage_Overview_(Interactive)',
             description='Weighted average PPA price over time',
             function=pg.plot_effective_ppa,  # P2 FIX: Now points to dedicated implementation
             library=GraphLibrary.PLOTLY,
@@ -686,7 +686,7 @@ class GraphCatalog:
         # 9b. Renewable/Grid Energy + Effective PPA (3-Panel)
         self.register(GraphMetadata(
             graph_id='renewable_grid_ppa_panels_plotly',
-            title='Renewable & Grid Energy + Effective PPA (Interactive)',
+            title='Strategic_PPA_Performance_Overview_(Interactive)',
             description='Wind availability with guaranteed line, renewable sales vs Non-RFNBO grid purchases, and effective PPA',
             function=pg.plot_renewable_grid_ppa_panels,
             library=GraphLibrary.PLOTLY,
@@ -714,13 +714,13 @@ class GraphCatalog:
             data_required=['cumulative_h2_rfnbo_kg', 'cumulative_h2_non_rfnbo_kg', 'purchase_threshold_eur_mwh'],
             priority=GraphPriority.HIGH,
             category='economics',
-            enabled=True
+            enabled=False
         ))
         
         # 11. RFNBO Share (Pie)
         self.register(GraphMetadata(
             graph_id='rfnbo_pie_plotly',
-            title='7. RFNBO Market Share (Interactive)',
+            title='RFNBO_Compliance.Overview_(Interactive)',
             description='Percentage of RFNBO Compliant vs Non-Compliant Hydrogen',
             function=pg.plot_rfnbo_pie,
             library=GraphLibrary.PLOTLY,
@@ -740,13 +740,13 @@ class GraphCatalog:
             data_required=['history'],
             priority=GraphPriority.MEDIUM,
             category='economics',
-            enabled=True
+            enabled=False
         ))
         
         # Keep existing explicit IDs for direct access if needed
         self.register(GraphMetadata(
             graph_id='pem_h2_production_over_time',
-            title='PEM H2 Production Rate',
+            title='PEM_H2_Output_Analysis_(Interactive)',
             description='PEM hydrogen production rate (kg/h) over time',
             function=pg.plot_pem_production_timeline,
             library=GraphLibrary.PLOTLY,
@@ -770,7 +770,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='total_h2_production_stacked',
-            title='Total H2 Production (Stacked)',
+            title='H2.Production.Stack.(Interactive)',
             description='Stacked area chart showing SOEC + ATR + PEM contributions',
             function=pg.plot_total_production_stacked,
             library=GraphLibrary.PLOTLY,
@@ -782,7 +782,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='cumulative_h2_production',
-            title='Cumulative H2 Production',
+            title='Cumulative_H2_Yield_Analysis_(Interactive)',
             description='Cumulative hydrogen production from both systems',
             function=pg.plot_cumulative_production,
             library=GraphLibrary.PLOTLY,
@@ -810,7 +810,7 @@ class GraphCatalog:
         # Energy Economics
         self.register(GraphMetadata(
             graph_id='energy_price_over_time',
-            title='Energy Price (Hourly Average)',
+            title='Energy_Price_Trends_Hourly.Avg_(Interactive)(Interactive)',
             description='Hourly average electricity price (EUR/MWh) over time',
             function=pg.plot_energy_price_timeline,
             library=GraphLibrary.PLOTLY,
@@ -822,7 +822,7 @@ class GraphCatalog:
 
         self.register(GraphMetadata(
             graph_id='energy_price_daily_monthly_plotly',
-            title='Energy Price (Daily & Monthly Averages)',
+            title='Energy_Price_Trends_Daily.&.Monthly.Avg_(Interactive)',
             description='Daily and monthly average electricity price (EUR/MWh)',
             function=pg.plot_energy_price_daily_monthly,
             library=GraphLibrary.PLOTLY,
@@ -846,7 +846,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='power_consumption_breakdown_pie',
-            title='Power Consumption Breakdown',
+            title='Energy Consumption Breakdown_(Interactive)',
             description='Pie chart showing power distribution',
             function=pg.plot_power_breakdown_pie,
             library=GraphLibrary.PLOTLY,
@@ -878,7 +878,7 @@ class GraphCatalog:
             data_required=['soec_module_hours_*', 'soec_module_eff_*'],
             priority=GraphPriority.HIGH,
             category='soec_ops',
-            enabled=True
+            enabled=False
         ))
 
         
@@ -909,7 +909,7 @@ class GraphCatalog:
         # Grid & Renewables Integration
         self.register(GraphMetadata(
             graph_id='wind_utilization_duration_curve',
-            title='Wind Utilization Duration Curve',
+            title='Wind_Power_Duration_Curve_(Interactive)',
             description='Duration curve of wind power usage',
             function=pg.plot_wind_utilization_duration_curve,
             library=GraphLibrary.PLOTLY,
@@ -980,7 +980,7 @@ class GraphCatalog:
             data_required=['minute', '*Spot*', '*price*', 'H2_soec*', 'H2_pem*'],
             priority=GraphPriority.HIGH,
             category='economics',
-            enabled=True
+            enabled=False
         ))
         
         # =====================================================================
@@ -989,7 +989,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='physics_polarization',
-            title='PEM Physics: Polarization Curve',
+            title='PEM_Polarization_Map_(Interactive)',
             description='V-j curve comparison: BOL vs EOL vs Current',
             function=pg.plot_physics_polarization,
             library=GraphLibrary.PLOTLY,
@@ -1002,7 +1002,7 @@ class GraphCatalog:
         # New: Power vs PPA Thesis Graph
         self.register(GraphMetadata(
             graph_id='power_vs_ppa_thesis',
-            title='Power Offer vs PPA Analysis',
+            title='PPA_Price_Sensitivity_Map_(Interactive)',
             description='Interactive: Correlation between Wind Power and PPA Prices',
             function=pg.plot_power_vs_ppa,
             library=GraphLibrary.PLOTLY,
@@ -1016,7 +1016,7 @@ class GraphCatalog:
 
         self.register(GraphMetadata(
             graph_id='physics_efficiency',
-            title='PEM Physics: Efficiency Curve',
+            title='PEM_Efficiency_Map_(Interactive)',
             description='System Efficiency vs Current Density',
             function=pg.plot_physics_efficiency,
             library=GraphLibrary.PLOTLY,
@@ -1028,7 +1028,7 @@ class GraphCatalog:
 
         self.register(GraphMetadata(
             graph_id='physics_power_balance',
-            title='PEM Physics: Power Balance',
+            title='PEM_Power_Balance_Map_(Interactive)',
             description='Stack vs BoP Power breakdown',
             function=pg.plot_physics_power_balance,
             library=GraphLibrary.PLOTLY,
@@ -1175,7 +1175,7 @@ class GraphCatalog:
         # Storage APC (Advanced Process Control)
         self.register(GraphMetadata(
             graph_id='storage_apc',
-            title='Storage APC Control',
+            title='Storage_Control_&_SOC_Status_(Interactive)',
             description='State of Charge, control zones, and power modulation factor',
             function=sg.create_storage_apc_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1188,7 +1188,7 @@ class GraphCatalog:
         # Effective PPA Pricing (Dual Contract/Variable)
         self.register(GraphMetadata(
             graph_id='effective_ppa',
-            title='Effective PPA Price',
+            title='Price_Arbitrage_Overview_(Interactive)',
             description='Weighted average PPA price over time (contract + variable)',
             function=sg.create_effective_ppa_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1201,7 +1201,7 @@ class GraphCatalog:
         # Thermal & Separation (Static)
         self.register(GraphMetadata(
             graph_id='legacy_chiller',
-            title='Chiller Cooling Load',
+            title='Chiller_Cooling_Analysis_(Interactive)',
             description='Chiller cooling load over time (kW)',
             function=sg.create_chiller_cooling_load_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1213,7 +1213,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='legacy_chiller_power',
-            title='Chiller Electrical Power',
+            title='Chiller_Electrical_Analysis_(Interactive)',
             description='Chiller electrical power consumption over time (kW)',
             function=sg.create_chiller_power_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1226,7 +1226,7 @@ class GraphCatalog:
         # Plotly Twins: Chiller & DryCooler
         self.register(GraphMetadata(
             graph_id='chiller_cooling_plotly',
-            title='Chiller Cooling Load (Interactive)',
+            title='Chiller_Cooling_Analysis_(Interactive)',
             description='Interactive chiller cooling load over time (kW)',
             function=pg.plot_chiller_cooling_load,
             library=GraphLibrary.PLOTLY,
@@ -1238,7 +1238,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='chiller_power_plotly',
-            title='Chiller Electrical Power (Interactive)',
+            title='Chiller_Electrical_Analysis_(Interactive)',
             description='Interactive chiller electrical power consumption (kW)',
             function=pg.plot_chiller_power,
             library=GraphLibrary.PLOTLY,
@@ -1250,7 +1250,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='dry_cooler_performance_plotly',
-            title='Dry Cooler Performance (Interactive)',
+            title='Dry_Cooling_Dynamics_(Interactive)',
             description='Interactive dry cooler/intercooler heat rejection and outlet temperature',
             function=pg.plot_dry_cooler_performance,
             library=GraphLibrary.PLOTLY,
@@ -1263,7 +1263,7 @@ class GraphCatalog:
         # Q Breakdown (Average Bar Chart)
         self.register(GraphMetadata(
             graph_id='q_breakdown_plotly',
-            title='9. Thermal Load Breakdown (Avg)',
+            title='Thermal_Load_Breakdown_(Interactive)',
             description='Average thermal load by subsystem and heat type',
             function=pg.plot_q_breakdown,
             library=GraphLibrary.PLOTLY,
@@ -1355,7 +1355,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='coalescer_separation',
-            title='Coalescer Separation',
+            title='Coalescer_Separation_Analysis_(Interactive)',
             description='Pressure drop and liquid removal',
             function=sg.create_coalescer_separation_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1368,7 +1368,7 @@ class GraphCatalog:
         # Coalescer Plotly Twin
         self.register(GraphMetadata(
             graph_id='coalescer_separation_plotly',
-            title='Coalescer Separation (Interactive)',
+            title='Coalescer_Separation_Analysis_(Interactive)',
             description='Plotly: Pressure drop and liquid removal with enhanced UX',
             function=pg.plot_coalescer_separation,
             library=GraphLibrary.PLOTLY,
@@ -1380,7 +1380,7 @@ class GraphCatalog:
         
         self.register(GraphMetadata(
             graph_id='kod_separation',
-            title='Knock-Out Drum',
+            title='KOD_Water_Removal_Analysis_(Interactive)',
             description='Gas density, velocity, and liquid drainage',
             function=sg.create_kod_separation_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1393,7 +1393,7 @@ class GraphCatalog:
         # KOD Plotly Twin
         self.register(GraphMetadata(
             graph_id='kod_separation_plotly',
-            title='Knock-Out Drum (Interactive)',
+            title='KOD_Water_Removal_Analysis_(Interactive)',
             description='Plotly: Gas density, velocity, and liquid drainage with enhanced UX',
             function=pg.plot_kod_separation,
             library=GraphLibrary.PLOTLY,
@@ -1406,7 +1406,7 @@ class GraphCatalog:
         # Mixer Comparison Plotly (no Matplotlib twin listed here, but adding it)
         self.register(GraphMetadata(
             graph_id='mixer_comparison_plotly',
-            title='Drain/Mixer Comparison (Interactive)',
+            title='Drain_&_Mixer_Analysis_(Interactive)',
             description='Plotly: Temperature, pressure, and flow comparison with enhanced UX',
             function=pg.plot_mixer_comparison,
             library=GraphLibrary.PLOTLY,
@@ -1419,7 +1419,7 @@ class GraphCatalog:
         # Process Train Profile Plotly
         self.register(GraphMetadata(
             graph_id='process_train_profile_plotly',
-            title='Process Train Profile (Interactive)',
+            title='Plant-wide_Process_Profile_(Interactive)',
             description='Plotly: Temperature, Pressure, and Composition profiles along H2/O2 trains with selector',
             function=pg.plot_process_train_profile,
             library=GraphLibrary.PLOTLY,
@@ -1430,7 +1430,7 @@ class GraphCatalog:
         ))
         self.register(GraphMetadata(
             graph_id='dry_cooler_performance',
-            title='Dry Cooler Performance',
+            title='Dry_Cooling_Dynamics_(Interactive)',
             description='Heat rejection, fan power, and outlet temperature',
             function=sg.create_dry_cooler_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1510,7 +1510,7 @@ class GraphCatalog:
         # Profile Plot (New - Process Train)
         self.register(GraphMetadata(
             graph_id='process_train_profile',
-            title='Process Train Profile',
+            title='Plant-wide_Process_Profile_(Interactive)',
             description='Temperature, Entropy, Enthalpy profile along the train',
             function=sg.create_process_train_profile_figure,
             library=GraphLibrary.MATPLOTLIB,
@@ -1554,7 +1554,7 @@ class GraphCatalog:
         ))
         self.register(GraphMetadata(
             graph_id='mixer_comparison',
-            title='Drain Mixer Comparison',
+            title='Drain_&_Mixer_Analysis_(Interactive)',
             description='Mixer T/P/Flow properties - plot_drenos_mixer',
             function=sg.create_mixer_comparison_figure,
             library=GraphLibrary.MATPLOTLIB,

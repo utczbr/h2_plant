@@ -39,6 +39,11 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 NET_PROFIT_TITLE = "Cumulative Net Profit (Interactive)"
+NET_PROFIT_OUTPUT_FILENAME = {
+    "low": "Economic_Performance_Overview_Low.CAPEX_(Interactive).html",
+    "base": "Economic_Performance_Overview_Base.CAPEX_(Interactive).html",
+    "high": "Economic_Performance_Overview_High.CAPEX_(Interactive).html",
+}
 # Suppress GraphCatalog import-time logs triggered by plotly_graphs dependencies.
 logging.getLogger("h2_plant.visualization.graph_catalog").setLevel(logging.WARNING)
 
@@ -340,7 +345,12 @@ def _find_config(paths: List[Path], filename: str) -> Optional[Path]:
 
 def _find_topology_path(output_dir: Path) -> Optional[Path]:
     topology_filenames = ("plant_topology.yaml", "plant_topology_PEM+SOEC.yaml")
-    candidate_dirs = [output_dir, output_dir.parent, output_dir.parent.parent]
+    candidate_dirs = [
+        output_dir,
+        output_dir.parent,
+        output_dir.parent / "scenarios",
+        output_dir.parent.parent,
+    ]
     seen = set()
     for base in candidate_dirs:
         if base in seen:
@@ -438,7 +448,7 @@ def _load_lifecycle_hours(topology_path: Optional[Path]) -> Tuple[Optional[float
     if topology_path is None or not topology_path.exists():
         logger.warning(
             "Topology file not found (expected plant_topology.yaml or plant_topology_PEM+SOEC.yaml); "
-            "skipping lifecycle-based OPEX spikes."
+            "cannot extract lifecycle values."
         )
         return None, None
     try:
@@ -470,7 +480,7 @@ def _load_lifecycle_hours(topology_path: Optional[Path]) -> Tuple[Optional[float
 
 def _load_opex_reserves(opex_path: Optional[Path]) -> Tuple[Optional[float], Optional[float]]:
     if opex_path is None or not opex_path.exists():
-        logger.warning("opex_config.yaml not found; skipping reserve-based spikes.")
+        logger.warning("opex_config.yaml not found; cannot extract reserve percentages.")
         return None, None
     try:
         data = yaml.safe_load(opex_path.read_text()) or {}
@@ -679,18 +689,48 @@ def regenerate_net_profit_plotly(
 
     # Load lifecycle + reserve data for spikes
     topology_path = _find_topology_path(output_dir)
-    if topology_path is not None:
-        logger.info("Using topology for lifecycle extraction: %s", topology_path)
+    if topology_path is None:
+        logger.error(
+            "Topology file not found. Expected plant_topology.yaml or "
+            "plant_topology_PEM+SOEC.yaml in: %s, %s, %s, %s.",
+            output_dir,
+            output_dir.parent,
+            output_dir.parent / "scenarios",
+            output_dir.parent.parent,
+        )
+        return 1
+    logger.info("Using topology for lifecycle extraction: %s", topology_path)
     pem_lifecycle_h, soec_lifecycle_h = _load_lifecycle_hours(topology_path)
+    if pem_lifecycle_h is None or soec_lifecycle_h is None:
+        logger.error(
+            "Missing mandatory lifecycle values in topology: PEM=%r, SOEC=%r. "
+            "Cannot generate net profit graphs with replacement costs.",
+            pem_lifecycle_h,
+            soec_lifecycle_h,
+        )
+        return 1
 
     config_candidates = []
     if economics_dir:
         config_candidates.append(Path(economics_dir).resolve())
     config_candidates.extend([output_dir / "Economics", output_dir.parent / "Economics"])
     opex_config_path = _find_config(config_candidates, "opex_config.yaml")
-    if opex_config_path is not None:
-        logger.info("Using OPEX config for reserve extraction: %s", opex_config_path)
+    if opex_config_path is None:
+        logger.error(
+            "opex_config.yaml not found. Expected in: %s.",
+            ", ".join(str(path / "opex_config.yaml") for path in config_candidates),
+        )
+        return 1
+    logger.info("Using OPEX config for reserve extraction: %s", opex_config_path)
     pem_reserve_pct, soec_reserve_pct = _load_opex_reserves(opex_config_path)
+    if pem_reserve_pct is None or soec_reserve_pct is None:
+        logger.error(
+            "Missing mandatory stack replacement reserves in opex_config.yaml: PEM=%r, SOEC=%r. "
+            "Cannot generate net profit graphs with replacement costs.",
+            pem_reserve_pct,
+            soec_reserve_pct,
+        )
+        return 1
     logger.info(
         "Replacement inputs resolved: PEM(lifecycle_h=%r, reserve_pct=%r), "
         "SOEC(lifecycle_h=%r, reserve_pct=%r)",
@@ -699,20 +739,6 @@ def regenerate_net_profit_plotly(
         soec_lifecycle_h,
         soec_reserve_pct,
     )
-    if pem_lifecycle_h is None or pem_reserve_pct is None:
-        logger.warning(
-            "PEM replacement bars may remain zero due to missing lifecycle/reserve "
-            "(pem_lifecycle_h=%r, pem_reserve_pct=%r).",
-            pem_lifecycle_h,
-            pem_reserve_pct,
-        )
-    if soec_lifecycle_h is None or soec_reserve_pct is None:
-        logger.warning(
-            "SOEC replacement bars may remain zero due to missing lifecycle/reserve "
-            "(soec_lifecycle_h=%r, soec_reserve_pct=%r).",
-            soec_lifecycle_h,
-            soec_reserve_pct,
-        )
     discount_rate, project_lifetime_years = _load_financial_horizon(output_dir)
 
     kwargs = {}
@@ -752,8 +778,6 @@ def regenerate_net_profit_plotly(
         kwargs["soec_reserve_pct"] = soec_reserve_pct
 
     saved = 0
-    base_filename = NET_PROFIT_TITLE.replace(" ", "_").replace("/", "_")
-    uniform_opex_suffix = OPEX_VARIANT_SUFFIX.get(selected_uniform_variant, "")
     for variant in ("low", "base", "high"):
         capex_val = capex_variants[variant]
         kwargs_variant = dict(kwargs)
@@ -769,11 +793,7 @@ def regenerate_net_profit_plotly(
         )
         fig = plot_cumulative_net_profit(df, **kwargs_variant)
 
-        if paired_mode:
-            opex_suffix = OPEX_VARIANT_SUFFIX_EXPLICIT[variant]
-        else:
-            opex_suffix = uniform_opex_suffix
-        filename = f"{base_filename}{CAPEX_VARIANT_SUFFIX[variant]}{opex_suffix}.html"
+        filename = NET_PROFIT_OUTPUT_FILENAME[variant]
         output_path = graphs_dir / filename
         fig.write_html(
             str(output_path),

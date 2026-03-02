@@ -1,6 +1,8 @@
 import pytest
 import pandas as pd
 import numpy as np
+import sys
+import types
 from pathlib import Path
 import shutil
 import tempfile
@@ -543,3 +545,89 @@ class TestRegeneratePlanningHelpers:
             f"Expected (naive): {list(df_expected['minute'].values)}"
         )
         assert len(df_streamed) == len(df_expected)
+
+    def test_regenerate_graphs_atomic_calls_net_profit_in_staging(self, monkeypatch, tmp_path):
+        """Atomic mode must run net-profit regeneration in staging before the final swap."""
+        output_dir = tmp_path
+        (output_dir / "simulation_history_hourly.parquet").write_bytes(b"cache")
+
+        graphs_dir = output_dir / "graphs"
+        graphs_dir.mkdir(parents=True, exist_ok=True)
+        (graphs_dir / "old_marker.txt").write_text("old", encoding="utf-8")
+
+        class DummyMemoryMonitor:
+            def __init__(self, _max_mb):
+                pass
+
+            def log_usage(self, _label):
+                return None
+
+        class DummyExecutor:
+            def __init__(self, _catalog, _output_dir):
+                self.catalog = types.SimpleNamespace(get_enabled=lambda: [object()])
+                self.memory_monitor = None
+
+            def configure_from_yaml(self, _cfg):
+                return None
+
+            def get_required_columns(self):
+                return ["minute"]
+
+            def execute_sequentially_by_category(self, **kwargs):
+                return {"dummy": types.SimpleNamespace(status="success", error=None)}
+
+        regen_call = {}
+
+        def fake_regen_net_profit(**kwargs):
+            regen_call.update(kwargs)
+            target_dir = kwargs["graphs_dir"]
+            target_dir.mkdir(parents=True, exist_ok=True)
+            (target_dir / "Economic_Performance_Overview_Base.CAPEX_(Interactive).html").write_text(
+                "<html></html>",
+                encoding="utf-8",
+            )
+            return 0
+
+        monkeypatch.setitem(
+            sys.modules,
+            "h2_plant.visualization.graph_catalog",
+            types.SimpleNamespace(GRAPH_REGISTRY=object()),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "h2_plant.visualization.unified_executor",
+            types.SimpleNamespace(UnifiedGraphExecutor=DummyExecutor),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "h2_plant.visualization.streaming_downsampler",
+            types.SimpleNamespace(
+                StreamingDownsampler=object,
+                MemoryMonitor=DummyMemoryMonitor,
+            ),
+        )
+        monkeypatch.setitem(
+            sys.modules,
+            "tools.regenerate_net_profit_plotly",
+            types.SimpleNamespace(regenerate_net_profit_plotly=fake_regen_net_profit),
+        )
+        monkeypatch.setattr(
+            regen_tools,
+            "compute_effective_memory_budget",
+            lambda _mb: (1024, 2048.0, 1536.0),
+        )
+
+        regen_tools.regenerate_graphs_safe(
+            output_dir=output_dir,
+            execution_mode="sequential",
+            graph_output_mode="atomic",
+            skip_cache=False,
+            target_resolution=60,
+            timeout_seconds=5,
+        )
+
+        assert regen_call["graphs_dir"] == output_dir / "graphs_staging"
+        assert not (output_dir / "graphs_staging").exists()
+        assert (output_dir / "graphs").exists()
+        assert (output_dir / "graphs" / "Economic_Performance_Overview_Base.CAPEX_(Interactive).html").exists()
+        assert not (output_dir / "graphs" / "old_marker.txt").exists()

@@ -1033,6 +1033,23 @@ def generate_graphs(
                 logger.warning(f"  Failed: {graph_id} - {result.error}")
             elif result.status == 'timeout':
                 logger.warning(f"  Timeout: {graph_id} - exceeded {timeout}s")
+
+        # Regenerate CAPEX net-profit variants using the dedicated helper.
+        # This keeps standard generation aligned with tools/regenerate_net_profit_plotly.py.
+        try:
+            from tools.regenerate_net_profit_plotly import regenerate_net_profit_plotly
+
+            rc = regenerate_net_profit_plotly(
+                output_dir=output_dir,
+                graphs_dir=graphs_dir,
+                downsample_factor=60,
+            )
+            if rc == 0:
+                logger.info("### Net-profit CAPEX variants generated ###")
+            else:
+                logger.warning("Net-profit CAPEX variant generation returned rc=%s", rc)
+        except Exception as e:
+            logger.warning(f"Net-profit CAPEX variant generation failed: {e}", exc_info=True)
         
         # Cleanup
         del df
