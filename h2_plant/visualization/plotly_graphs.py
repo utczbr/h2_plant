@@ -2316,6 +2316,29 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
                 if series.notna().any():
                     return float(series.dropna().iloc[-1])
         return None
+
+    def _resolve_numeric(keys: List[str], label: str) -> Optional[float]:
+        """Resolve numeric parameter from kwargs -> metrics -> config."""
+        sources = (
+            ("kwargs", kwargs_lc),
+            ("metrics", metrics_lc),
+            ("config", config_lc),
+        )
+        for source_name, source in sources:
+            for key in keys:
+                if key not in source or source[key] is None:
+                    continue
+                try:
+                    return float(source[key])
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Invalid %s value in %s for key '%s': %r",
+                        label,
+                        source_name,
+                        key,
+                        source[key],
+                    )
+        return None
     
     capex_keys = [
         'capex', 'capex_total', 'total_capex', 'total_c_bm',
@@ -2342,10 +2365,22 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     # --- Lifecycle-aware OPEX and yearly bars ---
     stack_threshold = kwargs.get('stack_power_threshold_mw', 0.01)
-    pem_lifecycle_h = kwargs.get('pem_lifecycle_h')
-    soec_lifecycle_h = kwargs.get('soec_lifecycle_h')
-    pem_reserve_pct = kwargs.get('pem_reserve_pct')
-    soec_reserve_pct = kwargs.get('soec_reserve_pct')
+    pem_lifecycle_h = _resolve_numeric(
+        ['pem_lifecycle_h', 'pem_lifecycle'],
+        label='PEM lifecycle',
+    )
+    soec_lifecycle_h = _resolve_numeric(
+        ['soec_lifecycle_h', 'soec_lifecycle'],
+        label='SOEC lifecycle',
+    )
+    pem_reserve_pct = _resolve_numeric(
+        ['pem_reserve_pct', 'pem_stack_replacement_reserve_pct'],
+        label='PEM reserve percentage',
+    )
+    soec_reserve_pct = _resolve_numeric(
+        ['soec_reserve_pct', 'soec_stack_replacement_reserve_pct'],
+        label='SOEC reserve percentage',
+    )
     discount_rate = kwargs.get('discount_rate', 0.08)
     project_lifetime_years = kwargs.get('project_lifetime_years', 20)
     show_discounted_cashflow = kwargs.get('show_discounted_cashflow', True)
@@ -2378,18 +2413,38 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     else:
         show_break_even_markers = bool(show_break_even_markers)
 
-    def _to_float(val: Optional[float]) -> Optional[float]:
-        if val is None:
-            return None
-        try:
-            return float(val)
-        except (TypeError, ValueError):
-            return None
-
-    pem_lifecycle_h = _to_float(pem_lifecycle_h)
-    soec_lifecycle_h = _to_float(soec_lifecycle_h)
-    pem_reserve_pct = _to_float(pem_reserve_pct)
-    soec_reserve_pct = _to_float(soec_reserve_pct)
+    if pem_lifecycle_h is not None and pem_lifecycle_h <= 0:
+        logger.warning("PEM lifecycle is non-positive (%s); PEM replacement spikes set to zero.", pem_lifecycle_h)
+        pem_lifecycle_h = None
+    if soec_lifecycle_h is not None and soec_lifecycle_h <= 0:
+        logger.warning("SOEC lifecycle is non-positive (%s); SOEC replacement spikes set to zero.", soec_lifecycle_h)
+        soec_lifecycle_h = None
+    if pem_reserve_pct is not None and pem_reserve_pct < 0:
+        logger.warning(
+            "PEM reserve percentage is negative (%s); PEM replacement spikes set to zero.",
+            pem_reserve_pct,
+        )
+        pem_reserve_pct = None
+    if soec_reserve_pct is not None and soec_reserve_pct < 0:
+        logger.warning(
+            "SOEC reserve percentage is negative (%s); SOEC replacement spikes set to zero.",
+            soec_reserve_pct,
+        )
+        soec_reserve_pct = None
+    if pem_lifecycle_h is None or pem_reserve_pct is None:
+        logger.warning(
+            "PEM replacement spikes set to zero due to missing lifecycle/reserve "
+            "(pem_lifecycle_h=%r, pem_reserve_pct=%r).",
+            pem_lifecycle_h,
+            pem_reserve_pct,
+        )
+    if soec_lifecycle_h is None or soec_reserve_pct is None:
+        logger.warning(
+            "SOEC replacement spikes set to zero due to missing lifecycle/reserve "
+            "(soec_lifecycle_h=%r, soec_reserve_pct=%r).",
+            soec_lifecycle_h,
+            soec_reserve_pct,
+        )
 
     annual_reserve_pem = capex * pem_reserve_pct if pem_reserve_pct is not None else 0.0
     annual_reserve_soec = capex * soec_reserve_pct if soec_reserve_pct is not None else 0.0
@@ -2453,21 +2508,11 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
                 if 0 <= year < n_years:
                     event_costs_year_out[year] += count * cost_per_event
 
-    pem_col = next((c for c in ['P_pem', 'P_pem_mw'] if c in df_plot.columns), None)
-    soec_col = next((c for c in ['P_soec_actual', 'P_soec', 'P_soec_mw'] if c in df_plot.columns), None)
-
-    if pem_col is None:
-        logger.warning("PEM power column missing; PEM lifecycle spikes skipped.")
-    if soec_col is None:
-        logger.warning("SOEC power column missing; SOEC lifecycle spikes skipped.")
-
     pem_event_cost = annual_reserve_pem * (pem_lifecycle_h / 8760.0) if pem_lifecycle_h else 0.0
     soec_event_cost = annual_reserve_soec * (soec_lifecycle_h / 8760.0) if soec_lifecycle_h else 0.0
 
-    if pem_col is not None:
-        _apply_events(pem_lifecycle_h, pem_event_cost, event_costs_time_pem, event_costs_year_pem)
-    if soec_col is not None:
-        _apply_events(soec_lifecycle_h, soec_event_cost, event_costs_time_soec, event_costs_year_soec)
+    _apply_events(pem_lifecycle_h, pem_event_cost, event_costs_time_pem, event_costs_year_pem)
+    _apply_events(soec_lifecycle_h, soec_event_cost, event_costs_time_soec, event_costs_year_soec)
 
     event_costs_time_total = event_costs_time_pem + event_costs_time_soec
     base_opex_per_year = np.full(n_years, base_opex, dtype=float)

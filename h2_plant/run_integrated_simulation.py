@@ -63,6 +63,132 @@ def _resolve_guaranteed_power_mw(scenarios_dir: str, default: float = 10.0) -> f
     return guaranteed_power_mw
 
 
+def _resolve_topology_file_for_graph_metrics(scenarios_dir: str) -> Optional[Path]:
+    base = Path(scenarios_dir)
+    for filename in ("plant_topology.yaml", "plant_topology_PEM+SOEC.yaml"):
+        candidate = base / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _load_lifecycle_hours_from_topology(topology_path: Optional[Path]) -> tuple[Optional[float], Optional[float]]:
+    if topology_path is None or not topology_path.exists():
+        return None, None
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(topology_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        logger.warning("Failed to read topology for lifecycle extraction (%s): %s", topology_path, exc)
+        return None, None
+
+    pem_lifecycle_h = None
+    soec_lifecycle_h = None
+    for node in data.get("nodes", []) or []:
+        ntype = str(node.get("type", "")).strip().upper()
+        params = node.get("params", {}) or {}
+        lifecycle = params.get("lifecycle")
+        if lifecycle is None:
+            continue
+        try:
+            parsed = float(lifecycle)
+        except (TypeError, ValueError):
+            continue
+        if ntype == "PEM" and pem_lifecycle_h is None:
+            pem_lifecycle_h = parsed
+        if ntype == "SOEC" and soec_lifecycle_h is None:
+            soec_lifecycle_h = parsed
+    return pem_lifecycle_h, soec_lifecycle_h
+
+
+def _load_stack_reserve_percentages(opex_config_path: Optional[Path]) -> tuple[Optional[float], Optional[float]]:
+    if opex_config_path is None or not opex_config_path.exists():
+        return None, None
+
+    import yaml
+
+    try:
+        data = yaml.safe_load(opex_config_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        logger.warning("Failed to read OPEX config for reserve extraction (%s): %s", opex_config_path, exc)
+        return None, None
+
+    pem_reserve_pct = None
+    soec_reserve_pct = None
+    for item in data.get("opex_items", []) or []:
+        name = str(item.get("name", "")).lower()
+        price = item.get("price")
+        if price is None:
+            continue
+        try:
+            parsed_price = float(price)
+        except (TypeError, ValueError):
+            continue
+        if "stack replacement reserve" in name and "pem" in name:
+            pem_reserve_pct = parsed_price
+        if "stack replacement reserve" in name and "soec" in name:
+            soec_reserve_pct = parsed_price
+    return pem_reserve_pct, soec_reserve_pct
+
+
+def _inject_replacement_metrics_for_net_profit(
+    metrics: Dict[str, Any],
+    *,
+    scenarios_dir: str,
+    output_dir: Path,
+) -> Dict[str, Any]:
+    """Inject lifecycle/reserve values used by net-profit replacement spikes."""
+    merged = dict(metrics or {})
+    scenarios_path = Path(scenarios_dir)
+
+    topology_path = _resolve_topology_file_for_graph_metrics(scenarios_dir)
+    if topology_path is not None:
+        logger.info("Net-profit replacement lifecycle source: %s", topology_path)
+    else:
+        logger.warning(
+            "No topology file found for replacement lifecycle extraction in %s "
+            "(expected plant_topology.yaml or plant_topology_PEM+SOEC.yaml).",
+            scenarios_path,
+        )
+    pem_lifecycle_h, soec_lifecycle_h = _load_lifecycle_hours_from_topology(topology_path)
+
+    opex_candidates = [
+        output_dir / "Economics" / "opex_config.yaml",
+        output_dir.parent / "Economics" / "opex_config.yaml",
+        scenarios_path / "Economics" / "opex_config.yaml",
+    ]
+    opex_config_path = next((path for path in opex_candidates if path.exists()), None)
+    if opex_config_path is not None:
+        logger.info("Net-profit replacement reserve source: %s", opex_config_path)
+    else:
+        logger.warning(
+            "No opex_config.yaml found for replacement reserve extraction. Checked: %s",
+            ", ".join(str(path) for path in opex_candidates),
+        )
+    pem_reserve_pct, soec_reserve_pct = _load_stack_reserve_percentages(opex_config_path)
+
+    if pem_lifecycle_h is not None:
+        merged.setdefault("pem_lifecycle_h", pem_lifecycle_h)
+    if soec_lifecycle_h is not None:
+        merged.setdefault("soec_lifecycle_h", soec_lifecycle_h)
+    if pem_reserve_pct is not None:
+        merged.setdefault("pem_reserve_pct", pem_reserve_pct)
+    if soec_reserve_pct is not None:
+        merged.setdefault("soec_reserve_pct", soec_reserve_pct)
+
+    logger.info(
+        "Net-profit replacement inputs resolved: PEM(lifecycle_h=%r, reserve_pct=%r), "
+        "SOEC(lifecycle_h=%r, reserve_pct=%r)",
+        merged.get("pem_lifecycle_h"),
+        merged.get("pem_reserve_pct"),
+        merged.get("soec_lifecycle_h"),
+        merged.get("soec_reserve_pct"),
+    )
+    return merged
+
+
 def run_with_dispatch_context(
     context,
     *,
@@ -879,6 +1005,11 @@ def generate_graphs(
             else:
                 logger.info(f"OPEX report not found at {opex_path}")
 
+            metrics = _inject_replacement_metrics_for_net_profit(
+                metrics,
+                scenarios_dir=scenarios_dir,
+                output_dir=output_dir,
+            )
             df.attrs["metrics"] = metrics
         except Exception as e:
             logger.warning(f"Failed to inject CAPEX/OPEX metrics: {e}", exc_info=True)

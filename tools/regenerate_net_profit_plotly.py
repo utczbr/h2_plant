@@ -339,12 +339,17 @@ def _find_config(paths: List[Path], filename: str) -> Optional[Path]:
 
 
 def _find_topology_path(output_dir: Path) -> Optional[Path]:
-    direct = output_dir / "plant_topology.yaml"
-    if direct.exists():
-        return direct
-    parent = output_dir.parent / "plant_topology.yaml"
-    if parent.exists():
-        return parent
+    topology_filenames = ("plant_topology.yaml", "plant_topology_PEM+SOEC.yaml")
+    candidate_dirs = [output_dir, output_dir.parent, output_dir.parent.parent]
+    seen = set()
+    for base in candidate_dirs:
+        if base in seen:
+            continue
+        seen.add(base)
+        for filename in topology_filenames:
+            candidate = base / filename
+            if candidate.exists():
+                return candidate
     return None
 
 
@@ -431,7 +436,10 @@ def _load_financial_horizon(output_dir: Path) -> Tuple[float, int]:
 
 def _load_lifecycle_hours(topology_path: Optional[Path]) -> Tuple[Optional[float], Optional[float]]:
     if topology_path is None or not topology_path.exists():
-        logger.warning("plant_topology.yaml not found; skipping lifecycle-based OPEX spikes.")
+        logger.warning(
+            "Topology file not found (expected plant_topology.yaml or plant_topology_PEM+SOEC.yaml); "
+            "skipping lifecycle-based OPEX spikes."
+        )
         return None, None
     try:
         data = yaml.safe_load(topology_path.read_text()) or {}
@@ -671,6 +679,8 @@ def regenerate_net_profit_plotly(
 
     # Load lifecycle + reserve data for spikes
     topology_path = _find_topology_path(output_dir)
+    if topology_path is not None:
+        logger.info("Using topology for lifecycle extraction: %s", topology_path)
     pem_lifecycle_h, soec_lifecycle_h = _load_lifecycle_hours(topology_path)
 
     config_candidates = []
@@ -678,7 +688,31 @@ def regenerate_net_profit_plotly(
         config_candidates.append(Path(economics_dir).resolve())
     config_candidates.extend([output_dir / "Economics", output_dir.parent / "Economics"])
     opex_config_path = _find_config(config_candidates, "opex_config.yaml")
+    if opex_config_path is not None:
+        logger.info("Using OPEX config for reserve extraction: %s", opex_config_path)
     pem_reserve_pct, soec_reserve_pct = _load_opex_reserves(opex_config_path)
+    logger.info(
+        "Replacement inputs resolved: PEM(lifecycle_h=%r, reserve_pct=%r), "
+        "SOEC(lifecycle_h=%r, reserve_pct=%r)",
+        pem_lifecycle_h,
+        pem_reserve_pct,
+        soec_lifecycle_h,
+        soec_reserve_pct,
+    )
+    if pem_lifecycle_h is None or pem_reserve_pct is None:
+        logger.warning(
+            "PEM replacement bars may remain zero due to missing lifecycle/reserve "
+            "(pem_lifecycle_h=%r, pem_reserve_pct=%r).",
+            pem_lifecycle_h,
+            pem_reserve_pct,
+        )
+    if soec_lifecycle_h is None or soec_reserve_pct is None:
+        logger.warning(
+            "SOEC replacement bars may remain zero due to missing lifecycle/reserve "
+            "(soec_lifecycle_h=%r, soec_reserve_pct=%r).",
+            soec_lifecycle_h,
+            soec_reserve_pct,
+        )
     discount_rate, project_lifetime_years = _load_financial_horizon(output_dir)
 
     kwargs = {}
