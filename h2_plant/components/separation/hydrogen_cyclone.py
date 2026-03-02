@@ -547,8 +547,17 @@ class HydrogenMultiCyclone(Component):
         
         # Calculate outlet O2 impurity for crossover graph
         outlet_o2_ppm = 0.0
-        if self._outlet_stream and self._outlet_stream.mass_flow_kg_h > 0:
-            outlet_o2_ppm = self._outlet_stream.get_total_mole_frac('O2') * 1e6
+        stream = self._outlet_stream
+        if stream and stream.mass_flow_kg_h > 0:
+            from h2_plant.core.stream import SPECIES_INDICES
+            if (stream._arrays_cached
+                    and not stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+                    and not stream.composition.get('H2O_liq', 0.0)):
+                _, mole_fracs, _, _ = stream.get_composition_arrays()
+                o2_mol_frac = float(mole_fracs[SPECIES_INDICES['O2']])
+            else:
+                o2_mol_frac = stream.get_total_mole_frac('O2')
+            outlet_o2_ppm = o2_mol_frac * 1e6
         
         state.update({
             'd50_microns': self.d50_microns,

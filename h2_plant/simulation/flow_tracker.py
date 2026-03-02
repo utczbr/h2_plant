@@ -136,6 +136,9 @@ class FlowTracker:
         # Cache formatted matrix keys to avoid repeated f-string overhead
         self._matrix_key_cache: Dict[tuple, str] = {}
         self._matrix_subkey_cache: Dict[tuple, str] = {}
+        
+        self.log_interval: int = 1  # Will be controlled by UI in Phase 2
+        self._total_buffer_appends: int = 0
 
     def set_current_hour(self, hour: int) -> None:
         """
@@ -154,7 +157,8 @@ class FlowTracker:
         amount: float,
         unit: str,
         temperature_k: Optional[float] = None,
-        pressure_pa: Optional[float] = None
+        pressure_pa: Optional[float] = None,
+        step_idx: int = 0
     ) -> None:
         """
         Record a flow event between components.
@@ -165,11 +169,15 @@ class FlowTracker:
         except KeyError:
             return
 
+        is_log_step = (self.log_interval <= 1) or (step_idx % self.log_interval == 0)
+
         # Store as lightweight tuple instead of dataclass (avoids __init__ overhead)
-        self.buffer.append((
-            self.current_hour, ft_name, source_component,
-            destination_component, amount, unit, temperature_k, pressure_pa
-        ))
+        if is_log_step:
+            self.buffer.append((
+                self.current_hour, ft_name, source_component,
+                destination_component, amount, unit, temperature_k, pressure_pa
+            ))
+            self._total_buffer_appends += 1
 
         # Update aggregates
         s_key = (source_component, destination_component, ft_name)
@@ -197,7 +205,8 @@ class FlowTracker:
         source_component: str,
         destination_component: str,
         stream: 'Stream',
-        flow_type: str = 'HYDROGEN_MASS'
+        flow_type: str = 'HYDROGEN_MASS',
+        step_idx: int = 0
     ) -> None:
         """
         Record a Stream object as a flow event.
@@ -209,6 +218,7 @@ class FlowTracker:
             destination_component (str): Destination component ID.
             stream (Stream): Stream object to record.
             flow_type (str): Flow type name. Default: 'HYDROGEN_MASS'.
+            step_idx (int): Current simulation step index for throttling.
         """
         if stream.mass_flow_kg_h <= 0:
             return
@@ -220,7 +230,8 @@ class FlowTracker:
             amount=stream.mass_flow_kg_h,
             unit='kg',
             temperature_k=stream.temperature_k,
-            pressure_pa=stream.pressure_pa
+            pressure_pa=stream.pressure_pa,
+            step_idx=step_idx
         )
     
     def flush(self, filepath: Path, *, rolling: bool = False, reset_aggregates: bool = False) -> None:

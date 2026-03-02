@@ -232,14 +232,18 @@ class DeoxoReactor(Component):
                 # Optimized JIT Path
                 if numba_ops.JIT_AVAILABLE and hasattr(lut_manager, 'stacked_C') and lut_manager.stacked_C is not None:
                     weights, _, M_mix, _ = stream.get_composition_arrays()
-                    cp_mix_j_mol_k = numba_ops.get_mix_cp_jit(
+                    ix, iy, wx, wy = numba_ops.get_interp_weights_jit(
+                        lut_manager._pressure_grid,
+                        lut_manager._temperature_grid,
                         P_in,
-                        T_in,
+                        T_in
+                    )
+                    cp_mix_j_mol_k = numba_ops.get_mix_cp_jit(
                         lut_manager._pressure_grid,
                         lut_manager._temperature_grid,
                         lut_manager.stacked_C,
                         weights,
-                        M_mix
+                        ix, iy, wx, wy
                     )
                 else:
                     # Fallback to finite difference
@@ -444,9 +448,21 @@ class DeoxoReactor(Component):
         """
         # Calculate O2 slip and stoichiometry
         o2_slip = 0.0
-        if self.output_stream:
-            y_o2_out = self.output_stream.composition.get('O2', 0.0)
-            o2_slip = self.output_stream.mass_flow_kg_h * y_o2_out
+        stream = self.output_stream
+        if stream:
+            y_o2_out = stream.composition.get('O2', 0.0)
+            o2_slip = stream.mass_flow_kg_h * y_o2_out
+            
+            from h2_plant.core.stream import SPECIES_INDICES
+            if (stream._arrays_cached
+                    and not stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+                    and not stream.composition.get('H2O_liq', 0.0)):
+                _, mole_fracs, _, _ = stream.get_composition_arrays()
+                o2_mol_frac = float(mole_fracs[SPECIES_INDICES['O2']])
+            else:
+                o2_mol_frac = stream.get_total_mole_frac('O2')
+        else:
+            o2_mol_frac = 0.0
         
         o2_consumed = self._last_o2_in_kg_h - o2_slip
         # Stoichiometry: 2H₂ + O₂ → 2H₂O
@@ -467,7 +483,7 @@ class DeoxoReactor(Component):
             'inlet_pressure_bar': (self.input_stream.pressure_pa / 1e5) if self.input_stream else 0.0,
             'mass_flow_kg_h': self.input_stream.mass_flow_kg_h if self.input_stream else 0.0,
             
-            'outlet_o2_ppm_mol': (self.output_stream.get_total_mole_frac('O2') * 1e6) if self.output_stream else 0.0,
+            'outlet_o2_ppm_mol': o2_mol_frac * 1e6,
             'delta_t_ad_k': getattr(self, 'last_delta_t_ad_k', 0.0),
             'delta_t_real_k': self.last_peak_temp_k - (self.input_stream.temperature_k if self.input_stream else 0.0),
             't_zone_outlets_c': [t - 273.15 for t in getattr(self, 'last_zone_temps', [])],

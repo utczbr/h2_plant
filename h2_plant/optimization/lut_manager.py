@@ -139,6 +139,7 @@ class LUTManager(Component):
         self._pressure_grid: Optional[npt.NDArray] = None
         self._temperature_grid: Optional[npt.NDArray] = None
         self._entropy_grid: Optional[npt.NDArray] = None
+        self.clamp_counter: int = 0
         
         # 1D Saturation LUTs (T → P_sat, T → H_liq, T → H_vap)
         self._saturation_lut: Dict[str, npt.NDArray] = {}
@@ -516,9 +517,9 @@ class LUTManager(Component):
 
     def lookup_mixture_enthalpy(
         self,
-        mass_fracs: npt.NDArray[np.float64],
-        pressure: float,
-        temperature: float
+        mass_fracs_arr: np.ndarray,
+        P_pa: float,
+        T_k: float
     ) -> float:
         """
         Calculate mixture specific enthalpy using vectorized JIT lookup.
@@ -527,10 +528,10 @@ class LUTManager(Component):
         Python/C boundary crossings per enthalpy calculation.
         
         Args:
-            mass_fracs: Mass fraction array matching config.fluids order
+            mass_fracs_arr: Mass fraction array matching config.fluids order
                         (H2, O2, N2, CO2, CH4, H2O)
-            pressure: System pressure (Pa)
-            temperature: Temperature (K)
+            P_pa: System pressure (Pa)
+            T_k: Temperature (K)
             
         Returns:
             Mixture specific enthalpy (J/kg)
@@ -541,13 +542,18 @@ class LUTManager(Component):
         # Use vectorized JIT kernel
         from h2_plant.optimization.numba_ops import get_mixture_enthalpy_fast
         
+        P_clamped = max(self._p_min, min(self._p_max, P_pa))
+        T_clamped = max(self._t_min, min(self._t_max, T_k))
+        if P_clamped != P_pa or T_clamped != T_k:
+            self.clamp_counter += 1
+            
         return get_mixture_enthalpy_fast(
             self.stacked_H,
             self._pressure_grid,
             self._temperature_grid,
-            mass_fracs,
-            pressure,
-            temperature
+            mass_fracs_arr,
+            P_clamped,
+            T_clamped
         )
 
     def lookup_isentropic_enthalpy(

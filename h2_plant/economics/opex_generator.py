@@ -13,7 +13,7 @@ import csv
 import json
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Callable, Tuple
 
 import pandas as pd
 import yaml
@@ -65,11 +65,90 @@ class OpexGenerator:
         
         logger.info(f"Loaded {len(self.items)} OPEX items from {config_path}")
 
+    def _is_primary_labor_item(self, item: OpexItemConfig) -> bool:
+        """
+        Identify the direct labor source used as base for labor-derived factors.
+
+        This intentionally excludes derived items such as "Laboratory & QC".
+        """
+        if item.strategy == "turton_labor":
+            return True
+        if item.strategy != "fixed":
+            return False
+
+        name = item.name.strip().lower()
+        if "laboratory" in name:
+            return False
+        if "operating labor" in name:
+            return True
+        if "direct labor" in name:
+            return True
+        if "total staffing" in name:
+            return True
+        return name == "labor"
+
+    def _sorted_items(self) -> List[OpexItemConfig]:
+        """Sort items so primary labor appears before labor-dependent factors."""
+        return sorted(self.items, key=lambda item: 0 if self._is_primary_labor_item(item) else 1)
+
+    def _evaluate_items_for_fci(
+        self,
+        *,
+        sorted_items: List[OpexItemConfig],
+        item_calculator: Callable[[OpexItemConfig, Dict[str, float]], OpexResult],
+        fci: float,
+    ) -> Tuple[List[OpexResult], float]:
+        """
+        Evaluate all OPEX items for a given FCI with consistent labor-base handling.
+        """
+        base_costs = {
+            "FCI": float(fci),
+            "Labor": 0.0,
+            "C_OL": 0.0,
+        }
+        results: List[OpexResult] = []
+        labor_cost = 0.0
+
+        for item in sorted_items:
+            result = item_calculator(item, base_costs)
+            if self._is_primary_labor_item(item):
+                labor_cost = float(result.annual_cost)
+                base_costs["Labor"] = labor_cost
+                base_costs["C_OL"] = labor_cost
+            results.append(result)
+
+        return results, labor_cost
+
+    def _calculate_total_opex_for_fci(
+        self,
+        *,
+        sorted_items: List[OpexItemConfig],
+        item_calculator: Callable[[OpexItemConfig, Dict[str, float]], OpexResult],
+        fci: float,
+    ) -> float:
+        """Recompute total OPEX for a supplied FCI using the active config items."""
+        results, _ = self._evaluate_items_for_fci(
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+            fci=fci,
+        )
+        return float(sum(float(item.annual_cost) for item in results))
+
+    @staticmethod
+    def _to_positive_float(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        if parsed <= 0:
+            return None
+        return parsed
+
     def _apply_uncertainty_bands(
         self,
         report: OpexReport,
         capex_report: Optional[CapexReport],
-    ) -> None:
+    ) -> bool:
         """
         Apply low/high OPEX uncertainty bands using CAPEX AACE class factors.
 
@@ -79,27 +158,74 @@ class OpexGenerator:
             logger.warning(
                 "CAPEX report not provided; OPEX uncertainty bands (low/high) will be omitted."
             )
-            return
+            return False
 
         cost_class = getattr(capex_report, "overall_cost_class", None)
         if cost_class is None:
             logger.warning(
                 "CAPEX cost class not available; OPEX uncertainty bands (low/high) will be omitted."
             )
-            return
+            return False
 
         try:
             low_factor, high_factor = cost_class.accuracy_range
         except Exception as e:
             logger.warning(f"Could not derive AACE accuracy range for OPEX uncertainty: {e}")
-            return
+            return False
 
         try:
             report.total_opex_low = float(report.total_opex) * float(low_factor)
             report.total_opex_high = float(report.total_opex) * float(high_factor)
         except (TypeError, ValueError) as e:
             logger.warning(f"Could not compute OPEX uncertainty bands: {e}")
+            return False
+        return True
+
+    def _populate_opex_variants(
+        self,
+        *,
+        report: OpexReport,
+        capex_report: Optional[CapexReport],
+        sorted_items: List[OpexItemConfig],
+        item_calculator: Callable[[OpexItemConfig, Dict[str, float]], OpexResult],
+    ) -> None:
+        """
+        Populate OPEX low/high using CAPEX low/high recomputation, with AACE fallback.
+        """
+        report.total_opex_low = None
+        report.total_opex_high = None
+
+        if capex_report is None:
+            self._apply_uncertainty_bands(report, capex_report)
             return
+
+        capex_low = self._to_positive_float(getattr(capex_report, "total_installed_cost_low", None))
+        capex_high = self._to_positive_float(getattr(capex_report, "total_installed_cost_high", None))
+
+        if capex_low is not None and capex_high is not None:
+            report.total_opex_low = self._calculate_total_opex_for_fci(
+                sorted_items=sorted_items,
+                item_calculator=item_calculator,
+                fci=capex_low,
+            )
+            report.total_opex_high = self._calculate_total_opex_for_fci(
+                sorted_items=sorted_items,
+                item_calculator=item_calculator,
+                fci=capex_high,
+            )
+            logger.info(
+                "Computed OPEX low/high by recomputing config with CAPEX low/high "
+                "(low=%s, high=%s).",
+                f"{capex_low:,.0f}",
+                f"{capex_high:,.0f}",
+            )
+            return
+
+        logger.warning(
+            "CAPEX low/high are missing or non-positive; falling back to AACE-based "
+            "OPEX uncertainty bands."
+        )
+        self._apply_uncertainty_bands(report, capex_report)
     
     def generate(
         self,
@@ -137,35 +263,23 @@ class OpexGenerator:
             report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
             logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
         
-        # Base costs for factor calculations
-        base_costs = {
-            "FCI": report.fci,
-            "Labor": 0.0,
-            "C_OL": 0.0,
-        }
-        
-        # Sort items to ensure Labor is calculated before items dependent on it
-        sorted_items = sorted(
-            self.items,
-            key=lambda x: 0 if x.strategy == "turton_labor" else (1 if x.strategy == "fixed" and "Labor" in x.name else 2)
-        )
-        
-        # Calculate each item
-        for item in sorted_items:
-            result = self._calculate_item(
+        sorted_items = self._sorted_items()
+
+        def item_calculator(item: OpexItemConfig, base_costs: Dict[str, float]) -> OpexResult:
+            return self._calculate_item(
                 item=item,
                 history_df=history_df,
                 base_costs=base_costs,
                 annualization_factor=report.annualization_factor,
             )
-            
-            # Update base costs if this is a labor item
-            if "Labor" in item.name or item.strategy == "turton_labor":
-                base_costs["Labor"] = result.annual_cost
-                base_costs["C_OL"] = result.annual_cost
-                report.labor_cost = result.annual_cost
-            
-            report.items.append(result)
+
+        base_results, labor_cost = self._evaluate_items_for_fci(
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+            fci=report.fci,
+        )
+        report.items.extend(base_results)
+        report.labor_cost = labor_cost
         
         # Calculate H2 production from history
         if history_df is not None:
@@ -175,7 +289,12 @@ class OpexGenerator:
         
         # Calculate totals
         report.calculate_totals()
-        self._apply_uncertainty_bands(report, capex_report)
+        self._populate_opex_variants(
+            report=report,
+            capex_report=capex_report,
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+        )
         
         # Export if output_dir provided
         if output_dir:
@@ -242,13 +361,6 @@ class OpexGenerator:
             report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
             logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
         
-        # Base costs for factor calculations
-        base_costs = {
-            "FCI": report.fci,
-            "Labor": 0.0,
-            "C_OL": 0.0,
-        }
-        
         # Extract quantities from CSV using streaming
         csv_path = Path(csv_path)
         if csv_path.exists():
@@ -266,28 +378,23 @@ class OpexGenerator:
             quantities = {}
             logger.warning(f"CSV not found: {csv_path}")
         
-        # Sort items to ensure Labor is calculated before dependent items
-        sorted_items = sorted(
-            self.items,
-            key=lambda x: 0 if x.strategy == "turton_labor" else (1 if x.strategy == "fixed" and "Labor" in x.name else 2)
-        )
-        
-        # Calculate each item
-        for item in sorted_items:
-            result = self._calculate_item_streaming(
+        sorted_items = self._sorted_items()
+
+        def item_calculator(item: OpexItemConfig, base_costs: Dict[str, float]) -> OpexResult:
+            return self._calculate_item_streaming(
                 item=item,
                 quantities=quantities,
                 base_costs=base_costs,
                 annualization_factor=annualization_factor,
             )
-            
-            # Update base costs if this is a labor item
-            if "Labor" in item.name or item.strategy == "turton_labor":
-                base_costs["Labor"] = result.annual_cost
-                base_costs["C_OL"] = result.annual_cost
-                report.labor_cost = result.annual_cost
-            
-            report.items.append(result)
+
+        base_results, labor_cost = self._evaluate_items_for_fci(
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+            fci=report.fci,
+        )
+        report.items.extend(base_results)
+        report.labor_cost = labor_cost
         
         # Set H2 production from streaming extraction
         h2_entry = quantities.get('cumulative_h2_kg', 0.0)
@@ -298,7 +405,12 @@ class OpexGenerator:
         
         # Calculate totals
         report.calculate_totals()
-        self._apply_uncertainty_bands(report, capex_report)
+        self._populate_opex_variants(
+            report=report,
+            capex_report=capex_report,
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+        )
         
         # Export if output_dir provided
         if output_dir:
@@ -358,12 +470,6 @@ class OpexGenerator:
             report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
             logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
 
-        base_costs = {
-            "FCI": report.fci,
-            "Labor": 0.0,
-            "C_OL": 0.0,
-        }
-
         required_items = [
             item for item in self.items
             if item.strategy == "variable" and item.resource_id
@@ -372,25 +478,23 @@ class OpexGenerator:
         quantities = self._extract_quantities_parquet_chunks(chunks_dir, required_items)
         logger.info(f"Extracted {len(quantities)} quantities from Parquet chunks")
 
-        sorted_items = sorted(
-            self.items,
-            key=lambda x: 0 if x.strategy == "turton_labor" else (1 if x.strategy == "fixed" and "Labor" in x.name else 2)
-        )
+        sorted_items = self._sorted_items()
 
-        for item in sorted_items:
-            result = self._calculate_item_streaming(
+        def item_calculator(item: OpexItemConfig, base_costs: Dict[str, float]) -> OpexResult:
+            return self._calculate_item_streaming(
                 item=item,
                 quantities=quantities,
                 base_costs=base_costs,
                 annualization_factor=annualization_factor,
             )
 
-            if "Labor" in item.name or item.strategy == "turton_labor":
-                base_costs["Labor"] = result.annual_cost
-                base_costs["C_OL"] = result.annual_cost
-                report.labor_cost = result.annual_cost
-
-            report.items.append(result)
+        base_results, labor_cost = self._evaluate_items_for_fci(
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+            fci=report.fci,
+        )
+        report.items.extend(base_results)
+        report.labor_cost = labor_cost
 
         h2_entry = quantities.get('cumulative_h2_kg', 0.0)
         if isinstance(h2_entry, dict):
@@ -399,7 +503,12 @@ class OpexGenerator:
             report.annual_h2_production_kg = h2_entry * annualization_factor
 
         report.calculate_totals()
-        self._apply_uncertainty_bands(report, capex_report)
+        self._populate_opex_variants(
+            report=report,
+            capex_report=capex_report,
+            sorted_items=sorted_items,
+            item_calculator=item_calculator,
+        )
 
         if output_dir:
             output_path = Path(output_dir)

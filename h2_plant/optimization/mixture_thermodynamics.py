@@ -50,36 +50,17 @@ def get_mixture_enthalpy(
     lut_manager: 'LUTManager'
 ) -> float:
     """
-    Calculate mixture specific enthalpy using mass-weighted pure component enthalpies.
-    
-    h_mix = Σ w_i · h_i(P, T)
-    
-    Args:
-        composition_mass: Mass fractions {species: w_i}
-        P_pa: System pressure [Pa]
-        T_k: System temperature [K]
-        lut_manager: LUTManager instance for property lookups
-        
-    Returns:
-        Mixture specific enthalpy [J/kg]
+    Vectorized mixture enthalpy via single JIT call.
+    Species absent from config.fluids contribute 0.0 (matches existing behavior).
+    Out-of-bounds P/T clamps to LUT boundary — no CoolProp fallback.
+    Monitor lut_manager.clamp_counter during commissioning.
     """
-    h_mix = 0.0
-    
-    for species, w_i in composition_mass.items():
-        if w_i < 1e-9:
-            continue
-        if species in ('H2O_liq',):
-            # Liquid water - use H2O LUT at saturation or skip
-            continue
-            
-        try:
-            h_i = lut_manager.lookup(species, 'H', P_pa, T_k)
-            h_mix += w_i * h_i
-        except (ValueError, KeyError):
-            logger.debug(f"LUT lookup failed for {species}, skipping")
-            continue
-            
-    return h_mix
+    fluids = lut_manager.config.fluids
+    mass_fracs_arr = np.array(
+        [composition_mass.get(fluid, 0.0) for fluid in fluids],
+        dtype=np.float64
+    )
+    return lut_manager.lookup_mixture_enthalpy(mass_fracs_arr, P_pa, T_k)
 
 
 def get_mixture_entropy(

@@ -252,17 +252,18 @@ class SimulationEngine:
         # This shifts ~15s of compilation from random mid-loop steps to startup
         try:
             from h2_plant.optimization.numba_ops import warmup_jit_kernels
-            lut_mgr = None
-            for _, comp in self.registry.list_components():
-                if hasattr(comp, 'lut_manager'):
-                    lut_mgr = comp.lut_manager
-                    break
+            lut_mgr = next(
+                (comp.lut_manager for _, comp in self.registry.list_components()
+                 if hasattr(comp, 'lut_manager')), None
+            )
             logger.info("Pre-warming JIT kernels...")
             t0 = time.time()
             warmup_jit_kernels(lut_mgr)
-            logger.info(f"JIT warm-up complete: {time.time() - t0:.1f}s")
+            logger.info(f"JIT warm-up complete in {time.time() - t0:.1f}s")
+        except ImportError:
+            logger.warning("numba_ops not available — JIT warm-up skipped")
         except Exception as e:
-            logger.warning(f"JIT warm-up failed (non-fatal): {e}")
+            logger.error(f"JIT warm-up failed: {e}", exc_info=True)
 
         # Local variable optimization
         dispatch_decide = self._dispatch_decide_method
@@ -307,7 +308,7 @@ class SimulationEngine:
                     component.step(hour)
 
                 # Flow Propagation (physical mass/energy streams)
-                flow_execute(hour)
+                flow_execute(hour, step_idx=step)
 
                 # Dispatch Recording
                 if dispatch_record:

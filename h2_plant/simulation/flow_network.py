@@ -141,19 +141,19 @@ class FlowNetwork:
             unit = 'kg' if 'mass' in ft.lower() else 'kWh'
             self._conn_flow_meta[id(conn)] = (ft, unit)
 
-    def execute_flows(self, t: float) -> None:
+    def execute_flows(self, t: float, step_idx: int = 0) -> None:
         """
         Execute all non-signal flows for the current timestep.
         """
         for conn in self._flow_connections:
             try:
-                self._execute_single_flow(conn, t)
+                self._execute_single_flow(conn, t, step_idx)
             except Exception as e:
                 logger.error(f"Flow execution failed for {conn.source_id}->{conn.target_id}: {e}")
 
         for conn in self._indexed_connections:
             try:
-                self._execute_single_indexed_flow(conn, t)
+                self._execute_single_indexed_flow(conn, t, step_idx)
             except Exception as e:
                 logger.error(
                     f"Flow execution failed for "
@@ -170,7 +170,7 @@ class FlowNetwork:
             except Exception as e:
                 logger.error(f"Signal execution failed for {conn.source_id}->{conn.target_id}: {e}")
 
-    def _execute_single_flow(self, conn: ConnectionConfig, t: float) -> None:
+    def _execute_single_flow(self, conn: ConnectionConfig, t: float, step_idx: int = 0) -> None:
         """
         Execute a single legacy connection flow.
         """
@@ -226,7 +226,8 @@ class FlowNetwork:
                     destination_component=conn.target_id,
                     flow_type=flow_type,
                     amount=accepted_amount,
-                    unit=unit
+                    unit=unit,
+                    step_idx=step_idx
                 )
 
     def _resolve_component_id(self, name: str, index: int) -> str:
@@ -254,7 +255,7 @@ class FlowNetwork:
 
         return indexed_id
 
-    def _execute_single_indexed_flow(self, conn: IndexedConnectionConfig, t: float) -> None:
+    def _execute_single_indexed_flow(self, conn: IndexedConnectionConfig, t: float, step_idx: int = 0) -> None:
         """
         Execute a single indexed connection flow.
 
@@ -303,7 +304,8 @@ class FlowNetwork:
                     destination_component=target_id,
                     flow_type=flow_type,
                     amount=accepted_amount,
-                    unit='kg' if 'mass' in flow_type.lower() else 'kWh'
+                    unit='kg' if 'mass' in flow_type.lower() else 'kWh',
+                    step_idx=step_idx
                 )
 
     def _validate_connections(self) -> None:

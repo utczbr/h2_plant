@@ -56,8 +56,8 @@ class Stream:
                 self.composition[k] /= total_fraction
         
     def copy(self) -> 'Stream':
-        """Create a deep copy of the stream."""
-        return Stream(
+        """Deep copy preserving precomputed composition arrays and cached enthalpy."""
+        new_stream = Stream(
             mass_flow_kg_h=self.mass_flow_kg_h,
             temperature_k=self.temperature_k,
             pressure_pa=self.pressure_pa,
@@ -65,6 +65,19 @@ class Stream:
             phase=self.phase,
             extra=self.extra.copy()
         )
+        # Array cache — only when arrays have been computed (stream.py:43)
+        if self._arrays_cached:
+            new_stream._mass_fracs_arr = self._mass_fracs_arr.copy()
+            new_stream._mole_fracs_arr = self._mole_fracs_arr.copy()
+            new_stream._cached_M_mix = self._cached_M_mix
+            new_stream._cached_sum_ylny = self._cached_sum_ylny
+            new_stream._arrays_cached = True
+
+        # Enthalpy cache — independent of array cache (stream.py:58, stream.py:254)
+        if self._cached_enthalpy is not None:
+            new_stream._cached_enthalpy = self._cached_enthalpy
+
+        return new_stream
 
     def _cache_composition_arrays(self) -> None:
         """Compute canonical array representations using JIT optimization."""

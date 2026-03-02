@@ -129,9 +129,9 @@ opex_items:
   - name: "Catalyst Replacement (ATR)"
     category: "Maintenance"
     strategy: "fixed"
-    price: 2000.0                         # €6000 every 3 years, annualized
+    price: 2000.0                         # €2,000 per year (flat annual cost)
     notes:
-      - "Reformer catalyst life: 3 years"
+      - "Flat annual ATR catalyst replacement allowance"
 
   - name: "Stack Replacement Reserve (PEM)"
     category: "Maintenance"

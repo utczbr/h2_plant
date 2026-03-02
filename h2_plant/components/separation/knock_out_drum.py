@@ -772,6 +772,20 @@ class KnockOutDrum(Component):
         if self._gas_outlet_stream:
              entrained_liq = self._gas_outlet_stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
         
+        # Calculate outlet O2 impurity for crossover graph
+        outlet_o2_ppm = 0.0
+        stream = self._gas_outlet_stream
+        if stream and stream.mass_flow_kg_h > 0:
+            from h2_plant.core.stream import SPECIES_INDICES
+            if (stream._arrays_cached
+                    and not stream.extra.get('m_dot_H2O_liq_accomp_kg_s', 0.0)
+                    and not stream.composition.get('H2O_liq', 0.0)):
+                _, mole_fracs, _, _ = stream.get_composition_arrays()
+                o2_mol_frac = float(mole_fracs[SPECIES_INDICES['O2']])
+            else:
+                o2_mol_frac = stream.get_total_mole_frac('O2')
+            outlet_o2_ppm = o2_mol_frac * 1e6
+            
         state.update({
             'rho_g': self._rho_g,
             'v_max': self._v_max,
@@ -798,7 +812,7 @@ class KnockOutDrum(Component):
             'dissolved_gas_ppm': (self._dissolved_gas_kg_h / self._liquid_drain_stream.mass_flow_kg_h * 1e6) 
                                  if (self._liquid_drain_stream and self._liquid_drain_stream.mass_flow_kg_h > 0) else 0.0,
             'm_dot_H2O_liq_accomp_kg_s': entrained_liq,
-            'outlet_o2_ppm_mol': (self._gas_outlet_stream.get_total_mole_frac('O2') * 1e6) if self._gas_outlet_stream else 0.0,
+            'outlet_o2_ppm_mol': outlet_o2_ppm,
             
             # Standardized Graph Keys for Process Train Profile
             'outlet_mass_flow_kg_h': self._gas_outlet_stream.mass_flow_kg_h if self._gas_outlet_stream else 0.0,
