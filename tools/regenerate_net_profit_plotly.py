@@ -14,6 +14,9 @@ Usage:
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output --downscale hourly
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output --downscale none --history-dir /path/to/history_chunks
+    # Default (paired): CAPEX low/base/high with matching OPEX low/base/high
+    python tools/regenerate_net_profit_plotly.py scenarios/simulation_output
+    # Legacy uniform mode: force one OPEX variant for all CAPEX outputs
     python tools/regenerate_net_profit_plotly.py scenarios/simulation_output --opex-variant low
 """
 
@@ -71,6 +74,11 @@ OPEX_VARIANT_KEY_MAP = {
 }
 OPEX_VARIANT_SUFFIX = {
     "base": "",
+    "low": "_Opex_Low",
+    "high": "_Opex_High",
+}
+OPEX_VARIANT_SUFFIX_EXPLICIT = {
+    "base": "_Opex_Base",
     "low": "_Opex_Low",
     "high": "_Opex_High",
 }
@@ -537,6 +545,29 @@ def _extract_opex(report_path: Path, variant: str = "base") -> Optional[float]:
     return None
 
 
+def _extract_opex_variants(report_path: Path) -> Optional[Dict[str, Optional[float]]]:
+    try:
+        data = json.loads(report_path.read_text())
+    except Exception as e:
+        logger.warning(f"Failed to read OPEX report {report_path}: {e}")
+        return None
+
+    variants: Dict[str, Optional[float]] = {}
+    for variant, keys in OPEX_VARIANT_KEY_MAP.items():
+        parsed: Optional[float] = None
+        for key in keys:
+            val = data.get(key)
+            if val is None:
+                continue
+            try:
+                parsed = float(val)
+                break
+            except (TypeError, ValueError):
+                continue
+        variants[variant] = parsed
+    return variants
+
+
 def regenerate_net_profit_plotly(
     output_dir: Path,
     history_dir: Optional[str] = None,
@@ -544,7 +575,7 @@ def regenerate_net_profit_plotly(
     downsample_factor: int = 60,
     capex_override: Optional[float] = None,
     opex_override: Optional[float] = None,
-    opex_variant: str = "base",
+    opex_variant: Optional[str] = None,
     economics_dir: Optional[str] = None,
     h2_price_eur_kg: Optional[float] = None,
 ) -> int:
@@ -567,7 +598,6 @@ def regenerate_net_profit_plotly(
         return 1
 
     # Resolve CAPEX/OPEX from reports unless overridden
-    opex = opex_override
     candidates = [output_dir, output_dir / "Economics"]
     if output_dir.name.lower() == "economics":
         candidates.insert(0, output_dir)
@@ -589,23 +619,55 @@ def regenerate_net_profit_plotly(
     if capex_override is not None:
         logger.warning("--capex is ignored in multi-scenario mode. Using CAPEX low/base/high from capex_report.json.")
 
-    if opex is None:
-        opex_path = _find_report(candidates, "opex_report.json")
-        if opex_path:
-            opex = _extract_opex(opex_path, variant=opex_variant)
+    paired_mode = (opex_override is None and opex_variant is None)
+    opex_map: Dict[str, float] = {}
+    selected_uniform_variant = opex_variant or "base"
 
-    if opex is None:
-        if opex_variant == "base":
-            logger.error("OPEX not found. Provide opex_report.json or --opex.")
-        else:
-            expected_keys = ", ".join(OPEX_VARIANT_KEY_MAP[opex_variant])
+    if paired_mode:
+        opex_path = _find_report(candidates, "opex_report.json")
+        if not opex_path:
             logger.error(
-                "Requested OPEX variant '%s' not found in opex_report.json. "
-                "Expected one of: %s",
-                opex_variant,
-                expected_keys,
+                "OPEX report not found. Paired mode requires opex_report.json with "
+                "base/low/high OPEX variants."
             )
-        return 1
+            return 1
+        extracted = _extract_opex_variants(opex_path)
+        if not extracted:
+            logger.error("Failed to parse OPEX variants from opex_report.json.")
+            return 1
+        missing_variants = [v for v in ("low", "base", "high") if extracted.get(v) is None]
+        if missing_variants:
+            details = "; ".join(
+                f"{variant}: expected one of {', '.join(OPEX_VARIANT_KEY_MAP[variant])}"
+                for variant in missing_variants
+            )
+            logger.error(
+                "Paired CAPEX/OPEX mode requires all OPEX variants. Missing: %s. %s",
+                ", ".join(missing_variants),
+                details,
+            )
+            return 1
+        opex_map = {v: float(extracted[v]) for v in ("low", "base", "high")}
+    else:
+        opex_uniform = opex_override
+        if opex_uniform is None:
+            opex_path = _find_report(candidates, "opex_report.json")
+            if opex_path:
+                opex_uniform = _extract_opex(opex_path, variant=selected_uniform_variant)
+
+        if opex_uniform is None:
+            if selected_uniform_variant == "base":
+                logger.error("OPEX not found. Provide opex_report.json or --opex.")
+            else:
+                expected_keys = ", ".join(OPEX_VARIANT_KEY_MAP[selected_uniform_variant])
+                logger.error(
+                    "Requested OPEX variant '%s' not found in opex_report.json. "
+                    "Expected one of: %s",
+                    selected_uniform_variant,
+                    expected_keys,
+                )
+            return 1
+        opex_map = {variant: float(opex_uniform) for variant in ("low", "base", "high")}
 
     # Load lifecycle + reserve data for spikes
     topology_path = _find_topology_path(output_dir)
@@ -620,17 +682,28 @@ def regenerate_net_profit_plotly(
     discount_rate, project_lifetime_years = _load_financial_horizon(output_dir)
 
     kwargs = {}
-    kwargs["opex"] = opex
     kwargs["discount_rate"] = discount_rate
     kwargs["project_lifetime_years"] = project_lifetime_years
-    if opex_override is not None:
+    if paired_mode:
+        logger.info("Using paired CAPEX/OPEX mode (Low->Low, Base->Base, High->High).")
+        logger.info(
+            "Using OPEX variants: LOW=%s, BASE=%s, HIGH=%s",
+            f"{opex_map['low']:,.0f}",
+            f"{opex_map['base']:,.0f}",
+            f"{opex_map['high']:,.0f}",
+        )
+    elif opex_override is not None:
         logger.info(
             "Using OPEX override (--opex); --opex-variant=%s is ignored for value selection.",
-            opex_variant,
+            selected_uniform_variant,
         )
+        logger.info(f"Using OPEX uniformly across CAPEX variants: {opex_map['base']:,.0f}")
     else:
-        logger.info(f"Using OPEX variant: {opex_variant.upper()}")
-    logger.info(f"Using OPEX: {opex:,.0f}")
+        logger.info(
+            "Using legacy uniform OPEX mode from --opex-variant=%s for all CAPEX variants.",
+            selected_uniform_variant.upper(),
+        )
+        logger.info(f"Using OPEX uniformly across CAPEX variants: {opex_map['base']:,.0f}")
     if h2_price_eur_kg is not None:
         kwargs["h2_price_eur_kg"] = h2_price_eur_kg
         logger.info(f"Using H2 price override: {h2_price_eur_kg}")
@@ -646,15 +719,26 @@ def regenerate_net_profit_plotly(
 
     saved = 0
     base_filename = NET_PROFIT_TITLE.replace(" ", "_").replace("/", "_")
-    opex_suffix = OPEX_VARIANT_SUFFIX.get(opex_variant, "")
+    uniform_opex_suffix = OPEX_VARIANT_SUFFIX.get(selected_uniform_variant, "")
     for variant in ("low", "base", "high"):
         capex_val = capex_variants[variant]
         kwargs_variant = dict(kwargs)
         kwargs_variant["capex"] = capex_val
+        kwargs_variant["opex"] = opex_map[variant]
 
-        logger.info(f"Generating net profit graph for CAPEX {variant.upper()}: {capex_val:,.0f}")
+        logger.info(
+            "Generating net profit graph for CAPEX %s / OPEX %s: CAPEX=%s, OPEX=%s",
+            variant.upper(),
+            variant.upper() if paired_mode else selected_uniform_variant.upper(),
+            f"{capex_val:,.0f}",
+            f"{kwargs_variant['opex']:,.0f}",
+        )
         fig = plot_cumulative_net_profit(df, **kwargs_variant)
 
+        if paired_mode:
+            opex_suffix = OPEX_VARIANT_SUFFIX_EXPLICIT[variant]
+        else:
+            opex_suffix = uniform_opex_suffix
         filename = f"{base_filename}{CAPEX_VARIANT_SUFFIX[variant]}{opex_suffix}.html"
         output_path = graphs_dir / filename
         fig.write_html(
@@ -717,9 +801,12 @@ def main() -> None:
         help="Override OPEX value (EUR/year)"
     )
     parser.add_argument(
-        "--opex-variant", type=str, default="base",
+        "--opex-variant", type=str, default=None,
         choices=["base", "low", "high"],
-        help="OPEX variant from opex_report.json (default: base)"
+        help=(
+            "Force one OPEX variant from opex_report.json for all CAPEX outputs "
+            "(legacy uniform mode). If omitted, paired mode is used."
+        )
     )
     parser.add_argument(
         "--economics-dir", type=str, default=None,

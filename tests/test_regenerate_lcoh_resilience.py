@@ -87,7 +87,7 @@ def test_regenerate_lcoh_main_exits_cleanly_on_value_error(tmp_path, monkeypatch
     monkeypatch.setattr(regenerate_lcoh, "_load_json_report", lambda *_args, **_kwargs: object())
 
     class _FailingCalculator:
-        def generate(self, _inputs):
+        def generate_variants(self, _inputs):
             raise ValueError("History chunks are on a disconnected mount (Errno 107).")
 
     monkeypatch.setattr(regenerate_lcoh, "LcohCalculator", lambda: _FailingCalculator())

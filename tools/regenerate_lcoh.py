@@ -141,7 +141,7 @@ def main() -> None:
 
     calc = LcohCalculator()
     try:
-        report = calc.generate(LcohInputs(
+        report = calc.generate_variants(LcohInputs(
             capex_report=capex_report,
             opex_report=opex_report,
             history_chunks_dir=history_chunks,
@@ -160,40 +160,75 @@ def main() -> None:
 
     json_path.write_text(report.model_dump_json(indent=2))
 
-    # Simple CSV export
+    # Combined CSV export (low/base/high variants)
     import csv
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
-        writer.writerow(["Metric", "Value"])
-        writer.writerow(["discount_rate", report.discount_rate])
-        writer.writerow(["project_lifetime_years", report.project_lifetime_years])
-        writer.writerow(["discount_factor_sum", report.discount_factor_sum])
-        writer.writerow(["capex_total", report.capex_total])
-        writer.writerow(["opex_annual_total", report.opex_annual_total])
-        writer.writerow(["annual_h2_total_kg", report.annual_h2_total_kg])
-        writer.writerow(["lcoh_total", report.lcoh_total])
-        writer.writerow(["lcoh_weighted_plant", report.lcoh_weighted_plant])
-        writer.writerow([])
-        writer.writerow(["Pathway", "Annual_H2_kg", "CAPEX", "OPEX", "LCOH"])
-        for key in ["pem", "soec", "atr"]:
+        writer.writerow(["Plant Summary by Variant"])
+        writer.writerow([
+            "Variant", "discount_rate", "project_lifetime_years",
+            "discount_factor_sum", "capex_total", "opex_annual_total",
+            "annual_h2_total_kg", "lcoh_total", "lcoh_weighted_plant",
+        ])
+        for variant in report.variant_order:
+            variant_report = report.variants.get(variant)
+            if not variant_report:
+                continue
             writer.writerow([
-                key,
-                report.annual_h2_by_pathway.get(key, 0.0),
-                report.capex_by_pathway.get(key, 0.0),
-                report.opex_by_pathway.get(key, 0.0),
-                report.lcoh_by_pathway.get(key, 0.0),
+                variant,
+                variant_report.discount_rate,
+                variant_report.project_lifetime_years,
+                variant_report.discount_factor_sum,
+                variant_report.capex_total,
+                variant_report.opex_annual_total,
+                variant_report.annual_h2_total_kg,
+                variant_report.lcoh_total,
+                variant_report.lcoh_weighted_plant,
             ])
 
         writer.writerow([])
-        writer.writerow(["LCOH Breakdown"])
-        for k, v in report.lcoh_breakdown.items():
-            writer.writerow([k, v])
+        writer.writerow(["Pathway Metrics by Variant"])
+        writer.writerow(["Variant", "Pathway", "Annual_H2_kg", "CAPEX", "OPEX", "LCOH"])
+        for variant in report.variant_order:
+            variant_report = report.variants.get(variant)
+            if not variant_report:
+                continue
+            for key in ["pem", "soec", "atr"]:
+                writer.writerow([
+                    variant,
+                    key,
+                    variant_report.annual_h2_by_pathway.get(key, 0.0),
+                    variant_report.capex_by_pathway.get(key, 0.0),
+                    variant_report.opex_by_pathway.get(key, 0.0),
+                    variant_report.lcoh_by_pathway.get(key, 0.0),
+                ])
+
+        writer.writerow([])
+        writer.writerow(["LCOH Breakdown by Variant"])
+        writer.writerow(["Variant", "Component", "Value"])
+        for variant in report.variant_order:
+            variant_report = report.variants.get(variant)
+            if not variant_report:
+                continue
+            for k, v in variant_report.lcoh_breakdown.items():
+                writer.writerow([variant, k, v])
 
         if report.warnings:
             writer.writerow([])
             writer.writerow(["Warnings"])
             for w in report.warnings:
                 writer.writerow([w])
+
+    lcoh_low = report.variants.get("low")
+    lcoh_base = report.variants.get("base")
+    lcoh_high = report.variants.get("high")
+    if lcoh_low and lcoh_base and lcoh_high:
+        logger.info(
+            "LCOH variants generated (paired): LOW=%s EUR/kg, BASE=%s EUR/kg, HIGH=%s EUR/kg",
+            f"{lcoh_low.lcoh_total:,.4f}",
+            f"{lcoh_base.lcoh_total:,.4f}",
+            f"{lcoh_high.lcoh_total:,.4f}",
+        )
 
     logger.info(f"LCOH report generated: {json_path}")
     logger.info(f"LCOH CSV generated: {csv_path}")

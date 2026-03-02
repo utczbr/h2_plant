@@ -18,7 +18,7 @@ def _write_capex_report(path: Path):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def _run_regen(monkeypatch, tmp_path, opex_payload, opex_variant="base"):
+def _run_regen(monkeypatch, tmp_path, opex_payload, opex_variant=None):
     output_dir = tmp_path / "simulation_output"
     output_dir.mkdir()
 
@@ -42,6 +42,8 @@ def _run_regen(monkeypatch, tmp_path, opex_payload, opex_variant="base"):
     monkeypatch.setattr(regen, "_load_minimal_history", lambda *_args, **_kwargs: dummy_df)
 
     written_names = []
+    used_opex = []
+    used_capex = []
 
     class DummyFig:
         def write_html(self, path, **_kwargs):
@@ -50,6 +52,8 @@ def _run_regen(monkeypatch, tmp_path, opex_payload, opex_variant="base"):
             written_names.append(out.name)
 
     def fake_plot_cumulative_net_profit(_df, **_kwargs):
+        used_opex.append(_kwargs.get("opex"))
+        used_capex.append(_kwargs.get("capex"))
         return DummyFig()
 
     monkeypatch.setitem(
@@ -58,34 +62,41 @@ def _run_regen(monkeypatch, tmp_path, opex_payload, opex_variant="base"):
         types.SimpleNamespace(plot_cumulative_net_profit=fake_plot_cumulative_net_profit),
     )
 
-    rc = regen.regenerate_net_profit_plotly(
+    call_kwargs = dict(
         output_dir=output_dir,
         downsample_factor=60,
-        opex_variant=opex_variant,
     )
-    return rc, output_dir / "graphs", written_names
+    if opex_variant is not None:
+        call_kwargs["opex_variant"] = opex_variant
+    rc = regen.regenerate_net_profit_plotly(**call_kwargs)
+    return rc, output_dir / "graphs", written_names, used_opex, used_capex
 
 
-def test_regenerate_net_profit_default_uses_base_opex_and_legacy_filenames(monkeypatch, tmp_path):
-    rc, graphs_dir, names = _run_regen(
+def test_regenerate_net_profit_default_pairs_capex_and_opex_variants(monkeypatch, tmp_path):
+    rc, graphs_dir, names, opex_values, capex_values = _run_regen(
         monkeypatch,
         tmp_path,
-        opex_payload={"total_opex": 1000.0},
-        opex_variant="base",
+        opex_payload={
+            "total_opex": 1000.0,
+            "total_opex_low": 900.0,
+            "total_opex_high": 1100.0,
+        },
     )
     assert rc == 0
     assert sorted(names) == sorted(
         [
-            "Cumulative_Net_Profit_(Interactive)_Capex_Low.html",
-            "Cumulative_Net_Profit_(Interactive)_Capex_Base.html",
-            "Cumulative_Net_Profit_(Interactive)_Capex_High.html",
+            "Cumulative_Net_Profit_(Interactive)_Capex_Low_Opex_Low.html",
+            "Cumulative_Net_Profit_(Interactive)_Capex_Base_Opex_Base.html",
+            "Cumulative_Net_Profit_(Interactive)_Capex_High_Opex_High.html",
         ]
     )
+    assert opex_values == [900.0, 1000.0, 1100.0]
+    assert capex_values == [100.0, 200.0, 300.0]
     assert len(list(graphs_dir.glob("*.html"))) == 3
 
 
-def test_regenerate_net_profit_low_opex_variant_adds_filename_suffix(monkeypatch, tmp_path):
-    rc, graphs_dir, names = _run_regen(
+def test_regenerate_net_profit_low_opex_variant_keeps_legacy_uniform_mode(monkeypatch, tmp_path):
+    rc, graphs_dir, names, opex_values, capex_values = _run_regen(
         monkeypatch,
         tmp_path,
         opex_payload={"total_opex_low": 900.0},
@@ -99,12 +110,14 @@ def test_regenerate_net_profit_low_opex_variant_adds_filename_suffix(monkeypatch
             "Cumulative_Net_Profit_(Interactive)_Capex_High_Opex_Low.html",
         ]
     )
+    assert opex_values == [900.0, 900.0, 900.0]
+    assert capex_values == [100.0, 200.0, 300.0]
     assert len(list(graphs_dir.glob("*.html"))) == 3
 
 
 def test_regenerate_net_profit_low_opex_missing_fails_fast(monkeypatch, tmp_path, caplog):
     caplog.set_level(logging.ERROR)
-    rc, graphs_dir, names = _run_regen(
+    rc, graphs_dir, names, _opex_values, _capex_values = _run_regen(
         monkeypatch,
         tmp_path,
         opex_payload={"total_opex": 1000.0},
@@ -114,3 +127,17 @@ def test_regenerate_net_profit_low_opex_missing_fails_fast(monkeypatch, tmp_path
     assert names == []
     assert len(list(graphs_dir.glob("*.html"))) == 0
     assert "Requested OPEX variant 'low' not found" in caplog.text
+
+
+def test_regenerate_net_profit_paired_mode_missing_variant_fails_fast(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.ERROR)
+    rc, graphs_dir, names, _opex_values, _capex_values = _run_regen(
+        monkeypatch,
+        tmp_path,
+        opex_payload={"total_opex": 1000.0, "total_opex_low": 900.0},
+        opex_variant=None,
+    )
+    assert rc == 1
+    assert names == []
+    assert len(list(graphs_dir.glob("*.html"))) == 0
+    assert "Paired CAPEX/OPEX mode requires all OPEX variants" in caplog.text

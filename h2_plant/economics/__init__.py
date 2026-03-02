@@ -22,7 +22,7 @@ from h2_plant.economics.cost_strategies import (
     VendorQuoteStrategy,
 )
 from h2_plant.economics.lcoh_calculator import LcohCalculator
-from h2_plant.economics.lcoh_models import LcohReport
+from h2_plant.economics.lcoh_models import LcohReport, LcohVariantsReport
 
 __all__ = [
     "CapexGenerator",
@@ -36,4 +36,5 @@ __all__ = [
     "VendorQuoteStrategy",
     "LcohCalculator",
     "LcohReport",
+    "LcohVariantsReport",
 ]

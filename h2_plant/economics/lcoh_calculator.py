@@ -10,14 +10,14 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict
 
 import numpy as np
 import pandas as pd
 
 from h2_plant.economics.models import CapexReport, BlockCostSummary
 from h2_plant.economics.opex_models import OpexReport
-from h2_plant.economics.lcoh_models import LcohReport
+from h2_plant.economics.lcoh_models import LcohReport, LcohVariantsReport
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,23 @@ class LcohInputs:
 
 class LcohCalculator:
     """Calculate discounted LCOH for plant and pathways."""
+
+    VARIANT_ORDER = ("low", "base", "high")
+    CAPEX_VARIANT_TOTAL_FIELDS = {
+        "low": "total_installed_cost_low",
+        "base": "total_installed_cost",
+        "high": "total_installed_cost_high",
+    }
+    CAPEX_VARIANT_BLOCK_FIELDS = {
+        "low": "total_installed_cost_low",
+        "base": "total_installed_cost",
+        "high": "total_installed_cost_high",
+    }
+    OPEX_VARIANT_TOTAL_FIELDS = {
+        "low": "total_opex_low",
+        "base": "total_opex",
+        "high": "total_opex_high",
+    }
 
     @staticmethod
     def _raise_disconnected_mount(path: Path, exc: OSError) -> None:
@@ -50,6 +67,26 @@ class LcohCalculator:
             return float(n)
         years = np.arange(1, n + 1, dtype=float)
         return float(np.sum(1.0 / ((1.0 + r) ** years)))
+
+    @staticmethod
+    def _safe_div(num: float, den: float) -> float:
+        if den <= 0:
+            return 0.0
+        return num / den
+
+    @staticmethod
+    def _to_positive_float(value, field_name: str, variant: str) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Missing or invalid {field_name} for LCOH variant '{variant}'."
+            ) from None
+        if parsed <= 0:
+            raise ValueError(
+                f"Missing or non-positive {field_name} for LCOH variant '{variant}'."
+            )
+        return parsed
 
     def _load_h2_totals(self, chunks_dir: Path) -> Dict[str, float]:
         try:
@@ -138,43 +175,13 @@ class LcohCalculator:
                 sim_hours += dt_h
         return {**totals, "simulation_hours": sim_hours}
 
-    def _allocate_capex_by_block(
+    def _resolve_annual_production(
         self,
-        block_summaries: list[BlockCostSummary],
-        fallback_shares: Dict[str, float],
-        warnings: list[str]
-    ) -> Dict[str, float]:
-        capex_by = {"pem": 0.0, "soec": 0.0, "atr": 0.0}
-        block_map = {
-            "pem": ["pem"],
-            "soec": ["soec"],
-            "atr": ["atr"],
-        }
-        matched = {"pem": False, "soec": False, "atr": False}
-
-        for block in block_summaries:
-            block_name = block.block_name.lower()
-            for key, tokens in block_map.items():
-                if any(tok in block_name for tok in tokens):
-                    capex_by[key] += float(block.total_installed_cost or 0.0)
-                    matched[key] = True
-
-        for key, ok in matched.items():
-            if not ok:
-                share = fallback_shares.get(key, 0.0)
-                warnings.append(
-                    f"CAPEX block for {key.upper()} missing; allocating by production share ({share:.2%})."
-                )
-
-        return capex_by, matched
-
-    def generate(self, inputs: LcohInputs) -> LcohReport:
-        capex_report = inputs.capex_report
-        opex_report = inputs.opex_report
-
-        warnings: list[str] = []
-
-        totals = self._load_h2_totals(inputs.history_chunks_dir)
+        history_chunks_dir: Path,
+        opex_report: OpexReport,
+        warnings: list[str],
+    ) -> tuple[Dict[str, float], float, Dict[str, float]]:
+        totals = self._load_h2_totals(history_chunks_dir)
         sim_hours = totals.pop("simulation_hours")
 
         annual_factor = 0.0
@@ -191,53 +198,143 @@ class LcohCalculator:
 
         annual_by = {k: v * annual_factor for k, v in totals.items()}
         annual_total = sum(annual_by.values())
-
         if annual_total <= 0:
             warnings.append("Annual H2 production is zero; LCOH will be zeroed.")
 
-        # Production shares for fallback allocation
-        prod_shares = {k: (annual_by[k] / annual_total) if annual_total > 0 else 0.0 for k in annual_by}
+        prod_shares = {
+            k: (annual_by[k] / annual_total) if annual_total > 0 else 0.0
+            for k in annual_by
+        }
+        return annual_by, annual_total, prod_shares
 
-        capex_total = float(capex_report.total_installed_cost or capex_report.total_C_BM or 0.0)
-        capex_by, matched = self._allocate_capex_by_block(capex_report.block_summaries, prod_shares, warnings)
+    def _extract_capex_variant_totals(
+        self,
+        capex_report: CapexReport,
+        strict: bool,
+    ) -> Dict[str, float]:
+        if not strict:
+            base_total = float(capex_report.total_installed_cost or capex_report.total_C_BM or 0.0)
+            return {"base": base_total}
+
+        totals: Dict[str, float] = {}
+        for variant in self.VARIANT_ORDER:
+            field = self.CAPEX_VARIANT_TOTAL_FIELDS[variant]
+            totals[variant] = self._to_positive_float(
+                getattr(capex_report, field, None),
+                field_name=field,
+                variant=variant,
+            )
+        return totals
+
+    def _extract_opex_variant_totals(
+        self,
+        opex_report: OpexReport,
+        strict: bool,
+    ) -> Dict[str, float]:
+        if not strict:
+            return {"base": float(opex_report.total_opex or 0.0)}
+
+        totals: Dict[str, float] = {}
+        for variant in self.VARIANT_ORDER:
+            field = self.OPEX_VARIANT_TOTAL_FIELDS[variant]
+            totals[variant] = self._to_positive_float(
+                getattr(opex_report, field, None),
+                field_name=field,
+                variant=variant,
+            )
+        return totals
+
+    def _allocate_capex_by_block(
+        self,
+        *,
+        block_summaries: list[BlockCostSummary],
+        fallback_shares: Dict[str, float],
+        warnings: list[str],
+        variant: str,
+    ) -> tuple[Dict[str, float], Dict[str, bool]]:
+        capex_by = {"pem": 0.0, "soec": 0.0, "atr": 0.0}
+        block_map = {
+            "pem": ["pem"],
+            "soec": ["soec"],
+            "atr": ["atr"],
+        }
+        matched = {"pem": False, "soec": False, "atr": False}
+        block_total_field = self.CAPEX_VARIANT_BLOCK_FIELDS[variant]
+
+        for block in block_summaries:
+            block_name = block.block_name.lower()
+            for key, tokens in block_map.items():
+                if any(tok in block_name for tok in tokens):
+                    capex_by[key] += float(getattr(block, block_total_field, 0.0) or 0.0)
+                    matched[key] = True
+
+        for key, ok in matched.items():
+            if not ok:
+                share = fallback_shares.get(key, 0.0)
+                warnings.append(
+                    f"CAPEX block for {key.upper()} missing in {variant.upper()} variant; "
+                    f"allocating by production share ({share:.2%})."
+                )
+
+        return capex_by, matched
+
+    def _build_variant_report(
+        self,
+        *,
+        variant: str,
+        capex_total: float,
+        opex_total: float,
+        annual_by: Dict[str, float],
+        annual_total: float,
+        prod_shares: Dict[str, float],
+        discount_rate: float,
+        project_years: int,
+        capex_report: CapexReport,
+        shared_warnings: list[str],
+        generated_at: str,
+    ) -> LcohReport:
+        warnings = list(shared_warnings)
+
+        capex_by, matched = self._allocate_capex_by_block(
+            block_summaries=capex_report.block_summaries,
+            fallback_shares=prod_shares,
+            warnings=warnings,
+            variant=variant,
+        )
         for key, ok in matched.items():
             if not ok:
                 capex_by[key] = capex_total * prod_shares.get(key, 0.0)
 
-        opex_total = float(opex_report.total_opex or 0.0)
         opex_by = {k: opex_total * prod_shares.get(k, 0.0) for k in annual_by}
-
-        df_sum = self._discount_factor_sum(inputs.discount_rate, inputs.project_years)
-
-        def _safe_div(num: float, den: float) -> float:
-            if den <= 0:
-                return 0.0
-            return num / den
+        df_sum = self._discount_factor_sum(discount_rate, project_years)
 
         pv_h2_total = annual_total * df_sum
-        lcoh_total = _safe_div(capex_total + (opex_total * df_sum), pv_h2_total)
+        lcoh_total = self._safe_div(capex_total + (opex_total * df_sum), pv_h2_total)
 
         lcoh_by = {}
-        for key in ["pem", "soec", "atr"]:
+        for key in ("pem", "soec", "atr"):
             pv_h2 = annual_by.get(key, 0.0) * df_sum
-            lcoh_by[key] = _safe_div(capex_by.get(key, 0.0) + (opex_by.get(key, 0.0) * df_sum), pv_h2)
+            lcoh_by[key] = self._safe_div(
+                capex_by.get(key, 0.0) + (opex_by.get(key, 0.0) * df_sum),
+                pv_h2,
+            )
 
         weighted = 0.0
         if annual_total > 0:
             weighted = sum(lcoh_by[k] * annual_by.get(k, 0.0) for k in lcoh_by) / annual_total
 
         breakdown = {
-            "capex": _safe_div(capex_total, pv_h2_total),
-            "opex": _safe_div(opex_total * df_sum, pv_h2_total),
+            "capex": self._safe_div(capex_total, pv_h2_total),
+            "opex": self._safe_div(opex_total * df_sum, pv_h2_total),
             "energy": 0.0,
             "water": 0.0,
             "compression": 0.0,
         }
 
         return LcohReport(
-            generated_at=datetime.now().isoformat(),
-            discount_rate=inputs.discount_rate,
-            project_lifetime_years=inputs.project_years,
+            generated_at=generated_at,
+            discount_rate=discount_rate,
+            project_lifetime_years=project_years,
             discount_factor_sum=df_sum,
             capex_total=capex_total,
             opex_annual_total=opex_total,
@@ -250,4 +347,86 @@ class LcohCalculator:
             lcoh_weighted_plant=weighted,
             lcoh_breakdown=breakdown,
             warnings=warnings,
+        )
+
+    def generate(self, inputs: LcohInputs) -> LcohReport:
+        warnings: list[str] = []
+        annual_by, annual_total, prod_shares = self._resolve_annual_production(
+            history_chunks_dir=inputs.history_chunks_dir,
+            opex_report=inputs.opex_report,
+            warnings=warnings,
+        )
+        capex_total = self._extract_capex_variant_totals(inputs.capex_report, strict=False)["base"]
+        opex_total = self._extract_opex_variant_totals(inputs.opex_report, strict=False)["base"]
+        generated_at = datetime.now().isoformat()
+        return self._build_variant_report(
+            variant="base",
+            capex_total=capex_total,
+            opex_total=opex_total,
+            annual_by=annual_by,
+            annual_total=annual_total,
+            prod_shares=prod_shares,
+            discount_rate=inputs.discount_rate,
+            project_years=inputs.project_years,
+            capex_report=inputs.capex_report,
+            shared_warnings=warnings,
+            generated_at=generated_at,
+        )
+
+    def generate_variants(self, inputs: LcohInputs) -> LcohVariantsReport:
+        shared_warnings: list[str] = []
+        annual_by, annual_total, prod_shares = self._resolve_annual_production(
+            history_chunks_dir=inputs.history_chunks_dir,
+            opex_report=inputs.opex_report,
+            warnings=shared_warnings,
+        )
+
+        capex_totals = self._extract_capex_variant_totals(inputs.capex_report, strict=True)
+        opex_totals = self._extract_opex_variant_totals(inputs.opex_report, strict=True)
+
+        generated_at = datetime.now().isoformat()
+        variants: Dict[str, LcohReport] = {}
+        for variant in self.VARIANT_ORDER:
+            variants[variant] = self._build_variant_report(
+                variant=variant,
+                capex_total=capex_totals[variant],
+                opex_total=opex_totals[variant],
+                annual_by=annual_by,
+                annual_total=annual_total,
+                prod_shares=prod_shares,
+                discount_rate=inputs.discount_rate,
+                project_years=inputs.project_years,
+                capex_report=inputs.capex_report,
+                shared_warnings=shared_warnings,
+                generated_at=generated_at,
+            )
+
+        combined_warnings: list[str] = []
+        for warning in shared_warnings:
+            if warning not in combined_warnings:
+                combined_warnings.append(warning)
+        for variant in self.VARIANT_ORDER:
+            for warning in variants[variant].warnings:
+                if warning not in combined_warnings:
+                    combined_warnings.append(warning)
+
+        base_report = variants["base"]
+        return LcohVariantsReport(
+            generated_at=generated_at,
+            discount_rate=inputs.discount_rate,
+            project_lifetime_years=inputs.project_years,
+            variant_order=list(self.VARIANT_ORDER),
+            variants=variants,
+            warnings=combined_warnings,
+            discount_factor_sum=base_report.discount_factor_sum,
+            capex_total=base_report.capex_total,
+            opex_annual_total=base_report.opex_annual_total,
+            annual_h2_total_kg=base_report.annual_h2_total_kg,
+            annual_h2_by_pathway=base_report.annual_h2_by_pathway,
+            capex_by_pathway=base_report.capex_by_pathway,
+            opex_by_pathway=base_report.opex_by_pathway,
+            lcoh_total=base_report.lcoh_total,
+            lcoh_by_pathway=base_report.lcoh_by_pathway,
+            lcoh_weighted_plant=base_report.lcoh_weighted_plant,
+            lcoh_breakdown=base_report.lcoh_breakdown,
         )
