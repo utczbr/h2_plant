@@ -3,14 +3,14 @@
   "schema_version": "1.0",
   "visual_fidelity_schema_version": 1,
   "metadata": {
-    "name": "Plant Topology Visual Twin",
+    "name": "Plant Topology Visual Twin (SOEC + PEM + ATR)",
     "version": "1.0",
-    "created": "2026-02-18T14:30:40.235317",
-    "modified": "2026-02-18T14:30:40.235334",
+    "created": "2026-03-02T12:14:31.519948",
+    "modified": "2026-03-02T12:14:31.519955",
     "author": "Scenario Visual Importer",
-    "description": "Visual twin generated from scenario: Plant Topology Visual Twin",
+    "description": "Visual twin generated from scenario: Plant Topology Visual Twin (SOEC + PEM + ATR)",
     "tags": [],
-    "checksum": "73a22d8e00f8a04ee34ba90c43fd7397665784b1e60b8709c7ea246299aafa2c"
+    "checksum": "744036dd287db4d46589ffcb92ff9a4b4fc5d5c9b143c0300d4e4918c841416c"
   },
   "canvas_state": {
     "zoom_level": 1.0,
@@ -54,8 +54,8 @@
         "__scenario_backend_type": "CoolingManager"
       },
       "geometry": {
-        "x": 780.0,
-        "y": 0.0,
+        "x": 120.0,
+        "y": 120.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -107,8 +107,8 @@
         "__scenario_backend_type": "ExternalWaterSource"
       },
       "geometry": {
-        "x": 0.0,
-        "y": 0.0,
+        "x": 440.0,
+        "y": 240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -156,8 +156,8 @@
         "__scenario_backend_type": "WaterPurifier"
       },
       "geometry": {
-        "x": 220.0,
-        "y": 140.0,
+        "x": 700.0,
+        "y": 240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -213,8 +213,8 @@
         "__scenario_backend_type": "UltraPureWaterTank"
       },
       "geometry": {
-        "x": 440.0,
-        "y": 280.0,
+        "x": 960.0,
+        "y": 240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -264,8 +264,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 9940.0,
-        "y": 3680.0,
+        "x": 4020.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -309,8 +309,8 @@
         "__scenario_backend_type": "PowerTransformer"
       },
       "geometry": {
-        "x": 1340.0,
-        "y": 2440.0,
+        "x": 1940.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -354,8 +354,8 @@
         "__scenario_backend_type": "PowerTransformer"
       },
       "geometry": {
-        "x": 8940.0,
-        "y": 3030.0,
+        "x": 4540.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -399,8 +399,8 @@
         "__scenario_backend_type": "PowerTransformer"
       },
       "geometry": {
-        "x": 13600.0,
-        "y": 0.0,
+        "x": 8040.0,
+        "y": 1480.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -455,8 +455,8 @@
         "__scenario_backend_type": "SOEC"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 2300.0,
+        "x": 120.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -504,8 +504,8 @@
         "__scenario_backend_type": "Interchanger"
       },
       "geometry": {
-        "x": 1560.0,
-        "y": 3750.0,
+        "x": 4660.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -551,8 +551,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 2000.0,
-        "y": 4040.0,
+        "x": 4920.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -599,8 +599,8 @@
         "__scenario_backend_type": "KnockOutDrum"
       },
       "geometry": {
-        "x": 2220.0,
-        "y": 5030.0,
+        "x": 5180.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -648,8 +648,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 2660.0,
-        "y": 3460.0,
+        "x": 2460.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -695,8 +695,8 @@
         "__scenario_backend_type": "Chiller"
       },
       "geometry": {
-        "x": 2440.0,
-        "y": 5320.0,
+        "x": 5440.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -743,8 +743,8 @@
         "__scenario_backend_type": "KnockOutDrum"
       },
       "geometry": {
-        "x": 2880.0,
-        "y": 5170.0,
+        "x": 5700.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -792,8 +792,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 3100.0,
-        "y": 3600.0,
+        "x": 2720.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -841,8 +841,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 3320.0,
-        "y": 5610.0,
+        "x": 5960.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -892,8 +892,8 @@
         "__scenario_backend_type": "ElectricBoiler"
       },
       "geometry": {
-        "x": 3540.0,
-        "y": 1570.0,
+        "x": 6220.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -943,8 +943,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 3760.0,
-        "y": 430.0,
+        "x": 6480.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -992,8 +992,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 3980.0,
-        "y": 4180.0,
+        "x": 6740.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1043,8 +1043,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 4200.0,
-        "y": 570.0,
+        "x": 7000.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1092,8 +1092,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 4420.0,
-        "y": 4320.0,
+        "x": 7260.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1141,8 +1141,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 4640.0,
-        "y": 5750.0,
+        "x": 7520.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1192,8 +1192,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 4860.0,
-        "y": 710.0,
+        "x": 7780.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1241,8 +1241,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 5080.0,
-        "y": 4460.0,
+        "x": 8040.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1290,8 +1290,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 5300.0,
-        "y": 5890.0,
+        "x": 8300.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1341,8 +1341,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 5520.0,
-        "y": 850.0,
+        "x": 8560.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1390,8 +1390,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 5740.0,
-        "y": 4600.0,
+        "x": 8820.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1439,8 +1439,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 5960.0,
-        "y": 6030.0,
+        "x": 9080.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1490,8 +1490,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 6180.0,
-        "y": 990.0,
+        "x": 9340.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1539,8 +1539,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 6400.0,
-        "y": 4740.0,
+        "x": 9600.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1588,8 +1588,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 6620.0,
-        "y": 6170.0,
+        "x": 9860.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1639,8 +1639,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 6840.0,
-        "y": 1130.0,
+        "x": 10120.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1688,8 +1688,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 7060.0,
-        "y": 4880.0,
+        "x": 10380.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1731,8 +1731,8 @@
         "__scenario_backend_type": "DeoxoReactor"
       },
       "geometry": {
-        "x": 7280.0,
-        "y": 6460.0,
+        "x": 10640.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1778,8 +1778,8 @@
         "__scenario_backend_type": "Chiller"
       },
       "geometry": {
-        "x": 7500.0,
-        "y": 5460.0,
+        "x": 10900.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1827,8 +1827,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 7720.0,
-        "y": 6310.0,
+        "x": 11160.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1872,8 +1872,8 @@
         "__scenario_backend_type": "Coalescer"
       },
       "geometry": {
-        "x": 7940.0,
-        "y": 6610.0,
+        "x": 11420.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1919,8 +1919,8 @@
         "__scenario_backend_type": "ElectricBoiler"
       },
       "geometry": {
-        "x": 8160.0,
-        "y": 1710.0,
+        "x": 11680.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -1964,8 +1964,8 @@
         "__scenario_backend_type": "PSA Unit"
       },
       "geometry": {
-        "x": 8380.0,
-        "y": 2150.0,
+        "x": 11940.0,
+        "y": 920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2012,8 +2012,8 @@
         "__scenario_backend_type": "Interchanger"
       },
       "geometry": {
-        "x": 1780.0,
-        "y": 3890.0,
+        "x": 2200.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2062,8 +2062,8 @@
         "__scenario_backend_type": "DrainRecorderMixer"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 1280.0,
+        "x": 380.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2109,8 +2109,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 3180.0,
+        "x": 640.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2153,8 +2153,8 @@
         "__scenario_backend_type": "StreamSplitter"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 2890.0,
+        "x": 1680.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2199,8 +2199,8 @@
         "__scenario_backend_type": "Mixer"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 1860.0,
+        "x": 1420.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2248,8 +2248,8 @@
         "__scenario_backend_type": "SignalMakeupMixer"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 2740.0,
+        "x": 3040.0,
+        "y": 800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2292,8 +2292,8 @@
         "__scenario_backend_type": "StreamSplitter"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 3030.0,
+        "x": 4340.0,
+        "y": 800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2337,8 +2337,8 @@
         "__scenario_backend_type": "ElectricBoiler"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 1430.0,
+        "x": 3300.0,
+        "y": 800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2388,8 +2388,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 150.0,
+        "x": 3560.0,
+        "y": 800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2435,8 +2435,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 2590.0,
+        "x": 4080.0,
+        "y": 800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2486,8 +2486,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 290.0,
+        "x": 3820.0,
+        "y": 800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2533,8 +2533,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 3320.0,
+        "x": 1160.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2589,8 +2589,8 @@
         "__scenario_backend_type": "Attemperator"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 0.0,
+        "x": 900.0,
+        "y": 680.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2642,8 +2642,8 @@
         "__scenario_backend_type": "DrainRecorderMixer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 1010.0,
+        "x": 2980.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2692,8 +2692,8 @@
         "__scenario_backend_type": "DrainRecorderMixer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 1150.0,
+        "x": 5900.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2738,8 +2738,8 @@
         "__scenario_backend_type": "Valve"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 3620.0,
+        "x": 6940.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2783,8 +2783,8 @@
         "__scenario_backend_type": "SeparationTank"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 3330.0,
+        "x": 120.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2829,8 +2829,8 @@
         "__scenario_backend_type": "Valve"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 3760.0,
+        "x": 7200.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2874,8 +2874,8 @@
         "__scenario_backend_type": "SeparationTank"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 3470.0,
+        "x": 380.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2920,8 +2920,8 @@
         "__scenario_backend_type": "Mixer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2740.0,
+        "x": 640.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -2969,8 +2969,8 @@
         "__scenario_backend_type": "SignalMakeupMixer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 3180.0,
+        "x": 4860.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3016,8 +3016,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 3910.0,
+        "x": 6680.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3068,8 +3068,8 @@
         "__scenario_backend_type": "PEM"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2890.0,
+        "x": 900.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3116,8 +3116,8 @@
         "__scenario_backend_type": "KnockOutDrum"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2450.0,
+        "x": 4020.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3159,8 +3159,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 1300.0,
+        "x": 3240.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3208,8 +3208,8 @@
         "__scenario_backend_type": "Chiller"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 0.0,
+        "x": 1160.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3258,8 +3258,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2020.0,
+        "x": 2200.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3301,8 +3301,8 @@
         "__scenario_backend_type": "Coalescer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 430.0,
+        "x": 1680.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3348,8 +3348,8 @@
         "__scenario_backend_type": "ElectricBoiler"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 1590.0,
+        "x": 3500.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3388,8 +3388,8 @@
         "__scenario_backend_type": "DeoxoReactor"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 860.0,
+        "x": 2720.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3437,8 +3437,8 @@
         "__scenario_backend_type": "Chiller"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 140.0,
+        "x": 1420.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3487,8 +3487,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2160.0,
+        "x": 2460.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3529,8 +3529,8 @@
         "__scenario_backend_type": "Coalescer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 570.0,
+        "x": 1940.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3576,8 +3576,8 @@
         "__scenario_backend_type": "ElectricBoiler"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 1730.0,
+        "x": 3760.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3623,8 +3623,8 @@
         "__scenario_backend_type": "PSA Unit"
       },
       "geometry": {
-        "x": 1120.0,
-        "y": 2010.0,
+        "x": 4280.0,
+        "y": 1240.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3671,8 +3671,8 @@
         "__scenario_backend_type": "KnockOutDrum"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2590.0,
+        "x": 6420.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3717,8 +3717,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 1440.0,
+        "x": 6160.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3763,8 +3763,8 @@
         "__scenario_backend_type": "Chiller"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 280.0,
+        "x": 5120.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3813,8 +3813,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 2300.0,
+        "x": 5640.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3855,8 +3855,8 @@
         "__scenario_backend_type": "Coalescer"
       },
       "geometry": {
-        "x": 8720.0,
-        "y": 710.0,
+        "x": 5380.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3902,8 +3902,8 @@
         "__scenario_backend_type": "ElectricBoiler"
       },
       "geometry": {
-        "x": 9160.0,
-        "y": 1870.0,
+        "x": 7460.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -3952,8 +3952,8 @@
         "__scenario_backend_type": "Valve"
       },
       "geometry": {
-        "x": 9380.0,
-        "y": 4060.0,
+        "x": 7720.0,
+        "y": 1360.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4003,8 +4003,8 @@
         "__scenario_backend_type": "Mixer"
       },
       "geometry": {
-        "x": 12360.0,
-        "y": 3970.0,
+        "x": 5900.0,
+        "y": 1920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4056,8 +4056,8 @@
         "__scenario_backend_type": "OxygenMakeupNode"
       },
       "geometry": {
-        "x": 10160.0,
-        "y": 3830.0,
+        "x": 5640.0,
+        "y": 1920.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4115,8 +4115,8 @@
         "__scenario_backend_type": "BiogasSource"
       },
       "geometry": {
-        "x": 10380.0,
-        "y": 1400.0,
+        "x": 6220.0,
+        "y": 2040.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4172,8 +4172,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 10600.0,
-        "y": 1540.0,
+        "x": 6480.0,
+        "y": 2040.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4224,8 +4224,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 10820.0,
-        "y": 1680.0,
+        "x": 6740.0,
+        "y": 2040.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4281,8 +4281,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 11040.0,
-        "y": 1820.0,
+        "x": 7000.0,
+        "y": 2040.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4333,8 +4333,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 11260.0,
-        "y": 1960.0,
+        "x": 7260.0,
+        "y": 2040.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4390,8 +4390,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 11480.0,
-        "y": 2100.0,
+        "x": 7520.0,
+        "y": 2040.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4446,8 +4446,8 @@
         "__scenario_backend_type": "DrainRecorderMixer"
       },
       "geometry": {
-        "x": 10380.0,
-        "y": 2950.0,
+        "x": 4280.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4499,8 +4499,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 2670.0,
+        "x": 1160.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4552,8 +4552,8 @@
         "__scenario_backend_type": "WaterPumpThermodynamic"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 2810.0,
+        "x": 1420.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4613,8 +4613,8 @@
         "__scenario_backend_type": "ProportionalMakeupMixer"
       },
       "geometry": {
-        "x": 10820.0,
-        "y": 3090.0,
+        "x": 4540.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4664,8 +4664,8 @@
         "__scenario_backend_type": "Mixer"
       },
       "geometry": {
-        "x": 11920.0,
-        "y": 2380.0,
+        "x": 5060.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4714,8 +4714,8 @@
         "__scenario_backend_type": "IntegratedATRPlant"
       },
       "geometry": {
-        "x": 12140.0,
-        "y": 2520.0,
+        "x": 5320.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4761,8 +4761,8 @@
         "__scenario_backend_type": "ATR_Boiler"
       },
       "geometry": {
-        "x": 11700.0,
-        "y": 2240.0,
+        "x": 4800.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4810,8 +4810,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 980.0,
+        "x": 3240.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4855,8 +4855,8 @@
         "__scenario_backend_type": "ATR_Boiler"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 700.0,
+        "x": 1940.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4900,8 +4900,8 @@
         "__scenario_backend_type": "ATR_Boiler"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 840.0,
+        "x": 2200.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4951,8 +4951,8 @@
         "__scenario_backend_type": "Interchanger"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 1260.0,
+        "x": 3760.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -4999,8 +4999,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 560.0,
+        "x": 1680.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5049,8 +5049,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 280.0,
+        "x": 640.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5098,8 +5098,8 @@
         "__scenario_backend_type": "Chiller"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 0.0,
+        "x": 120.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5148,8 +5148,8 @@
         "__scenario_backend_type": "HydrogenMultiCyclone"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 420.0,
+        "x": 900.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5195,8 +5195,8 @@
         "__scenario_backend_type": "Coalescer"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 140.0,
+        "x": 380.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5250,8 +5250,8 @@
         "__scenario_backend_type": "SyngasPSA"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 1120.0,
+        "x": 3500.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5299,8 +5299,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 3240.0,
+        "x": 2460.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5347,8 +5347,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 3530.0,
+        "x": 2980.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5396,8 +5396,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 9720.0,
-        "y": 3380.0,
+        "x": 2720.0,
+        "y": 1800.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5445,8 +5445,8 @@
         "__scenario_backend_type": "Mixer"
       },
       "geometry": {
-        "x": 13260.0,
-        "y": 150.0,
+        "x": 8360.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5490,8 +5490,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 13040.0,
-        "y": 0.0,
+        "x": 8620.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5541,8 +5541,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 560.0,
+        "x": 8880.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5588,8 +5588,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 1430.0,
+        "x": 9140.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5642,8 +5642,8 @@
         "__scenario_backend_type": "DetailedTank"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 710.0,
+        "x": 9400.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5693,8 +5693,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 0.0,
+        "x": 9660.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5740,8 +5740,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 1010.0,
+        "x": 10700.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5791,8 +5791,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 140.0,
+        "x": 9920.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5838,8 +5838,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 1150.0,
+        "x": 10960.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5889,8 +5889,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 280.0,
+        "x": 10180.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5936,8 +5936,8 @@
         "__scenario_backend_type": "DryCooler"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 1290.0,
+        "x": 11220.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -5987,8 +5987,8 @@
         "__scenario_backend_type": "CompressorSingle"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 420.0,
+        "x": 10440.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -6052,8 +6052,8 @@
         "__scenario_backend_type": "DischargeStation"
       },
       "geometry": {
-        "x": 12700.0,
-        "y": 860.0,
+        "x": 11480.0,
+        "y": 1600.0,
         "width": 100.0,
         "height": 100.0,
         "color": [
@@ -9386,9 +9386,9 @@
         "Economics/equipment_mappings.yaml": "b07eaff1e78c27dbbc7709c016e7346b77606e9c62c8f53444d9af1fcf87f753",
         "physics_parameters.yaml": "44b9c5f72eb15b5e2c172e9802221974d9049611908849822a1482de35a9e71f",
         "simulation_config.yaml": "a413f49c470e4baa4bfd3496865082f064b732e521492c6ada9f548bd1c98592",
-        "Economics/opex_config.yaml": "795d95ee41db1551d87c846fd72152841ac2e20ee2585a438cbc674488d391ce"
+        "Economics/opex_config.yaml": "4c6d85fd4adc56924c1c8d815364fa2979bb1af183eb13dcf4f91740ddabfe94"
       },
-      "imported_at": "2026-02-18T17:30:40.234179+00:00",
+      "imported_at": "2026-03-02T15:14:31.518686+00:00",
       "topology_node_count": 123,
       "topology_edge_count": 143,
       "opex_file": "Economics/opex_config.yaml"
@@ -11271,229 +11271,468 @@
     },
     "import_surface_schema_version": 2,
     "visual_layout": {
-      "layout_mode": "report_v1",
+      "layout_mode": "industrial_pfd_v1",
+      "layout_schema_version": 2,
       "zones": {
-        "Water_Treatment": {
-          "x": -40.0,
-          "y": -40.0,
-          "w": 740.0,
-          "h": 500.0,
+        "Row 1: Utilities": {
+          "x": 70.0,
+          "y": 70.0,
+          "w": 1200.0,
+          "h": 340.0,
           "color": [
-            160,
-            220,
-            255
+            150,
+            190,
+            235
           ]
         },
-        "Utilities": {
-          "x": 740.0,
-          "y": -40.0,
-          "w": 300.0,
-          "h": 220.0,
+        "Row 2: SOEC Train": {
+          "x": 70.0,
+          "y": 630.0,
+          "w": 12180.0,
+          "h": 460.0,
           "color": [
-            200,
-            200,
-            200
-          ]
-        },
-        "SOEC": {
-          "x": 1080.0,
-          "y": -40.0,
-          "w": 7560.0,
-          "h": 6830.0,
-          "color": [
-            173,
-            216,
-            230
-          ]
-        },
-        "PEM": {
-          "x": 8680.0,
-          "y": -40.0,
-          "w": 960.0,
-          "h": 4280.0,
-          "color": [
-            180,
-            230,
-            180
-          ]
-        },
-        "ATR": {
-          "x": 9680.0,
-          "y": -40.0,
-          "w": 2940.0,
-          "h": 4190.0,
-          "color": [
-            255,
-            200,
-            150
-          ]
-        },
-        "Storage": {
-          "x": 12660.0,
-          "y": -40.0,
-          "w": 300.0,
-          "h": 1650.0,
-          "color": [
-            240,
-            230,
-            160
-          ]
-        },
-        "General": {
-          "x": 13000.0,
-          "y": -40.0,
-          "w": 520.0,
-          "h": 370.0,
-          "color": [
-            220,
-            210,
-            200
-          ]
-        },
-        "Other": {
-          "x": 13560.0,
-          "y": -40.0,
-          "w": 300.0,
-          "h": 220.0,
-          "color": [
+            170,
             215,
-            215,
-            215
+            245
+          ]
+        },
+        "Row 3: PEM + Manifold + Storage/Dispatch": {
+          "x": 70.0,
+          "y": 1190.0,
+          "w": 11720.0,
+          "h": 580.0,
+          "color": [
+            175,
+            225,
+            175
+          ]
+        },
+        "Row 4: ATR/Biogas Train": {
+          "x": 70.0,
+          "y": 1750.0,
+          "w": 7760.0,
+          "h": 460.0,
+          "color": [
+            245,
+            195,
+            155
           ]
         }
       },
+      "groups": {
+        "ATR Aux": {
+          "x": 5610.0,
+          "y": 1890.0,
+          "w": 580.0,
+          "h": 180.0,
+          "color": [
+            235,
+            190,
+            160
+          ],
+          "row": "Row 4: ATR/Biogas Train"
+        },
+        "ATR Process": {
+          "x": 90.0,
+          "y": 1770.0,
+          "w": 5520.0,
+          "h": 180.0,
+          "color": [
+            235,
+            180,
+            140
+          ],
+          "row": "Row 4: ATR/Biogas Train"
+        },
+        "Biogas Feed": {
+          "x": 6190.0,
+          "y": 2010.0,
+          "w": 1620.0,
+          "h": 180.0,
+          "color": [
+            220,
+            165,
+            125
+          ],
+          "row": "Row 4: ATR/Biogas Train"
+        },
+        "Core Utilities": {
+          "x": 90.0,
+          "y": 90.0,
+          "w": 320.0,
+          "h": 180.0,
+          "color": [
+            130,
+            170,
+            215
+          ],
+          "row": "Row 1: Utilities"
+        },
+        "Manifold": {
+          "x": 8010.0,
+          "y": 1450.0,
+          "w": 320.0,
+          "h": 180.0,
+          "color": [
+            170,
+            205,
+            170
+          ],
+          "row": "Row 3: PEM + Manifold + Storage/Dispatch"
+        },
+        "PEM Train": {
+          "x": 90.0,
+          "y": 1210.0,
+          "w": 4740.0,
+          "h": 180.0,
+          "color": [
+            155,
+            210,
+            155
+          ],
+          "row": "Row 3: PEM + Manifold + Storage/Dispatch"
+        },
+        "PEM Water/O2": {
+          "x": 4830.0,
+          "y": 1330.0,
+          "w": 3180.0,
+          "h": 180.0,
+          "color": [
+            130,
+            190,
+            130
+          ],
+          "row": "Row 3: PEM + Manifold + Storage/Dispatch"
+        },
+        "SOEC Aux": {
+          "x": 90.0,
+          "y": 650.0,
+          "w": 2920.0,
+          "h": 180.0,
+          "color": [
+            180,
+            220,
+            245
+          ],
+          "row": "Row 2: SOEC Train"
+        },
+        "SOEC H2 Train": {
+          "x": 4630.0,
+          "y": 890.0,
+          "w": 7600.0,
+          "h": 180.0,
+          "color": [
+            155,
+            205,
+            240
+          ],
+          "row": "Row 2: SOEC Train"
+        },
+        "SOEC Water/Steam": {
+          "x": 3010.0,
+          "y": 770.0,
+          "w": 1620.0,
+          "h": 180.0,
+          "color": [
+            135,
+            190,
+            225
+          ],
+          "row": "Row 2: SOEC Train"
+        },
+        "Storage & Dispatch": {
+          "x": 8330.0,
+          "y": 1570.0,
+          "w": 3440.0,
+          "h": 180.0,
+          "color": [
+            220,
+            210,
+            150
+          ],
+          "row": "Row 3: PEM + Manifold + Storage/Dispatch"
+        },
+        "Water Utilities": {
+          "x": 410.0,
+          "y": 210.0,
+          "w": 840.0,
+          "h": 180.0,
+          "color": [
+            130,
+            190,
+            235
+          ],
+          "row": "Row 1: Utilities"
+        }
+      },
+      "row_order": [
+        "Row 1: Utilities",
+        "Row 2: SOEC Train",
+        "Row 3: PEM + Manifold + Storage/Dispatch",
+        "Row 4: ATR/Biogas Train"
+      ],
       "node_zone_map": {
-        "cooling_manager": "Utilities",
-        "Water_Source": "Water_Treatment",
-        "Water_Purifier": "Water_Treatment",
-        "UltraPure_Tank": "Water_Treatment",
-        "ATR_Feed_Pump": "ATR",
-        "SOEC_Transformer": "SOEC",
-        "PEM_Transformer": "PEM",
-        "BOP_Transformer": "Other",
-        "SOEC_Cluster": "SOEC",
-        "SOEC_H2_Interchanger_1": "SOEC",
-        "SOEC_H2_DryCooler_1": "SOEC",
-        "SOEC_H2_KOD_1": "SOEC",
-        "SOEC_DRAIN_PUMP_1": "SOEC",
-        "SOEC_H2_Chiller_1": "SOEC",
-        "SOEC_H2_KOD_2": "SOEC",
-        "SOEC_DRAIN_PUMP_2": "SOEC",
-        "SOEC_H2_Cyclone_1": "SOEC",
-        "SOEC_H2_Boiler": "SOEC",
-        "SOEC_H2_Compressor_S1": "SOEC",
-        "SOEC_H2_Intercooler_1": "SOEC",
-        "SOEC_H2_Compressor_S2": "SOEC",
-        "SOEC_H2_Intercooler_2": "SOEC",
-        "SOEC_H2_Cyclone_2": "SOEC",
-        "SOEC_H2_Compressor_S3": "SOEC",
-        "SOEC_H2_Intercooler_3": "SOEC",
-        "SOEC_H2_Cyclone_3": "SOEC",
-        "SOEC_H2_Compressor_S4": "SOEC",
-        "SOEC_H2_Intercooler_4": "SOEC",
-        "SOEC_H2_Cyclone_4": "SOEC",
-        "SOEC_H2_Compressor_S5": "SOEC",
-        "SOEC_H2_Intercooler_5": "SOEC",
-        "SOEC_H2_Cyclone_5": "SOEC",
-        "SOEC_H2_Compressor_S6": "SOEC",
-        "SOEC_H2_Intercooler_6": "SOEC",
-        "SOEC_H2_Deoxo_1": "SOEC",
-        "SOEC_H2_Chiller_2": "SOEC",
-        "SOEC_H2_Cyclone_6": "SOEC",
-        "SOEC_H2_Coalescer": "SOEC",
-        "SOEC_H2_ElectricBoiler_PSA": "SOEC",
-        "SOEC_H2_PSA_1": "SOEC",
-        "SOEC_O2_Interchanger_1": "SOEC",
-        "SOEC_Drain_Mixer": "SOEC",
-        "SOEC_Drain_Pump": "SOEC",
-        "SOEC_Interchanger_Splitter": "SOEC",
-        "SOEC_Interchanger_Drain_Combiner": "SOEC",
-        "SOEC_Makeup_Mixer": "SOEC",
-        "SOEC_Water_Splitter": "SOEC",
-        "SOEC_Steam_Boiler": "SOEC",
-        "SOEC_Steam_Compressor_1": "SOEC",
-        "SOEC_Steam_Drycooler": "SOEC",
-        "SOEC_Steam_Compressor_2": "SOEC",
-        "SOEC_Feed_Pump": "SOEC",
-        "SOEC_Feed_Attemperator": "SOEC",
-        "PEM_H2_Drain_Mixer": "PEM",
-        "PEM_O2_Drain_Mixer": "PEM",
-        "PEM_Water_Return_Valve_1": "PEM",
-        "PEM_Degasser_1": "PEM",
-        "PEM_Water_Return_Valve_2": "PEM",
-        "PEM_Degasser_2": "PEM",
-        "PEM_Drains_Combiner": "PEM",
-        "PEM_Makeup_Mixer": "PEM",
-        "PEM_Water_Pump": "PEM",
-        "PEM_Electrolyzer": "PEM",
-        "PEM_H2_KOD_1": "PEM",
-        "PEM_H2_DryCooler_1": "PEM",
-        "PEM_H2_Chiller_1": "PEM",
-        "PEM_H2_Cyclone_1": "PEM",
-        "PEM_H2_Coalescer_1": "PEM",
-        "PEM_H2_ElectricBoiler_1": "PEM",
-        "PEM_H2_Deoxo_1": "PEM",
-        "PEM_H2_Chiller_2": "PEM",
-        "PEM_H2_Cyclone_2": "PEM",
-        "PEM_H2_Coalescer_2": "PEM",
-        "PEM_H2_ElectricBoiler_2": "PEM",
-        "PEM_H2_PSA_1": "SOEC",
-        "PEM_O2_KOD_1": "PEM",
-        "PEM_O2_Drycooler_1": "PEM",
-        "PEM_O2_Chiller_1": "PEM",
-        "PEM_O2_Cyclone_1": "PEM",
-        "PEM_O2_Coalescer_1": "PEM",
-        "PEM_O2_ElectricBoiler": "PEM",
-        "PEM_O2_Valve": "PEM",
-        "O2_Production_Mixer": "ATR",
-        "O2_Backup_Supply": "ATR",
-        "Biogas_Source": "ATR",
-        "Biogas_Compressor_1": "ATR",
-        "Biogas_Intercooler_1": "ATR",
-        "Biogas_Compressor_2": "ATR",
-        "Biogas_Intercooler_2": "ATR",
-        "Biogas_Compressor_3": "ATR",
-        "ATR_Drain_Mixer": "ATR",
-        "ATR_Drain_Pump_1": "ATR",
-        "ATR_Drain_Pump_2": "ATR",
-        "ATR_Makeup_Mixer": "ATR",
-        "ATR_Feed_Mixer": "ATR",
-        "ATR_Plant": "ATR",
-        "ATR_H01_Boiler": "ATR",
-        "ATR_O2_Compressor": "ATR",
-        "ATR_H02_Boiler": "ATR",
-        "ATR_H04_Boiler": "ATR",
-        "ATR_Syngas_Cooler": "ATR",
-        "ATR_DryCooler": "ATR",
-        "ATR_Cyclone_1": "ATR",
-        "ATR_Chiller_1": "ATR",
-        "ATR_Cyclone_2": "ATR",
-        "ATR_Coalescer_1": "ATR",
-        "ATR_PSA_1": "ATR",
-        "ATR_H2_Compressor_1": "ATR",
-        "ATR_H2_Drycooler": "ATR",
-        "ATR_H2_Compressor_2": "ATR",
-        "H2_Production_Mixer": "General",
-        "H2_Production_Cooler": "General",
-        "LP_Compressor_S1": "Storage",
-        "LP_Intercooler_1": "Storage",
-        "LP_Storage_Tank": "Storage",
-        "HP_Compressor_S2": "Storage",
-        "HP_Intercooler_2": "Storage",
-        "HP_Compressor_S3": "Storage",
-        "HP_Intercooler_3": "Storage",
-        "HP_Compressor_S4": "Storage",
-        "HP_Intercooler_4": "Storage",
-        "HP_Compressor_S5": "Storage",
-        "Truck_Station_1": "Storage"
+        "cooling_manager": "Row 1: Utilities",
+        "Water_Source": "Row 1: Utilities",
+        "Water_Purifier": "Row 1: Utilities",
+        "UltraPure_Tank": "Row 1: Utilities",
+        "ATR_Feed_Pump": "Row 4: ATR/Biogas Train",
+        "SOEC_Transformer": "Row 2: SOEC Train",
+        "PEM_Transformer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "BOP_Transformer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "SOEC_Cluster": "Row 2: SOEC Train",
+        "SOEC_H2_Interchanger_1": "Row 2: SOEC Train",
+        "SOEC_H2_DryCooler_1": "Row 2: SOEC Train",
+        "SOEC_H2_KOD_1": "Row 2: SOEC Train",
+        "SOEC_DRAIN_PUMP_1": "Row 2: SOEC Train",
+        "SOEC_H2_Chiller_1": "Row 2: SOEC Train",
+        "SOEC_H2_KOD_2": "Row 2: SOEC Train",
+        "SOEC_DRAIN_PUMP_2": "Row 2: SOEC Train",
+        "SOEC_H2_Cyclone_1": "Row 2: SOEC Train",
+        "SOEC_H2_Boiler": "Row 2: SOEC Train",
+        "SOEC_H2_Compressor_S1": "Row 2: SOEC Train",
+        "SOEC_H2_Intercooler_1": "Row 2: SOEC Train",
+        "SOEC_H2_Compressor_S2": "Row 2: SOEC Train",
+        "SOEC_H2_Intercooler_2": "Row 2: SOEC Train",
+        "SOEC_H2_Cyclone_2": "Row 2: SOEC Train",
+        "SOEC_H2_Compressor_S3": "Row 2: SOEC Train",
+        "SOEC_H2_Intercooler_3": "Row 2: SOEC Train",
+        "SOEC_H2_Cyclone_3": "Row 2: SOEC Train",
+        "SOEC_H2_Compressor_S4": "Row 2: SOEC Train",
+        "SOEC_H2_Intercooler_4": "Row 2: SOEC Train",
+        "SOEC_H2_Cyclone_4": "Row 2: SOEC Train",
+        "SOEC_H2_Compressor_S5": "Row 2: SOEC Train",
+        "SOEC_H2_Intercooler_5": "Row 2: SOEC Train",
+        "SOEC_H2_Cyclone_5": "Row 2: SOEC Train",
+        "SOEC_H2_Compressor_S6": "Row 2: SOEC Train",
+        "SOEC_H2_Intercooler_6": "Row 2: SOEC Train",
+        "SOEC_H2_Deoxo_1": "Row 2: SOEC Train",
+        "SOEC_H2_Chiller_2": "Row 2: SOEC Train",
+        "SOEC_H2_Cyclone_6": "Row 2: SOEC Train",
+        "SOEC_H2_Coalescer": "Row 2: SOEC Train",
+        "SOEC_H2_ElectricBoiler_PSA": "Row 2: SOEC Train",
+        "SOEC_H2_PSA_1": "Row 2: SOEC Train",
+        "SOEC_O2_Interchanger_1": "Row 2: SOEC Train",
+        "SOEC_Drain_Mixer": "Row 2: SOEC Train",
+        "SOEC_Drain_Pump": "Row 2: SOEC Train",
+        "SOEC_Interchanger_Splitter": "Row 2: SOEC Train",
+        "SOEC_Interchanger_Drain_Combiner": "Row 2: SOEC Train",
+        "SOEC_Makeup_Mixer": "Row 2: SOEC Train",
+        "SOEC_Water_Splitter": "Row 2: SOEC Train",
+        "SOEC_Steam_Boiler": "Row 2: SOEC Train",
+        "SOEC_Steam_Compressor_1": "Row 2: SOEC Train",
+        "SOEC_Steam_Drycooler": "Row 2: SOEC Train",
+        "SOEC_Steam_Compressor_2": "Row 2: SOEC Train",
+        "SOEC_Feed_Pump": "Row 2: SOEC Train",
+        "SOEC_Feed_Attemperator": "Row 2: SOEC Train",
+        "PEM_H2_Drain_Mixer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_Drain_Mixer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Water_Return_Valve_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Degasser_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Water_Return_Valve_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Degasser_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Drains_Combiner": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Makeup_Mixer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Water_Pump": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_Electrolyzer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_KOD_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_DryCooler_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Chiller_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Cyclone_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Coalescer_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_ElectricBoiler_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Deoxo_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Chiller_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Cyclone_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_Coalescer_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_ElectricBoiler_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_H2_PSA_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_KOD_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_Drycooler_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_Chiller_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_Cyclone_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_Coalescer_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_ElectricBoiler": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "PEM_O2_Valve": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "O2_Production_Mixer": "Row 4: ATR/Biogas Train",
+        "O2_Backup_Supply": "Row 4: ATR/Biogas Train",
+        "Biogas_Source": "Row 4: ATR/Biogas Train",
+        "Biogas_Compressor_1": "Row 4: ATR/Biogas Train",
+        "Biogas_Intercooler_1": "Row 4: ATR/Biogas Train",
+        "Biogas_Compressor_2": "Row 4: ATR/Biogas Train",
+        "Biogas_Intercooler_2": "Row 4: ATR/Biogas Train",
+        "Biogas_Compressor_3": "Row 4: ATR/Biogas Train",
+        "ATR_Drain_Mixer": "Row 4: ATR/Biogas Train",
+        "ATR_Drain_Pump_1": "Row 4: ATR/Biogas Train",
+        "ATR_Drain_Pump_2": "Row 4: ATR/Biogas Train",
+        "ATR_Makeup_Mixer": "Row 4: ATR/Biogas Train",
+        "ATR_Feed_Mixer": "Row 4: ATR/Biogas Train",
+        "ATR_Plant": "Row 4: ATR/Biogas Train",
+        "ATR_H01_Boiler": "Row 4: ATR/Biogas Train",
+        "ATR_O2_Compressor": "Row 4: ATR/Biogas Train",
+        "ATR_H02_Boiler": "Row 4: ATR/Biogas Train",
+        "ATR_H04_Boiler": "Row 4: ATR/Biogas Train",
+        "ATR_Syngas_Cooler": "Row 4: ATR/Biogas Train",
+        "ATR_DryCooler": "Row 4: ATR/Biogas Train",
+        "ATR_Cyclone_1": "Row 4: ATR/Biogas Train",
+        "ATR_Chiller_1": "Row 4: ATR/Biogas Train",
+        "ATR_Cyclone_2": "Row 4: ATR/Biogas Train",
+        "ATR_Coalescer_1": "Row 4: ATR/Biogas Train",
+        "ATR_PSA_1": "Row 4: ATR/Biogas Train",
+        "ATR_H2_Compressor_1": "Row 4: ATR/Biogas Train",
+        "ATR_H2_Drycooler": "Row 4: ATR/Biogas Train",
+        "ATR_H2_Compressor_2": "Row 4: ATR/Biogas Train",
+        "H2_Production_Mixer": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "H2_Production_Cooler": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "LP_Compressor_S1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "LP_Intercooler_1": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "LP_Storage_Tank": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Compressor_S2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Intercooler_2": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Compressor_S3": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Intercooler_3": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Compressor_S4": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Intercooler_4": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "HP_Compressor_S5": "Row 3: PEM + Manifold + Storage/Dispatch",
+        "Truck_Station_1": "Row 3: PEM + Manifold + Storage/Dispatch"
+      },
+      "node_group_map": {
+        "cooling_manager": "Core Utilities",
+        "Water_Source": "Water Utilities",
+        "Water_Purifier": "Water Utilities",
+        "UltraPure_Tank": "Water Utilities",
+        "ATR_Feed_Pump": "ATR Process",
+        "SOEC_Transformer": "SOEC Aux",
+        "PEM_Transformer": "PEM Train",
+        "BOP_Transformer": "Manifold",
+        "SOEC_Cluster": "SOEC Aux",
+        "SOEC_H2_Interchanger_1": "SOEC H2 Train",
+        "SOEC_H2_DryCooler_1": "SOEC H2 Train",
+        "SOEC_H2_KOD_1": "SOEC H2 Train",
+        "SOEC_DRAIN_PUMP_1": "SOEC Aux",
+        "SOEC_H2_Chiller_1": "SOEC H2 Train",
+        "SOEC_H2_KOD_2": "SOEC H2 Train",
+        "SOEC_DRAIN_PUMP_2": "SOEC Aux",
+        "SOEC_H2_Cyclone_1": "SOEC H2 Train",
+        "SOEC_H2_Boiler": "SOEC H2 Train",
+        "SOEC_H2_Compressor_S1": "SOEC H2 Train",
+        "SOEC_H2_Intercooler_1": "SOEC H2 Train",
+        "SOEC_H2_Compressor_S2": "SOEC H2 Train",
+        "SOEC_H2_Intercooler_2": "SOEC H2 Train",
+        "SOEC_H2_Cyclone_2": "SOEC H2 Train",
+        "SOEC_H2_Compressor_S3": "SOEC H2 Train",
+        "SOEC_H2_Intercooler_3": "SOEC H2 Train",
+        "SOEC_H2_Cyclone_3": "SOEC H2 Train",
+        "SOEC_H2_Compressor_S4": "SOEC H2 Train",
+        "SOEC_H2_Intercooler_4": "SOEC H2 Train",
+        "SOEC_H2_Cyclone_4": "SOEC H2 Train",
+        "SOEC_H2_Compressor_S5": "SOEC H2 Train",
+        "SOEC_H2_Intercooler_5": "SOEC H2 Train",
+        "SOEC_H2_Cyclone_5": "SOEC H2 Train",
+        "SOEC_H2_Compressor_S6": "SOEC H2 Train",
+        "SOEC_H2_Intercooler_6": "SOEC H2 Train",
+        "SOEC_H2_Deoxo_1": "SOEC H2 Train",
+        "SOEC_H2_Chiller_2": "SOEC H2 Train",
+        "SOEC_H2_Cyclone_6": "SOEC H2 Train",
+        "SOEC_H2_Coalescer": "SOEC H2 Train",
+        "SOEC_H2_ElectricBoiler_PSA": "SOEC H2 Train",
+        "SOEC_H2_PSA_1": "SOEC H2 Train",
+        "SOEC_O2_Interchanger_1": "SOEC Aux",
+        "SOEC_Drain_Mixer": "SOEC Aux",
+        "SOEC_Drain_Pump": "SOEC Aux",
+        "SOEC_Interchanger_Splitter": "SOEC Aux",
+        "SOEC_Interchanger_Drain_Combiner": "SOEC Aux",
+        "SOEC_Makeup_Mixer": "SOEC Water/Steam",
+        "SOEC_Water_Splitter": "SOEC Water/Steam",
+        "SOEC_Steam_Boiler": "SOEC Water/Steam",
+        "SOEC_Steam_Compressor_1": "SOEC Water/Steam",
+        "SOEC_Steam_Drycooler": "SOEC Water/Steam",
+        "SOEC_Steam_Compressor_2": "SOEC Water/Steam",
+        "SOEC_Feed_Pump": "SOEC Aux",
+        "SOEC_Feed_Attemperator": "SOEC Aux",
+        "PEM_H2_Drain_Mixer": "PEM Train",
+        "PEM_O2_Drain_Mixer": "PEM Water/O2",
+        "PEM_Water_Return_Valve_1": "PEM Water/O2",
+        "PEM_Degasser_1": "PEM Train",
+        "PEM_Water_Return_Valve_2": "PEM Water/O2",
+        "PEM_Degasser_2": "PEM Train",
+        "PEM_Drains_Combiner": "PEM Train",
+        "PEM_Makeup_Mixer": "PEM Water/O2",
+        "PEM_Water_Pump": "PEM Water/O2",
+        "PEM_Electrolyzer": "PEM Train",
+        "PEM_H2_KOD_1": "PEM Train",
+        "PEM_H2_DryCooler_1": "PEM Train",
+        "PEM_H2_Chiller_1": "PEM Train",
+        "PEM_H2_Cyclone_1": "PEM Train",
+        "PEM_H2_Coalescer_1": "PEM Train",
+        "PEM_H2_ElectricBoiler_1": "PEM Train",
+        "PEM_H2_Deoxo_1": "PEM Train",
+        "PEM_H2_Chiller_2": "PEM Train",
+        "PEM_H2_Cyclone_2": "PEM Train",
+        "PEM_H2_Coalescer_2": "PEM Train",
+        "PEM_H2_ElectricBoiler_2": "PEM Train",
+        "PEM_H2_PSA_1": "PEM Train",
+        "PEM_O2_KOD_1": "PEM Water/O2",
+        "PEM_O2_Drycooler_1": "PEM Water/O2",
+        "PEM_O2_Chiller_1": "PEM Water/O2",
+        "PEM_O2_Cyclone_1": "PEM Water/O2",
+        "PEM_O2_Coalescer_1": "PEM Water/O2",
+        "PEM_O2_ElectricBoiler": "PEM Water/O2",
+        "PEM_O2_Valve": "PEM Water/O2",
+        "O2_Production_Mixer": "ATR Aux",
+        "O2_Backup_Supply": "ATR Aux",
+        "Biogas_Source": "Biogas Feed",
+        "Biogas_Compressor_1": "Biogas Feed",
+        "Biogas_Intercooler_1": "Biogas Feed",
+        "Biogas_Compressor_2": "Biogas Feed",
+        "Biogas_Intercooler_2": "Biogas Feed",
+        "Biogas_Compressor_3": "Biogas Feed",
+        "ATR_Drain_Mixer": "ATR Process",
+        "ATR_Drain_Pump_1": "ATR Process",
+        "ATR_Drain_Pump_2": "ATR Process",
+        "ATR_Makeup_Mixer": "ATR Process",
+        "ATR_Feed_Mixer": "ATR Process",
+        "ATR_Plant": "ATR Process",
+        "ATR_H01_Boiler": "ATR Process",
+        "ATR_O2_Compressor": "ATR Process",
+        "ATR_H02_Boiler": "ATR Process",
+        "ATR_H04_Boiler": "ATR Process",
+        "ATR_Syngas_Cooler": "ATR Process",
+        "ATR_DryCooler": "ATR Process",
+        "ATR_Cyclone_1": "ATR Process",
+        "ATR_Chiller_1": "ATR Process",
+        "ATR_Cyclone_2": "ATR Process",
+        "ATR_Coalescer_1": "ATR Process",
+        "ATR_PSA_1": "ATR Process",
+        "ATR_H2_Compressor_1": "ATR Process",
+        "ATR_H2_Drycooler": "ATR Process",
+        "ATR_H2_Compressor_2": "ATR Process",
+        "H2_Production_Mixer": "Storage & Dispatch",
+        "H2_Production_Cooler": "Storage & Dispatch",
+        "LP_Compressor_S1": "Storage & Dispatch",
+        "LP_Intercooler_1": "Storage & Dispatch",
+        "LP_Storage_Tank": "Storage & Dispatch",
+        "HP_Compressor_S2": "Storage & Dispatch",
+        "HP_Intercooler_2": "Storage & Dispatch",
+        "HP_Compressor_S3": "Storage & Dispatch",
+        "HP_Intercooler_3": "Storage & Dispatch",
+        "HP_Compressor_S4": "Storage & Dispatch",
+        "HP_Intercooler_4": "Storage & Dispatch",
+        "HP_Compressor_S5": "Storage & Dispatch",
+        "Truck_Station_1": "Storage & Dispatch"
       },
       "layout_constants": {
-        "COLUMN_SPACING": 220.0,
-        "ROW_SPACING": 140.0,
-        "LANE_GAP": 150.0,
-        "BLOCK_GAP": 120.0,
-        "ZONE_MARGIN": 40.0
-      }
+        "START_X": 120.0,
+        "START_Y": 120.0,
+        "X_SPACING": 260.0,
+        "INTER_GROUP_GAP": 320.0,
+        "ROW_GAP": 560.0,
+        "LANE_GAP": 120.0,
+        "ROW_SPACING": 120.0,
+        "ZONE_MARGIN": 50.0,
+        "GROUP_MARGIN": 30.0
+      },
+      "spacing_policy": "group_local_rank"
     }
   }
 }

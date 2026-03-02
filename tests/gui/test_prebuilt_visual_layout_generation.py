@@ -35,6 +35,10 @@ def test_generate_layout_file_creates_valid_snapshot(tmp_path):
     assert len(snapshot.edges) == edge_count
     assert snapshot.topology_analysis is not None
     assert snapshot.topology_analysis.get("scenario_manifest") is not None
+    visual_layout = snapshot.topology_analysis.get("visual_layout", {})
+    assert visual_layout.get("layout_mode") == "industrial_pfd_v1"
+    assert int(visual_layout.get("layout_schema_version", 0)) >= 2
+    assert visual_layout.get("spacing_policy") == "group_local_rank"
 
 
 def test_build_snapshot_preserves_visual_model_metadata():
@@ -67,7 +71,14 @@ def test_ensure_prebuilt_layout_file_falls_back_to_temp_on_canonical_failure(tmp
 
     original_generate = prebuilt_module.generate_layout_file
 
-    def fake_generate_layout_file(*, output_path, scenarios_dir, topology_file, project_name):
+    def fake_generate_layout_file(
+        *,
+        output_path,
+        scenarios_dir,
+        topology_file,
+        project_name,
+        equipment_file="Economics/equipment_mappings.yaml",
+    ):
         output_path = Path(output_path)
         calls.append(output_path)
 
@@ -79,6 +90,7 @@ def test_ensure_prebuilt_layout_file_falls_back_to_temp_on_canonical_failure(tmp
             scenarios_dir=scenarios_dir,
             topology_file=topology_file,
             project_name=project_name,
+            equipment_file=equipment_file,
         )
 
     monkeypatch.setattr(prebuilt_module, "generate_layout_file", fake_generate_layout_file)
@@ -171,3 +183,90 @@ def test_prebuilt_layout_needs_regeneration_detects_hash_drift(tmp_path):
     )
     assert needs is True
     assert reason.startswith("hash_drift:")
+
+
+def test_prebuilt_layout_needs_regeneration_detects_legacy_layout_schema(tmp_path):
+    canonical_path = tmp_path / "plant_topology_visual.h2plant"
+    generate_layout_file(
+        output_path=canonical_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology.yaml",
+        project_name="Plant Topology Visual Twin",
+    )
+
+    raw = json.loads(canonical_path.read_text(encoding="utf-8"))
+    visual_layout = raw.setdefault("topology_analysis", {}).setdefault("visual_layout", {})
+    visual_layout["layout_mode"] = "report_v1"
+    visual_layout["layout_schema_version"] = 0
+    canonical_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+    needs, reason = prebuilt_layout_needs_regeneration(
+        canonical_path=canonical_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology.yaml",
+    )
+    assert needs is True
+    assert reason in {"legacy_layout_mode", "legacy_layout_schema"}
+
+
+def test_prebuilt_layout_needs_regeneration_detects_schema_v1_as_legacy(tmp_path):
+    canonical_path = tmp_path / "plant_topology_visual.h2plant"
+    generate_layout_file(
+        output_path=canonical_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology.yaml",
+        project_name="Plant Topology Visual Twin",
+    )
+
+    raw = json.loads(canonical_path.read_text(encoding="utf-8"))
+    visual_layout = raw.setdefault("topology_analysis", {}).setdefault("visual_layout", {})
+    visual_layout["layout_mode"] = "industrial_pfd_v1"
+    visual_layout["layout_schema_version"] = 1
+    canonical_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+
+    needs, reason = prebuilt_layout_needs_regeneration(
+        canonical_path=canonical_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology.yaml",
+    )
+    assert needs is True
+    assert reason == "legacy_layout_schema"
+
+
+def test_generate_layout_file_pem_soec_variant_uses_variant_manifest(tmp_path):
+    output_path = tmp_path / "plant_topology_visual_pem_soec.h2plant"
+    saved_path, node_count, edge_count = generate_layout_file(
+        output_path=output_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology_PEM+SOEC.yaml",
+        equipment_file="Economics/equipment_mappings_PEM+SOEC.yaml",
+        project_name="Plant Topology Visual Twin (SOEC + PEM)",
+    )
+
+    assert saved_path == output_path
+    assert node_count == 95
+    assert edge_count == 106
+    snapshot = GraphPersistenceManager().load(str(saved_path))
+    manifest = snapshot.topology_analysis.get("scenario_manifest", {})
+    assert manifest.get("topology_file") == "plant_topology_PEM+SOEC.yaml"
+    assert manifest.get("equipment_file") == "Economics/equipment_mappings_PEM+SOEC.yaml"
+
+
+def test_prebuilt_layout_needs_regeneration_reports_up_to_date_for_pem_soec_variant(tmp_path):
+    canonical_path = tmp_path / "plant_topology_visual_pem_soec.h2plant"
+    generate_layout_file(
+        output_path=canonical_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology_PEM+SOEC.yaml",
+        equipment_file="Economics/equipment_mappings_PEM+SOEC.yaml",
+        project_name="Plant Topology Visual Twin (SOEC + PEM)",
+    )
+
+    needs, reason = prebuilt_layout_needs_regeneration(
+        canonical_path=canonical_path,
+        scenarios_dir="scenarios",
+        topology_file="plant_topology_PEM+SOEC.yaml",
+        equipment_file="Economics/equipment_mappings_PEM+SOEC.yaml",
+    )
+    assert needs is False
+    assert reason == "up_to_date"

@@ -1,5 +1,6 @@
 import logging
 import yaml
+from functools import partial
 """
 H2 Plant Configuration Editor - Complete Version
 Includes: File/Edit/View/Validation menus, Run Simulation, All Nodes tab with working drag-drop
@@ -32,6 +33,7 @@ from h2_plant.config.models import EconomicsConfig, SimulationConfig
 logger = logging.getLogger(__name__)
 from h2_plant.gui.core.scenario_visual_importer import (
     ScenarioVisualImporter,
+    infer_equipment_file_for_topology,
     resolve_component_id_for_equipment,
     resolve_simulation_source,
 )
@@ -80,6 +82,21 @@ from h2_plant.gui.nodes.valve_node import ValveNode
 from h2_plant.gui.nodes.storage import DetailedTankNode, DischargeStationNode, CompressorSingleNode
 from h2_plant.gui.nodes.reforming import IntegratedATRPlantNode, ATRBoilerNode, BiogasSourceNode
 from h2_plant.gui.nodes.scenario_component import ScenarioComponentNode
+
+PREBUILT_VISUAL_VARIANTS = {
+    "SOEC + PEM + ATR": {
+        "topology_file": "plant_topology.yaml",
+        "equipment_file": "Economics/equipment_mappings.yaml",
+        "prebuilt_filename": "plant_topology_visual.h2plant",
+        "project_name": "Plant Topology Visual Twin (SOEC + PEM + ATR)",
+    },
+    "SOEC + PEM": {
+        "topology_file": "plant_topology_PEM+SOEC.yaml",
+        "equipment_file": "Economics/equipment_mappings_PEM+SOEC.yaml",
+        "prebuilt_filename": "plant_topology_visual_pem_soec.h2plant",
+        "project_name": "Plant Topology Visual Twin (SOEC + PEM)",
+    },
+}
 
 
 class AllNodesListWidget(QListWidget):
@@ -1300,9 +1317,17 @@ class PlantEditorWindow(QMainWindow):
         open_action.triggered.connect(self.load_layout)
         file_menu.addAction(open_action)
 
-        open_prebuilt_action = QAction("Open Prebuilt Visual Twin", self)
-        open_prebuilt_action.triggered.connect(self.open_prebuilt_visual_twin)
-        file_menu.addAction(open_prebuilt_action)
+        open_prebuilt_menu = file_menu.addMenu("Open Prebuilt Visual Twin")
+        for variant_label, variant_cfg in PREBUILT_VISUAL_VARIANTS.items():
+            open_prebuilt_action = QAction(variant_label, self)
+            open_prebuilt_action.triggered.connect(
+                partial(
+                    self.open_prebuilt_visual_twin,
+                    variant_label=variant_label,
+                    **variant_cfg,
+                )
+            )
+            open_prebuilt_menu.addAction(open_prebuilt_action)
 
         import_scenario_action = QAction("Import Scenario Visual...", self)
         import_scenario_action.triggered.connect(self.import_scenario_visual)
@@ -1387,8 +1412,8 @@ class PlantEditorWindow(QMainWindow):
 
         view_menu.addSeparator()
 
-        auto_layout_action = QAction("Auto-Layout (Report Mode)", self)
-        auto_layout_action.setStatusTip("Recalculate zone-based layout and redraw swimlane overlays")
+        auto_layout_action = QAction("Auto-Layout (Industrial PFD)", self)
+        auto_layout_action.setStatusTip("Recalculate industrial plant layout and redraw grouped overlays")
         auto_layout_action.triggered.connect(self._run_auto_layout_report_mode)
         view_menu.addAction(auto_layout_action)
 
@@ -2577,10 +2602,19 @@ class PlantEditorWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Load failed: {e}")
 
-    def open_prebuilt_visual_twin(self):
+    def open_prebuilt_visual_twin(
+        self,
+        _checked: bool = False,
+        *,
+        variant_label: str = "SOEC + PEM + ATR",
+        topology_file: str = "plant_topology.yaml",
+        equipment_file: str = DEFAULT_EQUIPMENT_FILE,
+        prebuilt_filename: str = "plant_topology_visual.h2plant",
+        project_name: str = "Plant Topology Visual Twin (SOEC + PEM + ATR)",
+    ):
         """Load the committed prebuilt scenario visual twin layout."""
         prebuilt_path = (
-            Path(__file__).resolve().parents[1] / "layouts" / "plant_topology_visual.h2plant"
+            Path(__file__).resolve().parents[1] / "layouts" / prebuilt_filename
         )
         generated_note = ""
         repo_root = Path(__file__).resolve().parents[3]
@@ -2592,7 +2626,8 @@ class PlantEditorWindow(QMainWindow):
             force_regenerate, refresh_reason = prebuilt_layout_needs_regeneration(
                 canonical_path=prebuilt_path,
                 scenarios_dir=str(scenarios_dir),
-                topology_file="plant_topology.yaml",
+                topology_file=topology_file,
+                equipment_file=equipment_file,
             )
 
         if not prebuilt_path.exists() or force_regenerate:
@@ -2606,8 +2641,9 @@ class PlantEditorWindow(QMainWindow):
                 ) = ensure_prebuilt_layout_file(
                     canonical_path=prebuilt_path,
                     scenarios_dir=str(scenarios_dir),
-                    topology_file="plant_topology.yaml",
-                    project_name="Plant Topology Visual Twin",
+                    topology_file=topology_file,
+                    equipment_file=equipment_file,
+                    project_name=project_name,
                     force_regenerate=force_regenerate,
                 )
             except Exception as exc:
@@ -2663,11 +2699,11 @@ class PlantEditorWindow(QMainWindow):
             repo_scenarios_dir = Path(__file__).resolve().parents[3] / "scenarios"
             fallback_manifest = {
                 "scenarios_dir": str(repo_scenarios_dir),
-                "topology_file": "plant_topology.yaml",
+                "topology_file": topology_file,
                 "physics_file": "physics_parameters.yaml",
                 "economics_file": "economics_parameters.yaml",
                 "simulation_config_file": "simulation_config.yaml",
-                "equipment_file": DEFAULT_EQUIPMENT_FILE,
+                "equipment_file": equipment_file,
                 "opex_file": DEFAULT_OPEX_FILE,
             }
             source_manifest = dict(self._scenario_manifest or {})
@@ -2691,7 +2727,7 @@ class PlantEditorWindow(QMainWindow):
             self._enter_template_mode()
 
             message = (
-                "Prebuilt visual twin loaded as template.\n"
+                f"Prebuilt visual twin ({variant_label}) loaded as template.\n"
                 "Use 'Save Layout As...' to keep a copy."
             )
             if generated_note:
@@ -2702,7 +2738,7 @@ class PlantEditorWindow(QMainWindow):
             QMessageBox.critical(
                 self,
                 "Error",
-                f"Failed to load prebuilt visual twin: {e}",
+                f"Failed to load prebuilt visual twin ({variant_label}): {e}",
             )
 
     def import_scenario_visual(self):
@@ -2736,9 +2772,11 @@ class PlantEditorWindow(QMainWindow):
                 return
 
         try:
+            equipment_file = infer_equipment_file_for_topology(topology_file)
             model = ScenarioVisualImporter.build_visual_model(
                 scenarios_dir=scenarios_dir,
                 topology_file=topology_file,
+                equipment_file=equipment_file,
             )
 
             self.graph.clear_session()
@@ -2755,6 +2793,13 @@ class PlantEditorWindow(QMainWindow):
                 if src_node is None or tgt_node is None:
                     continue
                 self._connect_visual_edge(src_node, tgt_node, edge.source_port, edge.target_port)
+
+            # Use angle routing so imported process lines read like orthogonal PFD runs.
+            try:
+                from NodeGraphQt.constants import PipeLayoutEnum
+                self.graph.set_pipe_style(PipeLayoutEnum.ANGLE)
+            except Exception as pipe_exc:
+                logger.debug("Could not apply ANGLE pipe layout after import: %s", pipe_exc)
 
             self._restore_topology_analysis(model.metadata)
             self._stage_workspace_from_manifest(self._scenario_manifest or {})
@@ -3012,6 +3057,7 @@ class PlantEditorWindow(QMainWindow):
         """Apply zone-based background colors to nodes after they are placed in the graph."""
         from h2_plant.gui.core.visual_layout_policy import BLOCK_COLORS, ZONE_COLORS
         node_zone_map = visual_layout.get("node_zone_map", {})
+        zones_meta = visual_layout.get("zones", {})
         for node in self.graph.all_nodes():
             node_id = node.name() if hasattr(node, "name") else str(node)
             # Try component_id property first (canonical ID)
@@ -3022,6 +3068,10 @@ class PlantEditorWindow(QMainWindow):
             zone = node_zone_map.get(node_id)
             if zone:
                 color = ZONE_COLORS.get(zone) or BLOCK_COLORS.get(zone)
+                if color is None and isinstance(zones_meta.get(zone), dict):
+                    c = zones_meta[zone].get("color")
+                    if isinstance(c, list) and len(c) >= 3:
+                        color = (int(c[0]), int(c[1]), int(c[2]))
                 if color:
                     r, g, b = color
                     try:
@@ -3030,7 +3080,7 @@ class PlantEditorWindow(QMainWindow):
                         logger.debug("Could not apply zone color to node '%s': %s", node_id, exc)
 
     def _run_auto_layout_report_mode(self) -> None:
-        """Recalculate report-mode layout for the current scenario and redraw overlays.
+        """Recalculate industrial PFD layout for the current scenario and redraw overlays.
 
         Only works when a scenario manifest is active (i.e., a scenario has been imported).
         Node positions are updated; overlays are redrawn from fresh layout data.
@@ -3046,6 +3096,7 @@ class PlantEditorWindow(QMainWindow):
 
         scenarios_dir = manifest.get("scenarios_dir", "")
         topology_file = manifest.get("topology_file", "plant_topology.yaml")
+        equipment_file = manifest.get("equipment_file", DEFAULT_EQUIPMENT_FILE)
         # topology_file may be relative to scenarios_dir
         from pathlib import Path as _Path
         tp = _Path(topology_file)
@@ -3058,9 +3109,10 @@ class PlantEditorWindow(QMainWindow):
                 scenarios_dir=scenarios_dir,
                 topology_file=topology_file,
                 layout_mode="report_v1",
+                equipment_file=equipment_file,
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Auto-Layout Error", f"Layout calculation failed:\n{exc}")
+            QMessageBox.critical(self, "Auto-Layout Error", f"Industrial layout calculation failed:\n{exc}")
             return
 
         # Apply new positions to live graph nodes

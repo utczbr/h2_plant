@@ -19,6 +19,10 @@ from h2_plant.gui.core.scenario_param_mapper import (
     IMPORT_SURFACE_SCHEMA_VERSION,
     backend_to_gui_props,
 )
+from h2_plant.gui.core.industrial_layout_engine import (
+    INDUSTRIAL_LAYOUT_MODE,
+    INDUSTRIAL_LAYOUT_SCHEMA_VERSION,
+)
 from h2_plant.gui.core.scenario_visual_importer import ScenarioVisualImporter
 
 
@@ -176,11 +180,13 @@ def generate_layout_file(
     scenarios_dir: str,
     topology_file: str,
     project_name: str,
+    equipment_file: str = "Economics/equipment_mappings.yaml",
 ) -> Tuple[Path, int, int]:
     """Generate and persist a prebuilt visual layout file."""
     model = ScenarioVisualImporter.build_visual_model(
         scenarios_dir=scenarios_dir,
         topology_file=topology_file,
+        equipment_file=equipment_file,
     )
 
     snapshot = build_snapshot(project_name=project_name, model=model)
@@ -198,6 +204,7 @@ def ensure_prebuilt_layout_file(
     project_name: str = "Plant Topology Visual Twin",
     temp_dir: Optional[Path] = None,
     force_regenerate: bool = False,
+    equipment_file: str = "Economics/equipment_mappings.yaml",
 ) -> Tuple[Path, bool, bool, int, int]:
     """
     Ensure a prebuilt layout file exists.
@@ -214,6 +221,7 @@ def ensure_prebuilt_layout_file(
             scenarios_dir=scenarios_dir,
             topology_file=topology_file,
             project_name=project_name,
+            equipment_file=equipment_file,
         )
         return saved_path, True, False, node_count, edge_count
     except Exception as canonical_exc:
@@ -229,6 +237,7 @@ def ensure_prebuilt_layout_file(
                 scenarios_dir=scenarios_dir,
                 topology_file=topology_file,
                 project_name=project_name,
+                equipment_file=equipment_file,
             )
             return saved_path, True, True, node_count, edge_count
         except Exception as temp_exc:
@@ -244,6 +253,9 @@ def prebuilt_layout_needs_regeneration(
     scenarios_dir: str,
     topology_file: str = "plant_topology.yaml",
     required_surface_schema_version: int = IMPORT_SURFACE_SCHEMA_VERSION,
+    equipment_file: str = "Economics/equipment_mappings.yaml",
+    required_layout_mode: str = INDUSTRIAL_LAYOUT_MODE,
+    required_layout_schema_version: int = INDUSTRIAL_LAYOUT_SCHEMA_VERSION,
 ) -> Tuple[bool, str]:
     """
     Decide if the canonical prebuilt layout should be regenerated.
@@ -265,6 +277,15 @@ def prebuilt_layout_needs_regeneration(
     if surface_version < int(required_surface_schema_version):
         return True, "legacy_surface_schema"
 
+    visual_layout = dict(topology_analysis.get("visual_layout") or {})
+    layout_mode = str(visual_layout.get("layout_mode") or "")
+    if layout_mode != str(required_layout_mode):
+        return True, "legacy_layout_mode"
+
+    layout_schema = int(visual_layout.get("layout_schema_version") or 0)
+    if layout_schema < int(required_layout_schema_version):
+        return True, "legacy_layout_schema"
+
     stored_manifest = dict(topology_analysis.get("scenario_manifest") or {})
     stored_hashes = dict(stored_manifest.get("file_hashes") or {})
     if not stored_hashes:
@@ -274,6 +295,7 @@ def prebuilt_layout_needs_regeneration(
         current_model = ScenarioVisualImporter.build_visual_model(
             scenarios_dir=scenarios_dir,
             topology_file=topology_file,
+            equipment_file=equipment_file,
         )
     except Exception as exc:
         # If source is unavailable, preserve current prebuilt instead of blocking load.

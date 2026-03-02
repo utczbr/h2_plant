@@ -25,6 +25,14 @@ from h2_plant.gui.core.visual_layout_policy import (
     ZONE_MARGIN,
     assign_zone,
 )
+from h2_plant.gui.core.industrial_layout_engine import (
+    INDUSTRIAL_LAYOUT_MODE,
+    compute_industrial_layout,
+)
+
+
+DEFAULT_EQUIPMENT_MAPPING_FILE = "Economics/equipment_mappings.yaml"
+PEM_SOEC_EQUIPMENT_MAPPING_FILE = "Economics/equipment_mappings_PEM+SOEC.yaml"
 
 
 def _to_str(value: Any) -> str:
@@ -51,6 +59,41 @@ def _resolve_topology_path(scenarios_dir: Path, topology_file: str) -> Path:
     return (scenarios_dir / candidate).resolve()
 
 
+def infer_equipment_file_for_topology(
+    topology_file: str,
+    *,
+    fallback_equipment_file: str = DEFAULT_EQUIPMENT_MAPPING_FILE,
+) -> str:
+    """
+    Infer equipment mapping file from topology filename.
+
+    Uses PEM+SOEC mapping for topology variants that include ``PEM+SOEC`` in name.
+    """
+    topology_name = Path(str(topology_file)).name.lower()
+    if "pem+soec" in topology_name:
+        return PEM_SOEC_EQUIPMENT_MAPPING_FILE
+    return fallback_equipment_file
+
+
+def _resolve_equipment_file_for_topology(
+    topology_file: str,
+    equipment_file: Optional[str],
+) -> str:
+    if equipment_file and str(equipment_file).strip():
+        explicit = str(equipment_file).strip()
+    else:
+        explicit = DEFAULT_EQUIPMENT_MAPPING_FILE
+
+    inferred = infer_equipment_file_for_topology(
+        topology_file,
+        fallback_equipment_file=explicit,
+    )
+    # Preserve explicit non-default choices. Auto-upgrade only canonical default.
+    if explicit == DEFAULT_EQUIPMENT_MAPPING_FILE:
+        return inferred
+    return explicit
+
+
 def _load_yaml_file(path: Path) -> Dict[str, Any]:
     """Read a YAML file as a dictionary."""
     with path.open("r", encoding="utf-8") as handle:
@@ -60,7 +103,11 @@ def _load_yaml_file(path: Path) -> Dict[str, Any]:
     return data
 
 
-def load_scenario_bundle(scenarios_dir: str, topology_file: str = "plant_topology.yaml") -> Dict[str, Any]:
+def load_scenario_bundle(
+    scenarios_dir: str,
+    topology_file: str = "plant_topology.yaml",
+    equipment_file: Optional[str] = DEFAULT_EQUIPMENT_MAPPING_FILE,
+) -> Dict[str, Any]:
     """
     Load topology/economics/equipment files for scenario visual import.
 
@@ -70,7 +117,8 @@ def load_scenario_bundle(scenarios_dir: str, topology_file: str = "plant_topolog
     scenario_path = Path(scenarios_dir).resolve()
     topology_path = _resolve_topology_path(scenario_path, topology_file)
     economics_path = scenario_path / "economics_parameters.yaml"
-    equipment_path = scenario_path / "Economics" / "equipment_mappings.yaml"
+    resolved_equipment_file = _resolve_equipment_file_for_topology(topology_file, equipment_file)
+    equipment_path = _resolve_topology_path(scenario_path, resolved_equipment_file)
 
     topology_data = _load_yaml_file(topology_path)
     economics_data = _load_yaml_file(economics_path)
@@ -293,6 +341,7 @@ class ScenarioVisualImporter:
         scenarios_dir: str,
         topology_file: str = "plant_topology.yaml",
         layout_mode: str = "report_v1",
+        equipment_file: Optional[str] = DEFAULT_EQUIPMENT_MAPPING_FILE,
     ) -> ScenarioVisualModel:
         """Build normalized visual model from scenario files.
 
@@ -301,8 +350,13 @@ class ScenarioVisualImporter:
             topology_file: Topology YAML filename (relative to scenarios_dir).
             layout_mode: ``"report_v1"`` (zone-based industrial layout, default)
                          or ``"legacy"`` (original lane-based layout).
+            equipment_file: Equipment mapping YAML filename (relative to scenarios_dir).
         """
-        bundle = load_scenario_bundle(scenarios_dir=scenarios_dir, topology_file=topology_file)
+        bundle = load_scenario_bundle(
+            scenarios_dir=scenarios_dir,
+            topology_file=topology_file,
+            equipment_file=equipment_file,
+        )
 
         topology_data = bundle["topology"]
         topology_nodes = topology_data.get("nodes", []) or []
@@ -319,9 +373,13 @@ class ScenarioVisualImporter:
         equipment_index = build_equipment_index(normalized_equipment)
 
         visual_layout: Optional[Dict[str, Any]] = None
-        if layout_mode == "report_v1":
-            layout, visual_layout = cls._compute_report_layout(
-                topology_nodes, edges, normalized_equipment
+        if layout_mode in {"report_v1", INDUSTRIAL_LAYOUT_MODE}:
+            node_ids = [_to_str(node.get("id")) for node in topology_nodes]
+            depth = cls._topological_depth(node_ids, edges)
+            layout, visual_layout = compute_industrial_layout(
+                topology_nodes=topology_nodes,
+                depth=depth,
+                equipment_entries=normalized_equipment,
             )
         else:
             layout = cls._compute_layout(topology_nodes, edges)
