@@ -1,0 +1,14 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.2, pytest-9.0.1, pluggy-1.6.0
+rootdir: /home/stuart/Documentos/Planta Hidrogenio
+configfile: pyproject.toml
+plugins: cov-7.0.0
+collected 23 items
+
+tests/test_opex_uncertainty_bands.py .......                             [ 30%]
+tests/test_regenerate_lcoh_variants.py ....                              [ 47%]
+tests/test_lcoh_breakdown_components.py .                                [ 52%]
+tests/test_regenerate_net_profit_opex_variants.py ..........             [ 95%]
+tests/simulation/test_engine_dispatch_canonical_utility_columns.py .     [100%]
+
+============================== 23 passed in 3.66s ==============================

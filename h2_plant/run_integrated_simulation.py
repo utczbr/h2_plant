@@ -770,6 +770,8 @@ def run_with_dispatch_strategy(
         resume_from_hour=resume_from_hour,
         resume_checkpoint_path=resume_checkpoint_path,
         load_history=load_history,
+        generate_economics_reports=True,
+        reports_scenarios_dir=scenarios_dir,
         allow_graph_dispatch_fallback=False,  # CLI is always strict
         return_registry=True,
     )
@@ -811,114 +813,6 @@ def run_with_dispatch_strategy(
     #     topology_name=topology_name
     # )
     # logger.info(f"Markdown report saved to: {report_path}")
-
-    # Generate CAPEX Report
-    # =========================================================================
-    capex_report = None
-    try:
-        from h2_plant.economics import CapexGenerator
-        
-        capex_config_path = Path(scenarios_dir) / "Economics" / "equipment_mappings.yaml"
-        
-        if capex_config_path.exists():
-            logger.info("Generating CAPEX report...")
-            capex_generator = CapexGenerator.from_yaml(capex_config_path)
-            
-            capex_report = capex_generator.generate(
-                registry=registry,
-                monitoring=None,
-                output_dir=output_dir,
-                simulation_name=getattr(context, 'simulation_name', 'H2 Plant Simulation'),
-                simulation_hours=hours
-            )
-            
-            logger.info(f"CAPEX Report Generated:")
-            logger.info(f"  Total C_BM: ${capex_report.total_C_BM:,.0f}")
-            logger.info(f"  Range (±{capex_report.overall_cost_class.value}): "
-                    f"${capex_report.total_C_BM_low:,.0f} - ${capex_report.total_C_BM_high:,.0f}")
-            logger.info(f"  Valid entries: {capex_report.entries_with_cost}/{len(capex_report.entries)}")
-        else:
-            logger.debug(f"CAPEX config not found at {capex_config_path}, skipping CAPEX generation")
-    except ImportError as e:
-        logger.warning(f"CAPEX generator not available: {e}")
-    except Exception as e:
-        logger.error(f"CAPEX generation failed: {e}", exc_info=True)
-        capex_report = None
-
-    # Generate OPEX Report
-    # =========================================================================
-    opex_report = None
-    try:
-        from h2_plant.economics.opex_generator import OpexGenerator
-        
-        opex_config_path = Path(scenarios_dir) / "Economics" / "opex_config.yaml"
-        
-        if opex_config_path.exists():
-            logger.info("Generating OPEX report...")
-            
-            csv_path = output_dir / "simulation_history.csv"
-            opex_generator = OpexGenerator()
-            
-            # Use streaming for large files to avoid memory issues
-            if csv_path.exists():
-                file_size_mb = csv_path.stat().st_size / (1024 * 1024)
-                
-                if file_size_mb > 500:  # Use streaming for files > 500 MB
-                    logger.info(f"Using streaming OPEX (file: {file_size_mb:.0f} MB)")
-                    opex_report = opex_generator.generate_streaming(
-                        config_path=str(opex_config_path),
-                        csv_path=csv_path,
-                        capex_report=capex_report,
-                        output_dir=str(output_dir),
-                        simulation_hours=hours
-                    )
-                else:
-                    # Small file - use full load
-                    import pandas as pd
-                    history_df = pd.read_csv(csv_path)
-                    opex_report = opex_generator.generate(
-                        config_path=str(opex_config_path),
-                        capex_report=capex_report,
-                        history_df=history_df,
-                        output_dir=str(output_dir),
-                        simulation_hours=hours
-                    )
-            elif history is not None:
-                import pandas as pd
-                scalar_data = {k: v for k, v in history.items() if isinstance(v, (list, tuple)) and len(v) > 0}
-                if scalar_data:
-                    history_df = pd.DataFrame(scalar_data)
-                else:
-                    history_df = None
-                opex_report = opex_generator.generate(
-                    config_path=str(opex_config_path),
-                    capex_report=capex_report,
-                    history_df=history_df,
-                    output_dir=str(output_dir),
-                    simulation_hours=hours
-                )
-            else:
-                # No data available - generate without simulation data
-                opex_report = opex_generator.generate(
-                    config_path=str(opex_config_path),
-                    capex_report=capex_report,
-                    history_df=None,
-                    output_dir=str(output_dir),
-                    simulation_hours=hours
-                )
-            
-            logger.info(f"OPEX Report Generated:")
-            logger.info(f"  Total OPEX: ${opex_report.total_opex:,.0f}/year")
-            logger.info(f"  Variable: ${opex_report.total_variable_cost:,.0f}")
-            logger.info(f"  Fixed: ${opex_report.total_fixed_cost:,.0f}")
-            logger.info(f"  Maintenance: ${opex_report.total_maintenance_cost:,.0f}")
-        else:
-            logger.debug(f"OPEX config not found at {opex_config_path}, skipping OPEX generation")
-    except ImportError as e:
-        logger.warning(f"OPEX generator not available: {e}")
-    except Exception as e:
-        logger.error(f"OPEX generation failed: {e}", exc_info=True)
-
 
     # COMMENT: This section handles the generation of the history CSV file, as requested by the users.
     if False:

@@ -54,6 +54,7 @@ from h2_plant.components.delivery.discharge_station import DischargeStation
 from h2_plant.components.mixing.multicomponent_mixer import MultiComponentMixer
 from h2_plant.components.mixing.water_mixer import WaterMixer
 from h2_plant.components.external.biogas_source import BiogasSource
+from h2_plant.components.external.water_source import ExternalWaterSource
 from h2_plant.optimization.numba_ops import calculate_storage_mpc_factor
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,8 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         self._history: Dict[str, np.ndarray] = {}
         self._total_steps: int = 0
         self._cached_history: Optional[Dict[str, np.ndarray]] = None
+        self._biogas_flow_key: Optional[str] = None
+        self._water_flow_key: Optional[str] = None
 
     def initialize(
         self,
@@ -309,7 +312,17 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'integrated_global_efficiency': np.float64,
                 'P_soec_grid_mw': np.float64,
                 'P_pem_grid_mw': np.float64,
-                'P_bop_grid_usage_mw': np.float64
+                'P_bop_grid_usage_mw': np.float64,
+                'sold_energy_mwh_step': np.float64,
+                'pem_electricity_consumption_kwh_step': np.float64,
+                'soec_electricity_consumption_kwh_step': np.float64,
+                'bop_electricity_consumption_kwh_step': np.float64,
+                'total_electric_load_mw': np.float64,
+                'electricity_consumption_kwh_step': np.float64,
+                'total_cooling_duty_kw': np.float64,
+                'cooling_duty_kwh_th_step': np.float64,
+                'biogas_feed_kg_step': np.float64,
+                'water_makeup_kg_step': np.float64,
             }
             
             self._history_manager.register_columns(full_columns)
@@ -376,7 +389,17 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                 'integrated_global_efficiency': np.float64,
                 'P_soec_grid_mw': np.float64,
                 'P_pem_grid_mw': np.float64,
-                'P_bop_grid_usage_mw': np.float64
+                'P_bop_grid_usage_mw': np.float64,
+                'sold_energy_mwh_step': np.float64,
+                'pem_electricity_consumption_kwh_step': np.float64,
+                'soec_electricity_consumption_kwh_step': np.float64,
+                'bop_electricity_consumption_kwh_step': np.float64,
+                'total_electric_load_mw': np.float64,
+                'electricity_consumption_kwh_step': np.float64,
+                'total_cooling_duty_kw': np.float64,
+                'cooling_duty_kwh_th_step': np.float64,
+                'biogas_feed_kg_step': np.float64,
+                'water_makeup_kg_step': np.float64,
             }
             # Allocate arrays
             self._history = {k: np.zeros(total_steps, dtype=dt) for k, dt in full_columns.items()}
@@ -390,6 +413,23 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         # 2. Identify Components & Pre-Bind Arrays
         self._recorders = []
         self._prebind_recorders(registry, total_steps)
+
+        def _resolve_mass_flow_key(default_key: str, token: str) -> Optional[str]:
+            if default_key in self._history:
+                return default_key
+            for key in self._history.keys():
+                if key.endswith("_outlet_mass_flow_kg_h") and token in key.lower():
+                    return key
+            return None
+
+        self._biogas_flow_key = _resolve_mass_flow_key(
+            "Biogas_Source_outlet_mass_flow_kg_h",
+            "biogas_source",
+        )
+        self._water_flow_key = _resolve_mass_flow_key(
+            "Water_Source_outlet_mass_flow_kg_h",
+            "water_source",
+        )
         
         # SOEC Specific Modules - Per-Module Recording
         if self._soec:
@@ -506,6 +546,7 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             MultiComponentMixer: ('outlet_stream', [('temperature_k', 'temperature_k'), ('pressure_pa', 'pressure_pa')]),
             WaterMixer: ('outlet_stream', [('outlet_temperature_c', 'outlet_temperature_c'), ('outlet_mass_flow_kg_h', 'outlet_mass_flow_kg_h')]),
             BiogasSource: ('out', []),
+            ExternalWaterSource: ('water_out', []),
             DischargeStation: ('h2_out', [
                 ('truck_demand_kg_h', 'total_demand_signal_kg_h'),
                 ('trucks_filled', 'trucks_filled_total'),
@@ -1363,6 +1404,13 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
         history_store['P_soec_grid_mw'][local_idx] = P_soec_grid_mw
         history_store['P_pem_grid_mw'][local_idx] = P_pem_grid_mw
         history_store['P_bop_grid_usage_mw'][local_idx] = P_bop_grid_mw
+        history_store['sold_energy_mwh_step'][local_idx] = P_sold_corrected * dt
+        history_store['pem_electricity_consumption_kwh_step'][local_idx] = P_pem_grid_mw * 1000.0 * dt
+        history_store['soec_electricity_consumption_kwh_step'][local_idx] = P_soec_grid_mw * 1000.0 * dt
+        history_store['bop_electricity_consumption_kwh_step'][local_idx] = P_bop_grid_mw * 1000.0 * dt
+        total_electric_load_mw = max(0.0, P_soec_grid_mw + P_pem_grid_mw + P_bop_grid_mw)
+        history_store['total_electric_load_mw'][local_idx] = total_electric_load_mw
+        history_store['electricity_consumption_kwh_step'][local_idx] = total_electric_load_mw * 1000.0 * dt
         history_store['h2_kg'][local_idx] = total_h2
         history_store['H2_soec_kg'][local_idx] = h2_soec
         history_store['H2_pem_kg'][local_idx] = h2_pem
@@ -1419,11 +1467,15 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
 
         # 2. CoolingManager (pre-resolved in initialize)
         cooling_manager = self._cooling_manager
+        glycol_duty_kw = 0.0
+        cw_duty_kw = 0.0
         if cooling_manager:
             history_store['cooling_manager_glycol_supply_temp_c'][local_idx] = getattr(cooling_manager, 'glycol_supply_temp_c', 0.0)
-            history_store['cooling_manager_glycol_duty_kw'][local_idx] = getattr(cooling_manager, 'glycol_duty_kw', 0.0)
+            glycol_duty_kw = getattr(cooling_manager, 'glycol_duty_kw', 0.0)
+            history_store['cooling_manager_glycol_duty_kw'][local_idx] = glycol_duty_kw
             history_store['cooling_manager_cw_supply_temp_c'][local_idx] = getattr(cooling_manager, 'cw_supply_temp_c', 0.0)
-            history_store['cooling_manager_cw_duty_kw'][local_idx] = getattr(cooling_manager, 'cw_duty_kw', 0.0)
+            cw_duty_kw = getattr(cooling_manager, 'cw_duty_kw', 0.0)
+            history_store['cooling_manager_cw_duty_kw'][local_idx] = cw_duty_kw
             tower_fan_power_kw = getattr(cooling_manager, 'tower_fan_power_kw', 0.0)
             glycol_fan_power_kw = getattr(cooling_manager, 'glycol_fan_power_kw', 0.0)
             total_cooling_power_kw = getattr(cooling_manager, 'power_kw', None)
@@ -1432,6 +1484,9 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
             history_store['cooling_manager_tower_fan_power_kw'][local_idx] = tower_fan_power_kw
             history_store['cooling_manager_glycol_fan_power_kw'][local_idx] = glycol_fan_power_kw
             history_store['cooling_manager_power_kw'][local_idx] = total_cooling_power_kw
+        total_cooling_duty_kw = max(0.0, glycol_duty_kw + cw_duty_kw)
+        history_store['total_cooling_duty_kw'][local_idx] = total_cooling_duty_kw
+        history_store['cooling_duty_kwh_th_step'][local_idx] = total_cooling_duty_kw * dt
 
         # 3. Optimized Component Recording Loop
         for rec in self._recorders:
@@ -1476,6 +1531,19 @@ class HybridArbitrageEngineStrategy(ReferenceHybridStrategy):
                     state = rec.component.get_state() if hasattr(rec.component, 'get_state') else {}
                     val = state.get(attr_name, 0.0)
                 metric_arr[local_idx] = val if val is not None else 0.0
+
+        # Canonical feed quantities (kg/step), using recorder outputs when available.
+        biogas_flow_kg_h = 0.0
+        water_flow_kg_h = 0.0
+
+        if self._biogas_flow_key and self._biogas_flow_key in history_store:
+            biogas_flow_kg_h = history_store[self._biogas_flow_key][local_idx]
+
+        if self._water_flow_key and self._water_flow_key in history_store:
+            water_flow_kg_h = history_store[self._water_flow_key][local_idx]
+
+        history_store['biogas_feed_kg_step'][local_idx] = max(0.0, float(biogas_flow_kg_h) * dt)
+        history_store['water_makeup_kg_step'][local_idx] = max(0.0, float(water_flow_kg_h) * dt)
 
         # 4. DetailedTankArray (Flattened)
         for comp, p_keys, m_keys, p_arrs, m_arrs in self._detailed_tank_recorders:

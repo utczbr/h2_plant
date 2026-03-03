@@ -30,10 +30,22 @@ class OpexItemConfig(BaseModel):
     
     # Simulation Data Link (for Variable costs)
     resource_id: Optional[str] = Field(None, description="Column pattern to match in simulation history")
+    price_resource_id: Optional[str] = Field(
+        None,
+        description="Optional timestep price signal column for dynamic pricing",
+    )
+    pathway_driver_resource_ids: Optional[Dict[str, str]] = Field(
+        None,
+        description="Optional per-pathway driver columns for causal variable OPEX allocation",
+    )
     metric: str = Field("sum", description="Aggregation method: sum, max, avg")
     
     # Cost Parameters
     price: float = Field(0.0, description="Unit price, fixed sum, or percentage factor")
+    cost_multiplier: float = Field(
+        1.0,
+        description="Multiplier applied in variable costs (unit conversion/sign handling)",
+    )
     unit: str = Field("USD/year", description="Display unit for reporting")
     
     # Factor Strategy Parameters
@@ -51,6 +63,11 @@ class OpexItemConfig(BaseModel):
     
     # Metadata
     notes: List[str] = Field(default_factory=list, description="Engineering notes")
+    is_credit: bool = Field(False, description="Whether this item represents a credit term")
+    lcoh_component: Optional[str] = Field(
+        None,
+        description="Optional LCOH sub-breakdown tag (energy, water, compression, etc.)",
+    )
 
 
 class OpexResult(BaseModel):
@@ -64,6 +81,15 @@ class OpexResult(BaseModel):
     formula: str = Field("", description="Calculation formula string")
     source: str = Field("config", description="Data source: simulation, config, calculation")
     warnings: List[str] = Field(default_factory=list)
+    pathway_shares: Optional[Dict[str, float]] = Field(
+        None,
+        description="Optional per-pathway shares used for causal LCOH allocation",
+    )
+    is_credit: bool = Field(False, description="Whether this result is a credit term")
+    lcoh_component: Optional[str] = Field(
+        None,
+        description="Optional propagated LCOH sub-breakdown tag",
+    )
 
 
 class OpexReport(BaseModel):
@@ -84,6 +110,13 @@ class OpexReport(BaseModel):
     total_opex: float = Field(0.0, description="Total annual OPEX")
     total_opex_low: Optional[float] = Field(None, description="Low annual OPEX estimate")
     total_opex_high: Optional[float] = Field(None, description="High annual OPEX estimate")
+    total_credit_cost: float = Field(0.0, description="Annual signed sum of credit terms")
+    total_opex_cashflow: float = Field(
+        0.0,
+        description="Annual OPEX cash outflow after adding back explicit credits",
+    )
+    total_opex_cashflow_low: Optional[float] = Field(None, description="Low annual OPEX cash outflow")
+    total_opex_cashflow_high: Optional[float] = Field(None, description="High annual OPEX cash outflow")
     
     # Reference Values (from CAPEX)
     fci: float = Field(0.0, description="Fixed Capital Investment (from CAPEX)")
@@ -109,6 +142,10 @@ class OpexReport(BaseModel):
             self.total_fixed_cost + 
             self.total_maintenance_cost
         )
+        self.total_credit_cost = sum(
+            r.annual_cost for r in self.items if bool(getattr(r, "is_credit", False))
+        )
+        self.total_opex_cashflow = self.total_opex - self.total_credit_cost
         
         # Calculate per-kg cost if production data available
         if self.annual_h2_production_kg > 0:

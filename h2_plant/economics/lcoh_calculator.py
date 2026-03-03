@@ -278,12 +278,111 @@ class LcohCalculator:
 
         return capex_by, matched
 
+    def _allocate_opex_components(
+        self,
+        *,
+        opex_report: OpexReport,
+        target_opex_total: float,
+    ) -> Dict[str, float]:
+        """
+        Build annual OPEX component totals from tagged OPEX items.
+
+        The raw item totals are scaled to match the requested OPEX variant total,
+        preserving compatibility between sub-breakdown and top-level OPEX.
+        """
+        components = {
+            "energy": 0.0,
+            "water": 0.0,
+            "compression": 0.0,
+            "other_opex": 0.0,
+        }
+
+        for item in opex_report.items:
+            annual_cost = float(getattr(item, "annual_cost", 0.0) or 0.0)
+            raw_tag = str(getattr(item, "lcoh_component", "") or "").strip().lower()
+            if raw_tag in ("energy", "water", "compression"):
+                components[raw_tag] += annual_cost
+            else:
+                components["other_opex"] += annual_cost
+
+        raw_total = sum(components.values())
+        if raw_total <= 0:
+            if target_opex_total > 0:
+                components["other_opex"] = float(target_opex_total)
+            return components
+
+        scale = float(target_opex_total) / raw_total
+        for key in components:
+            components[key] *= scale
+        return components
+
+    @staticmethod
+    def _normalize_shares(shares: Dict[str, float], valid_keys: list[str]) -> Dict[str, float]:
+        cleaned = {
+            key: max(0.0, float(shares.get(key, 0.0) or 0.0))
+            for key in valid_keys
+        }
+        total = sum(cleaned.values())
+        if total <= 0:
+            return {key: 0.0 for key in valid_keys}
+        return {key: value / total for key, value in cleaned.items()}
+
+    def _allocate_opex_by_pathway(
+        self,
+        *,
+        opex_report: OpexReport,
+        target_opex_total: float,
+        fallback_shares: Dict[str, float],
+    ) -> Dict[str, float]:
+        pathway_keys = list(fallback_shares.keys())
+        normalized_fallback = self._normalize_shares(fallback_shares, pathway_keys)
+        opex_by = {key: 0.0 for key in pathway_keys}
+
+        for item in opex_report.items:
+            annual_cost = float(getattr(item, "annual_cost", 0.0) or 0.0)
+            if annual_cost == 0:
+                continue
+
+            shares = normalized_fallback
+            if (
+                item.category.value == "Variable"
+                and getattr(item, "pathway_shares", None) is not None
+            ):
+                item_shares = self._normalize_shares(
+                    getattr(item, "pathway_shares", {}) or {},
+                    pathway_keys,
+                )
+                if sum(item_shares.values()) <= 0:
+                    raise ValueError(
+                        "Invalid causal pathway allocation: non-zero variable OPEX item "
+                        f"'{item.name}' has pathway_shares that sum to zero."
+                    )
+                shares = item_shares
+
+            for key in pathway_keys:
+                opex_by[key] += annual_cost * shares.get(key, 0.0)
+
+        raw_total = sum(opex_by.values())
+        if raw_total > 0:
+            scale = float(target_opex_total) / raw_total
+            for key in pathway_keys:
+                opex_by[key] *= scale
+            return opex_by
+
+        if target_opex_total <= 0:
+            return opex_by
+
+        for key in pathway_keys:
+            opex_by[key] = float(target_opex_total) * normalized_fallback.get(key, 0.0)
+        return opex_by
+
     def _build_variant_report(
         self,
         *,
         variant: str,
         capex_total: float,
         opex_total: float,
+        opex_report: OpexReport,
         annual_by: Dict[str, float],
         annual_total: float,
         prod_shares: Dict[str, float],
@@ -305,7 +404,11 @@ class LcohCalculator:
             if not ok:
                 capex_by[key] = capex_total * prod_shares.get(key, 0.0)
 
-        opex_by = {k: opex_total * prod_shares.get(k, 0.0) for k in annual_by}
+        opex_by = self._allocate_opex_by_pathway(
+            opex_report=opex_report,
+            target_opex_total=opex_total,
+            fallback_shares=prod_shares,
+        )
         df_sum = self._discount_factor_sum(discount_rate, project_years)
 
         pv_h2_total = annual_total * df_sum
@@ -323,12 +426,17 @@ class LcohCalculator:
         if annual_total > 0:
             weighted = sum(lcoh_by[k] * annual_by.get(k, 0.0) for k in lcoh_by) / annual_total
 
+        opex_component_annual = self._allocate_opex_components(
+            opex_report=opex_report,
+            target_opex_total=opex_total,
+        )
         breakdown = {
             "capex": self._safe_div(capex_total, pv_h2_total),
             "opex": self._safe_div(opex_total * df_sum, pv_h2_total),
-            "energy": 0.0,
-            "water": 0.0,
-            "compression": 0.0,
+            "energy": self._safe_div(opex_component_annual["energy"] * df_sum, pv_h2_total),
+            "water": self._safe_div(opex_component_annual["water"] * df_sum, pv_h2_total),
+            "compression": self._safe_div(opex_component_annual["compression"] * df_sum, pv_h2_total),
+            "other_opex": self._safe_div(opex_component_annual["other_opex"] * df_sum, pv_h2_total),
         }
 
         return LcohReport(
@@ -363,6 +471,7 @@ class LcohCalculator:
             variant="base",
             capex_total=capex_total,
             opex_total=opex_total,
+            opex_report=inputs.opex_report,
             annual_by=annual_by,
             annual_total=annual_total,
             prod_shares=prod_shares,
@@ -391,6 +500,7 @@ class LcohCalculator:
                 variant=variant,
                 capex_total=capex_totals[variant],
                 opex_total=opex_totals[variant],
+                opex_report=inputs.opex_report,
                 annual_by=annual_by,
                 annual_total=annual_total,
                 prod_shares=prod_shares,

@@ -1,0 +1,299 @@
+{
+  "historical_2026_03_02": {
+    "paths": {
+      "config": "h2_plant/gui/layouts/generated/run_20260302_180628/Economics/opex_config.yaml",
+      "opex_report": "h2_plant/gui/layouts/generated/run_20260302_180628/simulation_output/opex_report.json",
+      "lcoh_report": "h2_plant/gui/layouts/generated/run_20260302_180628/simulation_output/lcoh_report.json",
+      "history_chunks": "h2_plant/gui/layouts/generated/run_20260302_180628/simulation_output/history_chunks"
+    },
+    "opex_summary": {
+      "total_opex": 19579111.61,
+      "total_opex_low": 15498963.409999998,
+      "total_opex_high": 23659259.79,
+      "total_variable_cost": 394200.0,
+      "total_fixed_cost": 6099568.1,
+      "total_maintenance_cost": 13085343.51
+    },
+    "opex_item_focus": {
+      "Operating Labor (Turton)": {
+        "annual_quantity": 2080.0,
+        "annual_cost": 1211010.23,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Electricity Consumption": {
+        "annual_quantity": 0.0,
+        "annual_cost": 0.0,
+        "source": "simulation:streaming:power_consumption_kw",
+        "lcoh_component": null
+      },
+      "Process Water (Makeup)": {
+        "annual_quantity": 0.0,
+        "annual_cost": 0.0,
+        "source": "simulation:streaming:Water_Source",
+        "lcoh_component": null
+      },
+      "Biogas Feed": {
+        "annual_quantity": 13140000.0,
+        "annual_cost": 394200.0,
+        "source": "simulation:streaming:Biogas_Source",
+        "lcoh_component": null
+      },
+      "Cooling Water (Chiller)": {
+        "annual_quantity": 0.0,
+        "annual_cost": 0.0,
+        "source": "simulation:streaming:cooling_duty",
+        "lcoh_component": null
+      },
+      "Supervisory & Technical Staff": {
+        "annual_quantity": 1.0,
+        "annual_cost": 302752.56,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Laboratory & QC": {
+        "annual_quantity": 1.0,
+        "annual_cost": 121101.02,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Administration & Overhead": {
+        "annual_quantity": 1.0,
+        "annual_cost": 726606.14,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Insurance & Local Tax": {
+        "annual_quantity": 1.0,
+        "annual_cost": 3738098.15,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "General Maintenance (FCI %)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 8722229.01,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Catalyst Replacement (ATR)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 2000.0,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Stack Replacement Reserve (PEM)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 1869049.07,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Stack Replacement Reserve (SOEC)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 2492065.43,
+        "source": "config",
+        "lcoh_component": null
+      }
+    },
+    "lcoh_summary": {
+      "lcoh_total": 8.398499123767682,
+      "variant_order": [
+        "low",
+        "base",
+        "high"
+      ],
+      "base_breakdown": {
+        "capex": 3.302931119283628,
+        "opex": 5.095568004484053,
+        "energy": 0.0,
+        "water": 0.0,
+        "compression": 0.0
+      },
+      "base_opex_by_pathway": {
+        "pem": 2766218.604494258,
+        "soec": 10708337.06644075,
+        "atr": 6104555.939064993
+      },
+      "base_capex_by_pathway": {
+        "pem": 13936975.150922442,
+        "soec": 72812481.44869812,
+        "atr": 16178340.133809902
+      }
+    },
+    "history_reconciliation": {
+      "rows": 10080,
+      "simulation_hours_inferred": 168.0,
+      "annualization_factor_inferred": 52.142857142857146,
+      "period_totals": {
+        "electricity_consumption_kwh_step": 0.0,
+        "water_makeup_kg_step": 0.0,
+        "biogas_feed_kg_step": 0.0,
+        "cooling_duty_kwh_th_step": 0.0
+      },
+      "annualized_totals": {
+        "electricity_consumption_kwh_step": 0.0,
+        "water_makeup_kg_step": 0.0,
+        "biogas_feed_kg_step": 0.0,
+        "cooling_duty_kwh_th_step": 0.0
+      },
+      "sold_energy_mwh_period": 770.4801197377822,
+      "sold_energy_mwh_annual": 40175.034814898645,
+      "sold_revenue_eur_period": 68833.9531963012,
+      "sold_revenue_eur_annual": 3589198.9880928486,
+      "sold_revenue_avg_price_eur_per_mwh": 89.33903864998813
+    },
+    "derived_checks": {
+      "electricity_cost_eur_annual_at_0_25_per_kwh": 0.0,
+      "electricity_sale_revenue_eur_annual_from_history": 3589198.9880928486,
+      "net_electricity_cost_eur_annual_if_sale_credit_applied": -3589198.9880928486
+    }
+  },
+  "current_2026_03_03": {
+    "paths": {
+      "config": "scenarios/Economics/opex_config.yaml",
+      "opex_report": "scenarios/simulation_output/opex_report.json",
+      "lcoh_report": "scenarios/simulation_output/lcoh_report.json",
+      "history_chunks": "scenarios/simulation_output/history_chunks"
+    },
+    "opex_summary": {
+      "total_opex": 54864533.3,
+      "total_opex_low": 50783368.9,
+      "total_opex_high": 58945697.72,
+      "total_variable_cost": 35676234.3,
+      "total_fixed_cost": 6100320.85,
+      "total_maintenance_cost": 13087978.149999999
+    },
+    "opex_item_focus": {
+      "Operating Labor (Turton)": {
+        "annual_quantity": 2080.0,
+        "annual_cost": 1211010.23,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Electricity Consumption": {
+        "annual_quantity": 140797214.03846407,
+        "annual_cost": 35199303.51,
+        "source": "simulation:streaming:electricity_consumption_kwh_step",
+        "lcoh_component": "energy"
+      },
+      "Process Water (Makeup)": {
+        "annual_quantity": 74472512.5945946,
+        "annual_cost": 148945.03,
+        "source": "simulation:streaming:water_makeup_kg_step",
+        "lcoh_component": "water"
+      },
+      "Biogas Feed": {
+        "annual_quantity": 10888994.451063571,
+        "annual_cost": 326669.83,
+        "source": "simulation:streaming:biogas_feed_kg_step",
+        "lcoh_component": "energy"
+      },
+      "Cooling Water (Chiller)": {
+        "annual_quantity": 13159320.911153655,
+        "annual_cost": 1315.93,
+        "source": "simulation:streaming:cooling_duty_kwh_th_step",
+        "lcoh_component": "compression"
+      },
+      "Supervisory & Technical Staff": {
+        "annual_quantity": 1.0,
+        "annual_cost": 302752.56,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Laboratory & QC": {
+        "annual_quantity": 1.0,
+        "annual_cost": 121101.02,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Administration & Overhead": {
+        "annual_quantity": 1.0,
+        "annual_cost": 726606.14,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Insurance & Local Tax": {
+        "annual_quantity": 1.0,
+        "annual_cost": 3738850.9,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "General Maintenance (FCI %)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 8723985.43,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Catalyst Replacement (ATR)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 2000.0,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Stack Replacement Reserve (PEM)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 1869425.45,
+        "source": "config",
+        "lcoh_component": null
+      },
+      "Stack Replacement Reserve (SOEC)": {
+        "annual_quantity": 1.0,
+        "annual_cost": 2492567.27,
+        "source": "config",
+        "lcoh_component": null
+      }
+    },
+    "lcoh_summary": {
+      "lcoh_total": 19.636676546457103,
+      "variant_order": [
+        "low",
+        "base",
+        "high"
+      ],
+      "base_breakdown": {
+        "capex": 3.6895823897905324,
+        "opex": 15.94709415666657,
+        "energy": 10.32608878239025,
+        "water": 0.043292820966683174,
+        "compression": 0.00038249226506374467,
+        "other_opex": 5.577330061044573
+      },
+      "base_opex_by_pathway": {
+        "pem": 8361204.225051856,
+        "soec": 29192536.681347124,
+        "atr": 17310792.39360102
+      },
+      "base_capex_by_pathway": {
+        "pem": 13936975.150922442,
+        "soec": 72835224.83561963,
+        "atr": 16180299.539184347
+      }
+    },
+    "history_reconciliation": {
+      "rows": 44400,
+      "simulation_hours_inferred": 740.0,
+      "annualization_factor_inferred": 11.837837837837839,
+      "period_totals": {
+        "electricity_consumption_kwh_step": 11893828.583157923,
+        "water_makeup_kg_step": 6291057.0,
+        "biogas_feed_kg_step": 919846.5632176988,
+        "cooling_duty_kwh_th_step": 1111632.1317641216
+      },
+      "annualized_totals": {
+        "electricity_consumption_kwh_step": 140797214.03846407,
+        "water_makeup_kg_step": 74472512.5945946,
+        "biogas_feed_kg_step": 10888994.451063571,
+        "cooling_duty_kwh_th_step": 13159320.911153655
+      },
+      "sold_energy_mwh_period": 4936.461667045752,
+      "sold_energy_mwh_annual": 58437.03270719025,
+      "sold_revenue_eur_period": 444218.78714447824,
+      "sold_revenue_eur_annual": 5258589.966737337,
+      "sold_revenue_avg_price_eur_per_mwh": 89.98728585495591
+    },
+    "derived_checks": {
+      "electricity_cost_eur_annual_at_0_25_per_kwh": 35199303.50961602,
+      "electricity_sale_revenue_eur_annual_from_history": 5258589.966737337,
+      "net_electricity_cost_eur_annual_if_sale_credit_applied": 29940713.54287868
+    }
+  }
+}

@@ -19,31 +19,61 @@ opex_items:
   - name: "Electricity Consumption"
     category: "Variable"
     strategy: "variable"
-    resource_id: "power_consumption_kw"  # Matches simulation column pattern
+    resource_id: "electricity_consumption_kwh_step"
+    price_resource_id: "ppa_price_effective_eur_mwh"
+    pathway_driver_resource_ids:
+      pem: "pem_electricity_consumption_kwh_step"
+      soec: "soec_electricity_consumption_kwh_step"
+      atr: "bop_electricity_consumption_kwh_step"
     metric: "sum"                         # Sum over simulation period
-    price: 0.25                           # €0.25/kWh (PPA estimate)
+    price: 1.0                            # Use timestep dynamic price signal directly
+    cost_multiplier: 0.001                # kWh × EUR/MWh -> EUR
     unit: "kWh"
+    lcoh_component: "energy"
     notes:
-      - "PPA contract with wind farm"
-      - "Price includes grid balancing"
+      - "Timestep effective dual-tier PPA price from dispatch history"
+
+  - name: "Electricity Sale Credit"
+    category: "Variable"
+    strategy: "variable"
+    resource_id: "sold_energy_mwh_step"
+    price_resource_id: "spot_price"
+    metric: "sum"
+    price: 1.0
+    cost_multiplier: -1.0                 # Export revenue as negative OPEX credit
+    unit: "MWh"
+    is_credit: true
+    lcoh_component: "energy"
+    notes:
+      - "Credit term from spot electricity exports"
 
   - name: "Process Water (Makeup)"
     category: "Variable"
     strategy: "variable"
-    resource_id: "Water_Source"           # External water source flow
+    resource_id: "water_makeup_kg_step"
+    pathway_driver_resource_ids:
+      pem: "H2_pem_kg"
+      soec: "H2_soec_kg"
+      atr: "H2_atr_kg"
     metric: "sum"
     price: 0.002                          # €1.97/m³ ≈ €0.002/kg
     unit: "kg"
+    lcoh_component: "water"
     notes:
       - "Municipal supply for electrolysis makeup"
 
   - name: "Biogas Feed"
     category: "Variable"
     strategy: "variable"
-    resource_id: "Biogas_Source"
+    resource_id: "biogas_feed_kg_step"
+    pathway_driver_resource_ids:
+      pem: "H2_pem_kg"
+      soec: "H2_soec_kg"
+      atr: "biogas_feed_kg_step"
     metric: "sum"
     price: 0.03                           # €/kg biogas
     unit: "kg"
+    lcoh_component: "energy"
     notes:
       - "Local waste-to-biogas plant supply"
       - "Price includes transport"
@@ -51,10 +81,15 @@ opex_items:
   - name: "Cooling Water (Chiller)"
     category: "Variable"
     strategy: "variable"
-    resource_id: "cooling_duty"
+    resource_id: "cooling_duty_kwh_th_step"
+    pathway_driver_resource_ids:
+      pem: "H2_pem_kg"
+      soec: "H2_soec_kg"
+      atr: "H2_atr_kg"
     metric: "sum"
     price: 0.0001                         # Minimal cost (air cooling primary)
     unit: "kWh_th"
+    lcoh_component: "compression"
 
   # ===========================================================================
   # FIXED COSTS (Labor & Overhead)

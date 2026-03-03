@@ -10,11 +10,13 @@ Orchestrates OPEX calculation by:
 """
 
 import csv
+import difflib
 import json
 import logging
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Callable, Tuple
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -144,6 +146,174 @@ class OpexGenerator:
             return None
         return parsed
 
+    def _required_variable_items(self) -> List[OpexItemConfig]:
+        return [
+            item for item in self.items
+            if item.strategy == "variable"
+            and (
+                item.resource_id
+                or item.price_resource_id
+                or item.pathway_driver_resource_ids
+            )
+        ]
+
+    @staticmethod
+    def _dynamic_pair_key(item: OpexItemConfig) -> Optional[str]:
+        if not item.resource_id or not item.price_resource_id:
+            return None
+        return f"__dynamic_pair__{item.resource_id}__{item.price_resource_id}"
+
+    @staticmethod
+    def _annualize_metric(raw_qty: float, metric: str, annualization_factor: float) -> float:
+        if metric == "avg":
+            return float(raw_qty) * 8760.0
+        if metric == "max":
+            return float(raw_qty)
+        return float(raw_qty) * annualization_factor
+
+    @staticmethod
+    def _extract_metric_from_quantities(
+        quantities: Dict[str, Dict[str, float]],
+        signal_id: str,
+        metric: str,
+    ) -> float:
+        raw_entry = quantities.get(signal_id, {})
+        if isinstance(raw_entry, dict):
+            return float(raw_entry.get(metric, 0.0) or 0.0)
+        return float(raw_entry or 0.0)
+
+    @staticmethod
+    def _resolve_column_name(resource_id: str, all_cols: List[str]) -> Optional[str]:
+        """Resolve a configured resource_id to a concrete history column."""
+        target = resource_id.lower()
+        exact_matches = [col for col in all_cols if col.lower() == target]
+        if exact_matches:
+            return exact_matches[0]
+
+        contains_matches = [col for col in all_cols if target in col.lower()]
+        if contains_matches:
+            return contains_matches[0]
+        return None
+
+    @staticmethod
+    def _closest_column_matches(resource_id: str, all_cols: List[str], limit: int = 5) -> List[str]:
+        if not all_cols:
+            return []
+        lowered_map = {col.lower(): col for col in all_cols}
+        close = difflib.get_close_matches(
+            resource_id.lower(),
+            list(lowered_map.keys()),
+            n=limit,
+            cutoff=0.4,
+        )
+        if close:
+            return [lowered_map[c] for c in close]
+
+        tokens = [tok for tok in resource_id.lower().replace("_", " ").split() if tok]
+        partial = [col for col in all_cols if any(tok in col.lower() for tok in tokens)]
+        return partial[:limit]
+
+    def _resolve_required_columns(
+        self,
+        *,
+        all_cols: List[str],
+        required_items: List[OpexItemConfig],
+        source_label: str,
+        strict: bool,
+    ) -> Dict[str, str]:
+        col_map: Dict[str, str] = {}
+        missing: Dict[str, List[str]] = {}
+
+        required_signals: set[str] = set()
+        for item in required_items:
+            if item.resource_id:
+                required_signals.add(item.resource_id)
+            if item.price_resource_id:
+                required_signals.add(item.price_resource_id)
+            if item.pathway_driver_resource_ids:
+                for signal in item.pathway_driver_resource_ids.values():
+                    if signal:
+                        required_signals.add(signal)
+
+        for signal_id in sorted(required_signals):
+            resolved = self._resolve_column_name(signal_id, all_cols)
+            if resolved is None:
+                missing[signal_id] = self._closest_column_matches(signal_id, all_cols)
+                continue
+            col_map[signal_id] = resolved
+
+        if strict and missing:
+            missing_descriptions = []
+            for resource_id, suggestions in missing.items():
+                if suggestions:
+                    missing_descriptions.append(
+                        f"{resource_id} (closest: {', '.join(suggestions)})"
+                    )
+                else:
+                    missing_descriptions.append(f"{resource_id} (closest: none)")
+            raise ValueError(
+                "Missing configured OPEX variable signals in "
+                f"{source_label}: {', '.join(missing_descriptions)}"
+            )
+
+        return col_map
+
+    @staticmethod
+    def _infer_simulation_hours_from_minutes(minute_series: pd.Series) -> Optional[float]:
+        minute_values = pd.to_numeric(minute_series, errors="coerce").dropna()
+        if minute_values.empty:
+            return None
+
+        minutes_min = float(minute_values.min())
+        minutes_max = float(minute_values.max())
+        if minutes_max < minutes_min:
+            return None
+
+        simulation_hours = (minutes_max - minutes_min) / 60.0
+
+        if len(minute_values) > 1:
+            diffs = minute_values.diff().dropna()
+            positive_diffs = diffs[diffs > 0]
+            if not positive_diffs.empty:
+                simulation_hours += float(positive_diffs.median()) / 60.0
+
+        if simulation_hours <= 0:
+            return None
+        return simulation_hours
+
+    def _resolve_simulation_hours_for_annualization(
+        self,
+        *,
+        configured_hours: float,
+        inferred_hours: Optional[float],
+        source_label: str,
+    ) -> float:
+        configured = float(configured_hours) if configured_hours is not None else 0.0
+        inferred = float(inferred_hours) if inferred_hours is not None else 0.0
+
+        if inferred > 0:
+            if configured <= 0:
+                logger.warning(
+                    "Simulation hours for OPEX annualization not configured or non-positive "
+                    "(configured=%s). Using inferred span from %s: %.6f h.",
+                    configured_hours,
+                    source_label,
+                    inferred,
+                )
+                return inferred
+            if abs(inferred - configured) > 1e-6:
+                logger.warning(
+                    "Simulation hours mismatch for OPEX annualization from %s: "
+                    "configured=%.6f h, inferred=%.6f h. Using inferred span.",
+                    source_label,
+                    configured,
+                    inferred,
+                )
+                return inferred
+            return configured
+
+        return configured if configured > 0 else 8760.0
+
     def _apply_uncertainty_bands(
         self,
         report: OpexReport,
@@ -226,6 +396,18 @@ class OpexGenerator:
             "OPEX uncertainty bands."
         )
         self._apply_uncertainty_bands(report, capex_report)
+
+    @staticmethod
+    def _populate_cashflow_fields(report: OpexReport) -> None:
+        report.total_opex_cashflow = float(report.total_opex) - float(report.total_credit_cost)
+        if report.total_opex_low is not None:
+            report.total_opex_cashflow_low = float(report.total_opex_low) - float(report.total_credit_cost)
+        else:
+            report.total_opex_cashflow_low = None
+        if report.total_opex_high is not None:
+            report.total_opex_cashflow_high = float(report.total_opex_high) - float(report.total_credit_cost)
+        else:
+            report.total_opex_cashflow_high = None
     
     def generate(
         self,
@@ -250,6 +432,17 @@ class OpexGenerator:
         """
         # Load configuration
         self.load_config(config_path)
+
+        required_items = self._required_variable_items()
+        resolved_columns: Dict[str, str] = {}
+        history_available = history_df is not None
+        if history_available:
+            resolved_columns = self._resolve_required_columns(
+                all_cols=list(history_df.columns),
+                required_items=required_items,
+                source_label="history dataframe",
+                strict=True,
+            )
         
         # Initialize report
         report = OpexReport(
@@ -269,6 +462,8 @@ class OpexGenerator:
             return self._calculate_item(
                 item=item,
                 history_df=history_df,
+                resolved_columns=resolved_columns,
+                history_available=history_available,
                 base_costs=base_costs,
                 annualization_factor=report.annualization_factor,
             )
@@ -295,6 +490,7 @@ class OpexGenerator:
             sorted_items=sorted_items,
             item_calculator=item_calculator,
         )
+        self._populate_cashflow_fields(report)
         
         # Export if output_dir provided
         if output_dir:
@@ -347,36 +543,42 @@ class OpexGenerator:
         
         # Load configuration
         self.load_config(config_path)
-        
-        # Initialize report
-        annualization_factor = 8760.0 / simulation_hours if simulation_hours > 0 else 1.0
-        report = OpexReport(
-            scenario_name=self.config.get('scenario_name', 'default'),
-            simulation_hours=simulation_hours,
-            annualization_factor=annualization_factor,
-        )
-        
-        # Get FCI from CAPEX report
-        if capex_report:
-            report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
-            logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
-        
+
         # Extract quantities from CSV using streaming
         csv_path = Path(csv_path)
+        history_available = csv_path.exists()
         if csv_path.exists():
-            # Identify required columns from config
-            required_items = [
-                item for item in self.items
-                if item.strategy == "variable" and item.resource_id
-            ]
-            
-            quantities = self._extract_quantities_streaming(
-                csv_path, required_items, chunk_size
+            quantities, inferred_hours = self._extract_quantities_streaming(
+                csv_path=csv_path,
+                required_items=self._required_variable_items(),
+                chunk_size=chunk_size,
             )
             logger.info(f"Extracted {len(quantities)} quantities via streaming")
         else:
             quantities = {}
+            inferred_hours = None
             logger.warning(f"CSV not found: {csv_path}")
+
+        effective_simulation_hours = self._resolve_simulation_hours_for_annualization(
+            configured_hours=simulation_hours,
+            inferred_hours=inferred_hours,
+            source_label=f"CSV minute column ({csv_path})",
+        )
+        annualization_factor = (
+            8760.0 / effective_simulation_hours if effective_simulation_hours > 0 else 1.0
+        )
+
+        # Initialize report
+        report = OpexReport(
+            scenario_name=self.config.get('scenario_name', 'default'),
+            simulation_hours=effective_simulation_hours,
+            annualization_factor=annualization_factor,
+        )
+
+        # Get FCI from CAPEX report
+        if capex_report:
+            report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
+            logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
         
         sorted_items = self._sorted_items()
 
@@ -384,6 +586,7 @@ class OpexGenerator:
             return self._calculate_item_streaming(
                 item=item,
                 quantities=quantities,
+                history_available=history_available,
                 base_costs=base_costs,
                 annualization_factor=annualization_factor,
             )
@@ -411,6 +614,7 @@ class OpexGenerator:
             sorted_items=sorted_items,
             item_calculator=item_calculator,
         )
+        self._populate_cashflow_fields(report)
         
         # Export if output_dir provided
         if output_dir:
@@ -457,11 +661,28 @@ class OpexGenerator:
         # Load configuration
         self.load_config(config_path)
 
+        chunks_path = Path(chunks_dir)
+        history_available = chunks_path.exists() and any(chunks_path.glob("chunk_*.parquet"))
+
+        quantities, inferred_hours = self._extract_quantities_parquet_chunks(
+            chunks_dir=chunks_dir,
+            required_items=self._required_variable_items(),
+        )
+        logger.info(f"Extracted {len(quantities)} quantities from Parquet chunks")
+
+        effective_simulation_hours = self._resolve_simulation_hours_for_annualization(
+            configured_hours=simulation_hours,
+            inferred_hours=inferred_hours,
+            source_label=f"Parquet minute column ({chunks_dir})",
+        )
+        annualization_factor = (
+            8760.0 / effective_simulation_hours if effective_simulation_hours > 0 else 1.0
+        )
+
         # Initialize report
-        annualization_factor = 8760.0 / simulation_hours if simulation_hours > 0 else 1.0
         report = OpexReport(
             scenario_name=self.config.get('scenario_name', 'default'),
-            simulation_hours=simulation_hours,
+            simulation_hours=effective_simulation_hours,
             annualization_factor=annualization_factor,
         )
 
@@ -470,20 +691,13 @@ class OpexGenerator:
             report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
             logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
 
-        required_items = [
-            item for item in self.items
-            if item.strategy == "variable" and item.resource_id
-        ]
-
-        quantities = self._extract_quantities_parquet_chunks(chunks_dir, required_items)
-        logger.info(f"Extracted {len(quantities)} quantities from Parquet chunks")
-
         sorted_items = self._sorted_items()
 
         def item_calculator(item: OpexItemConfig, base_costs: Dict[str, float]) -> OpexResult:
             return self._calculate_item_streaming(
                 item=item,
                 quantities=quantities,
+                history_available=history_available,
                 base_costs=base_costs,
                 annualization_factor=annualization_factor,
             )
@@ -509,6 +723,7 @@ class OpexGenerator:
             sorted_items=sorted_items,
             item_calculator=item_calculator,
         )
+        self._populate_cashflow_fields(report)
 
         if output_dir:
             output_path = Path(output_dir)
@@ -535,7 +750,7 @@ class OpexGenerator:
         csv_path: Path,
         required_items: List[OpexItemConfig],
         chunk_size: int = 50_000,
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> Tuple[Dict[str, Dict[str, float]], Optional[float]]:
         """
         Extract quantities using chunked streaming with column filtering.
         
@@ -547,37 +762,41 @@ class OpexGenerator:
             chunk_size: Rows per chunk
             
         Returns:
-            Dict of resource_id -> metric quantities (sum/max/avg)
+            Tuple (quantities_by_resource_id, inferred_simulation_hours)
         """
         import gc
         
         # 1. Scan header to find matching columns
         header_df = pd.read_csv(csv_path, nrows=0)
         all_cols = list(header_df.columns)
-        
-        # Map resource_id -> actual column name
-        col_map = {}
-        required_resources = []
-        for item in required_items:
-            if item.resource_id:
-                required_resources.append(item.resource_id)
 
-        for res_id in required_resources:
-            for col in all_cols:
-                if res_id.lower() in col.lower():
-                    col_map[res_id] = col
-                    break
-        
-        # Always include H2 production column
-        h2_cols = [c for c in all_cols if 'cumulative_h2_kg' in c.lower()]
-        if h2_cols:
-            col_map['cumulative_h2_kg'] = h2_cols[0]
+        # Map configured resource_id -> actual column name with strict policy
+        col_map = self._resolve_required_columns(
+            all_cols=all_cols,
+            required_items=required_items,
+            source_label=f"CSV history header ({csv_path})",
+            strict=True,
+        )
+
+        # Always include H2 production column for per-kg OPEX metric
+        h2_col = self._resolve_column_name("cumulative_h2_kg", all_cols)
+        if h2_col is not None:
+            col_map['cumulative_h2_kg'] = h2_col
+        minute_col = self._resolve_column_name("minute", all_cols)
+        if minute_col is not None:
+            col_map['minute'] = minute_col
+
+        dynamic_pairs: Dict[str, Tuple[str, str]] = {}
+        for item in required_items:
+            pair_key = self._dynamic_pair_key(item)
+            if pair_key and item.resource_id and item.price_resource_id:
+                dynamic_pairs[pair_key] = (item.resource_id, item.price_resource_id)
         
         # 2. Select only needed columns
         needed_cols = list(set(col_map.values()))
         if not needed_cols:
             logger.warning("No matching columns found for OPEX extraction")
-            return {}
+            return {}, None
         
         logger.info(f"Streaming OPEX: reading {len(needed_cols)} columns in chunks of {chunk_size}")
         
@@ -594,13 +813,43 @@ class OpexGenerator:
             }
 
         rows_processed = 0
+        minutes_min: Optional[float] = None
+        minutes_max: Optional[float] = None
+        minute_diffs: List[float] = []
+        last_minute: Optional[float] = None
+        dynamic_pair_products = {pair_key: 0.0 for pair_key in dynamic_pairs}
         
         # 4. Process chunks
         try:
             for chunk in pd.read_csv(csv_path, usecols=needed_cols, chunksize=chunk_size):
                 rows_processed += len(chunk)
+
+                minute_signal_col = col_map.get("minute")
+                if minute_signal_col and minute_signal_col in chunk.columns:
+                    minute_series = pd.to_numeric(chunk[minute_signal_col], errors="coerce").dropna()
+                    if not minute_series.empty:
+                        chunk_minutes = minute_series.values.astype(float)
+                        chunk_min = float(np.min(chunk_minutes))
+                        chunk_max = float(np.max(chunk_minutes))
+                        if minutes_min is None or chunk_min < minutes_min:
+                            minutes_min = chunk_min
+                        if minutes_max is None or chunk_max > minutes_max:
+                            minutes_max = chunk_max
+
+                        if last_minute is not None:
+                            cross_diff = chunk_minutes[0] - last_minute
+                            if cross_diff > 0:
+                                minute_diffs.append(float(cross_diff))
+                        if chunk_minutes.size > 1:
+                            diffs = np.diff(chunk_minutes)
+                            positive = diffs[diffs > 0]
+                            if positive.size > 0:
+                                minute_diffs.append(float(np.median(positive)))
+                        last_minute = float(chunk_minutes[-1])
                 
                 for res_id, col in col_map.items():
+                    if res_id == "minute":
+                        continue
                     if col in chunk.columns:
                         series = chunk[col]
                         is_cumulative = bool(accumulators[res_id]["is_cumulative"])
@@ -620,6 +869,17 @@ class OpexGenerator:
                                 accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
                             if pd.notna(series_count):
                                 accumulators[res_id]["count"] += series_count
+
+                for pair_key, (quantity_signal, price_signal) in dynamic_pairs.items():
+                    quantity_col = col_map.get(quantity_signal)
+                    price_col = col_map.get(price_signal)
+                    if not quantity_col or not price_col:
+                        continue
+                    if quantity_col not in chunk.columns or price_col not in chunk.columns:
+                        continue
+                    qty_series = pd.to_numeric(chunk[quantity_col], errors="coerce").fillna(0.0)
+                    price_series = pd.to_numeric(chunk[price_col], errors="coerce").fillna(0.0)
+                    dynamic_pair_products[pair_key] += float((qty_series * price_series).sum())
                 
                 # Periodic cleanup
                 if rows_processed % (chunk_size * 5) == 0:
@@ -627,11 +887,13 @@ class OpexGenerator:
         
         except Exception as e:
             logger.error(f"Error in streaming extraction: {e}")
-            return {}
+            return {}, None
         
         # Finalize metrics
         quantities: Dict[str, Dict[str, float]] = {}
         for res_id, acc in accumulators.items():
+            if res_id == "minute":
+                continue
             if bool(acc["is_cumulative"]):
                 last_val = acc["last"] if acc["last"] is not None else 0.0
                 quantities[res_id] = {
@@ -647,15 +909,30 @@ class OpexGenerator:
                     "max": max_val,
                     "avg": avg_val,
                 }
+
+        for pair_key, product_sum in dynamic_pair_products.items():
+            quantities[pair_key] = {"sum_product": float(product_sum)}
         
         logger.info(f"Streaming complete: {rows_processed:,} rows processed")
-        return quantities
+        inferred_hours = None
+        if (
+            minutes_min is not None
+            and minutes_max is not None
+            and minutes_max >= minutes_min
+        ):
+            inferred_hours = (minutes_max - minutes_min) / 60.0
+            if minute_diffs:
+                inferred_hours += float(np.median(minute_diffs)) / 60.0
+            if inferred_hours <= 0:
+                inferred_hours = None
+
+        return quantities, inferred_hours
 
     def _extract_quantities_parquet_chunks(
         self,
         chunks_dir: Path,
         required_items: List[OpexItemConfig],
-    ) -> Dict[str, Dict[str, float]]:
+    ) -> Tuple[Dict[str, Dict[str, float]], Optional[float]]:
         """
         Extract quantities from Parquet history chunks with metric-aware aggregation.
         
@@ -664,7 +941,7 @@ class OpexGenerator:
             required_items: OPEX items requiring simulation data
             
         Returns:
-            Dict of resource_id -> metric quantities (sum/max/avg)
+            Tuple (quantities_by_resource_id, inferred_simulation_hours)
         """
         try:
             chunk_files = sorted(
@@ -676,7 +953,7 @@ class OpexGenerator:
 
         if not chunk_files:
             logger.warning(f"No chunk files found in {chunks_dir}")
-            return {}
+            return {}, None
 
         # Resolve available columns
         all_cols: List[str] = []
@@ -690,28 +967,33 @@ class OpexGenerator:
                 del df_preview
             except Exception as e:
                 logger.warning(f"Failed to read parquet schema: {e}")
-                return {}
+                return {}, None
 
-        # Map resource_id -> actual column name
-        col_map: Dict[str, str] = {}
-        for item in required_items:
-            if not item.resource_id:
-                continue
-            res_id = item.resource_id
-            for col in all_cols:
-                if res_id.lower() in col.lower():
-                    col_map[res_id] = col
-                    break
+        col_map = self._resolve_required_columns(
+            all_cols=all_cols,
+            required_items=required_items,
+            source_label=f"Parquet history schema ({chunks_dir})",
+            strict=True,
+        )
 
         # Always include H2 production column
-        h2_cols = [c for c in all_cols if 'cumulative_h2_kg' in c.lower()]
-        if h2_cols:
-            col_map['cumulative_h2_kg'] = h2_cols[0]
+        h2_col = self._resolve_column_name("cumulative_h2_kg", all_cols)
+        if h2_col is not None:
+            col_map['cumulative_h2_kg'] = h2_col
+        minute_col = self._resolve_column_name("minute", all_cols)
+        if minute_col is not None:
+            col_map['minute'] = minute_col
+
+        dynamic_pairs: Dict[str, Tuple[str, str]] = {}
+        for item in required_items:
+            pair_key = self._dynamic_pair_key(item)
+            if pair_key and item.resource_id and item.price_resource_id:
+                dynamic_pairs[pair_key] = (item.resource_id, item.price_resource_id)
 
         needed_cols = list(set(col_map.values()))
         if not needed_cols:
             logger.warning("No matching columns found for Parquet OPEX extraction")
-            return {}
+            return {}, None
 
         accumulators: Dict[str, Dict[str, float]] = {}
         for res_id, col in col_map.items():
@@ -723,6 +1005,12 @@ class OpexGenerator:
                 "last": 0.0,
                 "is_cumulative": True if is_cumulative else False,
             }
+
+        minutes_min: Optional[float] = None
+        minutes_max: Optional[float] = None
+        minute_diffs: List[float] = []
+        last_minute: Optional[float] = None
+        dynamic_pair_products = {pair_key: 0.0 for pair_key in dynamic_pairs}
 
         for chunk_file in chunk_files:
             try:
@@ -742,7 +1030,31 @@ class OpexGenerator:
             if df.empty:
                 continue
 
+            minute_signal_col = col_map.get("minute")
+            if minute_signal_col and minute_signal_col in df.columns:
+                minute_series = pd.to_numeric(df[minute_signal_col], errors="coerce").dropna()
+                if not minute_series.empty:
+                    chunk_minutes = minute_series.values.astype(float)
+                    chunk_min = float(np.min(chunk_minutes))
+                    chunk_max = float(np.max(chunk_minutes))
+                    if minutes_min is None or chunk_min < minutes_min:
+                        minutes_min = chunk_min
+                    if minutes_max is None or chunk_max > minutes_max:
+                        minutes_max = chunk_max
+                    if last_minute is not None:
+                        cross_diff = chunk_minutes[0] - last_minute
+                        if cross_diff > 0:
+                            minute_diffs.append(float(cross_diff))
+                    if chunk_minutes.size > 1:
+                        diffs = np.diff(chunk_minutes)
+                        positive = diffs[diffs > 0]
+                        if positive.size > 0:
+                            minute_diffs.append(float(np.median(positive)))
+                    last_minute = float(chunk_minutes[-1])
+
             for res_id, col in col_map.items():
+                if res_id == "minute":
+                    continue
                 if col not in df.columns:
                     continue
                 series = df[col]
@@ -763,8 +1075,21 @@ class OpexGenerator:
                     if pd.notna(series_count):
                         accumulators[res_id]["count"] += series_count
 
+            for pair_key, (quantity_signal, price_signal) in dynamic_pairs.items():
+                quantity_col = col_map.get(quantity_signal)
+                price_col = col_map.get(price_signal)
+                if not quantity_col or not price_col:
+                    continue
+                if quantity_col not in df.columns or price_col not in df.columns:
+                    continue
+                qty_series = pd.to_numeric(df[quantity_col], errors="coerce").fillna(0.0)
+                price_series = pd.to_numeric(df[price_col], errors="coerce").fillna(0.0)
+                dynamic_pair_products[pair_key] += float((qty_series * price_series).sum())
+
         quantities: Dict[str, Dict[str, float]] = {}
         for res_id, acc in accumulators.items():
+            if res_id == "minute":
+                continue
             if bool(acc["is_cumulative"]):
                 last_val = acc["last"] if acc["last"] is not None else 0.0
                 quantities[res_id] = {
@@ -781,12 +1106,144 @@ class OpexGenerator:
                     "avg": avg_val,
                 }
 
-        return quantities
+        for pair_key, product_sum in dynamic_pair_products.items():
+            quantities[pair_key] = {"sum_product": float(product_sum)}
+
+        inferred_hours = None
+        if (
+            minutes_min is not None
+            and minutes_max is not None
+            and minutes_max >= minutes_min
+        ):
+            inferred_hours = (minutes_max - minutes_min) / 60.0
+            if minute_diffs:
+                inferred_hours += float(np.median(minute_diffs)) / 60.0
+            if inferred_hours <= 0:
+                inferred_hours = None
+
+        return quantities, inferred_hours
+
+    @staticmethod
+    def _normalize_pathway_shares(pathway_totals: Dict[str, float]) -> Dict[str, float]:
+        cleaned = {k: max(0.0, float(v or 0.0)) for k, v in pathway_totals.items()}
+        total = sum(cleaned.values())
+        if total <= 0:
+            return {k: 0.0 for k in cleaned}
+        return {k: v / total for k, v in cleaned.items()}
+
+    def _build_pathway_shares_from_quantities(
+        self,
+        *,
+        item: OpexItemConfig,
+        quantities: Dict[str, Dict[str, float]],
+        annualization_factor: float,
+        history_available: bool,
+    ) -> Optional[Dict[str, float]]:
+        if not item.pathway_driver_resource_ids:
+            return None
+        if not history_available:
+            return {key: 0.0 for key in item.pathway_driver_resource_ids}
+
+        pathway_totals: Dict[str, float] = {}
+        for pathway, signal_id in item.pathway_driver_resource_ids.items():
+            raw = self._extract_metric_from_quantities(quantities, signal_id, item.metric)
+            pathway_totals[pathway] = self._annualize_metric(raw, item.metric, annualization_factor)
+        return self._normalize_pathway_shares(pathway_totals)
+
+    def _build_pathway_shares_from_dataframe(
+        self,
+        *,
+        item: OpexItemConfig,
+        history_df: Optional[pd.DataFrame],
+        resolved_columns: Dict[str, str],
+        annualization_factor: float,
+    ) -> Optional[Dict[str, float]]:
+        if not item.pathway_driver_resource_ids:
+            return None
+        if history_df is None:
+            return {key: 0.0 for key in item.pathway_driver_resource_ids}
+
+        pathway_totals: Dict[str, float] = {}
+        for pathway, signal_id in item.pathway_driver_resource_ids.items():
+            qty, _ = self._extract_quantity(
+                history_df,
+                signal_id,
+                item.metric,
+                annualization_factor,
+                resolved_column=resolved_columns.get(signal_id),
+            )
+            pathway_totals[pathway] = float(qty)
+        return self._normalize_pathway_shares(pathway_totals)
+
+    def _calculate_dynamic_annual_cost_from_quantities(
+        self,
+        *,
+        item: OpexItemConfig,
+        quantities: Dict[str, Dict[str, float]],
+        annualization_factor: float,
+    ) -> Tuple[float, str]:
+        pair_key = self._dynamic_pair_key(item)
+        if pair_key is None:
+            return 0.0, "Dynamic pricing unavailable"
+
+        pair_entry = quantities.get(pair_key, {})
+        if isinstance(pair_entry, dict):
+            period_sum = float(pair_entry.get("sum_product", 0.0) or 0.0)
+        else:
+            period_sum = float(pair_entry or 0.0)
+
+        annual_cost = (
+            period_sum
+            * annualization_factor
+            * float(item.cost_multiplier)
+            * float(item.price)
+        )
+        formula = (
+            "annualized(sum(quantity_step × price_step)) × "
+            f"{item.cost_multiplier:.6g} × {item.price:.6g}"
+        )
+        return annual_cost, formula
+
+    def _calculate_dynamic_annual_cost_from_dataframe(
+        self,
+        *,
+        item: OpexItemConfig,
+        history_df: Optional[pd.DataFrame],
+        resolved_columns: Dict[str, str],
+        annualization_factor: float,
+    ) -> Tuple[float, str]:
+        if history_df is None or not item.resource_id or not item.price_resource_id:
+            return 0.0, "Dynamic pricing unavailable"
+
+        quantity_col = resolved_columns.get(item.resource_id)
+        if quantity_col is None or quantity_col not in history_df.columns:
+            quantity_col = self._resolve_column_name(item.resource_id, list(history_df.columns))
+        price_col = resolved_columns.get(item.price_resource_id)
+        if price_col is None or price_col not in history_df.columns:
+            price_col = self._resolve_column_name(item.price_resource_id, list(history_df.columns))
+        if quantity_col is None or price_col is None:
+            return 0.0, "Dynamic pricing signals not found"
+
+        quantity_series = pd.to_numeric(history_df[quantity_col], errors="coerce").fillna(0.0)
+        price_series = pd.to_numeric(history_df[price_col], errors="coerce").fillna(0.0)
+        period_sum = float((quantity_series * price_series).sum())
+        annual_cost = (
+            period_sum
+            * annualization_factor
+            * float(item.cost_multiplier)
+            * float(item.price)
+        )
+        formula = (
+            "annualized(sum(quantity_step × price_step)) × "
+            f"{item.cost_multiplier:.6g} × {item.price:.6g}"
+        )
+        return annual_cost, formula
     
     def _calculate_item_streaming(
         self,
         item: OpexItemConfig,
         quantities: Dict[str, Dict[str, float]],
+        history_available: bool,
         base_costs: Dict[str, float],
         annualization_factor: float,
     ) -> OpexResult:
@@ -797,29 +1254,47 @@ class OpexGenerator:
             category=item.category,
             unit_price=item.price,
             source="config",
+            is_credit=item.is_credit,
+            lcoh_component=item.lcoh_component,
         )
         
         # Extract quantity from pre-computed values
         quantity = 1.0
         if item.strategy == "variable" and item.resource_id:
-            raw_entry = quantities.get(item.resource_id, {})
-            if isinstance(raw_entry, dict):
-                raw_qty = raw_entry.get(item.metric, 0.0)
+            if not history_available:
+                raw_qty = 0.0
+                result.source = "no_history"
             else:
-                raw_qty = raw_entry
+                raw_entry = quantities.get(item.resource_id, {})
+                if isinstance(raw_entry, dict):
+                    raw_qty = raw_entry.get(item.metric, 0.0)
+                else:
+                    raw_qty = raw_entry
+                result.source = f"simulation:streaming:{item.resource_id}"
 
-            if item.metric == "avg":
-                quantity = raw_qty * 8760.0
-            elif item.metric == "max":
-                quantity = raw_qty
-            else:
-                quantity = raw_qty * annualization_factor
-
-            result.source = f"simulation:streaming:{item.resource_id}"
+            quantity = self._annualize_metric(raw_qty, item.metric, annualization_factor)
         elif item.strategy == "turton_labor":
             quantity = item.hours_per_year
         
         result.annual_quantity = quantity
+        result.pathway_shares = self._build_pathway_shares_from_quantities(
+            item=item,
+            quantities=quantities,
+            annualization_factor=annualization_factor,
+            history_available=history_available,
+        )
+
+        if item.strategy == "variable" and item.resource_id and item.price_resource_id:
+            annual_cost, formula = self._calculate_dynamic_annual_cost_from_quantities(
+                item=item,
+                quantities=quantities,
+                annualization_factor=annualization_factor,
+            )
+            if history_available:
+                result.source = f"simulation:streaming:{item.resource_id}*{item.price_resource_id}"
+            result.annual_cost = round(annual_cost, 2)
+            result.formula = formula
+            return result
         
         # Get strategy and calculate
         try:
@@ -848,6 +1323,10 @@ class OpexGenerator:
                 base_cost=base_val,
                 **kwargs
             )
+            if item.strategy == "variable":
+                cost *= float(item.cost_multiplier)
+                if float(item.cost_multiplier) != 1.0:
+                    formula = f"{formula} × {item.cost_multiplier:.6g}"
             
             result.annual_cost = cost
             result.formula = formula
@@ -863,6 +1342,8 @@ class OpexGenerator:
         self,
         item: OpexItemConfig,
         history_df: Optional[pd.DataFrame],
+        resolved_columns: Dict[str, str],
+        history_available: bool,
         base_costs: Dict[str, float],
         annualization_factor: float,
     ) -> OpexResult:
@@ -873,6 +1354,8 @@ class OpexGenerator:
             category=item.category,
             unit_price=item.price,
             source="config",
+            is_credit=item.is_credit,
+            lcoh_component=item.lcoh_component,
         )
         
         # Extract quantity from simulation if applicable
@@ -880,12 +1363,19 @@ class OpexGenerator:
         if item.strategy == "variable" and item.resource_id:
             if history_df is not None:
                 quantity, source = self._extract_quantity(
-                    history_df, 
-                    item.resource_id, 
+                    history_df,
+                    item.resource_id,
                     item.metric,
-                    annualization_factor
+                    annualization_factor,
+                    resolved_column=resolved_columns.get(item.resource_id),
                 )
                 result.source = source
+            elif history_available:
+                # Defensive guard for malformed callers that pass an unavailable frame.
+                raise ValueError(
+                    "History source was declared available but no dataframe was provided "
+                    f"for variable OPEX item '{item.name}' ({item.resource_id})."
+                )
             else:
                 quantity = 0.0
                 result.source = "no_history"
@@ -893,6 +1383,25 @@ class OpexGenerator:
             quantity = item.hours_per_year
         
         result.annual_quantity = quantity
+        result.pathway_shares = self._build_pathway_shares_from_dataframe(
+            item=item,
+            history_df=history_df,
+            resolved_columns=resolved_columns,
+            annualization_factor=annualization_factor,
+        )
+
+        if item.strategy == "variable" and item.resource_id and item.price_resource_id:
+            annual_cost, formula = self._calculate_dynamic_annual_cost_from_dataframe(
+                item=item,
+                history_df=history_df,
+                resolved_columns=resolved_columns,
+                annualization_factor=annualization_factor,
+            )
+            if history_df is not None:
+                result.source = f"simulation:{item.resource_id}*{item.price_resource_id}"
+            result.annual_cost = round(annual_cost, 2)
+            result.formula = formula
+            return result
         
         # Get strategy and calculate
         try:
@@ -923,6 +1432,10 @@ class OpexGenerator:
                 base_cost=base_val,
                 **kwargs
             )
+            if item.strategy == "variable":
+                cost *= float(item.cost_multiplier)
+                if float(item.cost_multiplier) != 1.0:
+                    formula = f"{formula} × {item.cost_multiplier:.6g}"
             
             result.annual_cost = cost
             result.formula = formula
@@ -940,6 +1453,7 @@ class OpexGenerator:
         resource_id: str,
         metric: str,
         annualization_factor: float,
+        resolved_column: Optional[str] = None,
     ) -> tuple[float, str]:
         """
         Extract quantity from simulation history.
@@ -947,16 +1461,14 @@ class OpexGenerator:
         Returns:
             Tuple of (quantity, source_description)
         """
-        # Find matching columns
-        matching_cols = [c for c in df.columns if resource_id.lower() in c.lower()]
-        
-        if not matching_cols:
-            logger.warning(f"No columns matching '{resource_id}' in history")
+        if resolved_column is not None and resolved_column in df.columns:
+            col = resolved_column
+        else:
+            col = self._resolve_column_name(resource_id, list(df.columns))
+
+        if col is None:
+            logger.warning("No columns matching '%s' in history", resource_id)
             return 0.0, "not_found"
-        
-        col = matching_cols[0]
-        if len(matching_cols) > 1:
-            logger.debug(f"Multiple columns match '{resource_id}', using '{col}'")
         
         # Aggregate based on metric
         if metric == "sum":
@@ -1035,10 +1547,16 @@ class OpexGenerator:
             writer.writerow(["Fixed Costs", "", "", "", round(report.total_fixed_cost, 2), "", "", ""])
             writer.writerow(["Maintenance Costs", "", "", "", round(report.total_maintenance_cost, 2), "", "", ""])
             writer.writerow(["TOTAL OPEX", "", "", "", round(report.total_opex, 2), "", "", ""])
+            writer.writerow(["TOTAL CREDIT COST", "", "", "", round(report.total_credit_cost, 2), "", "", ""])
+            writer.writerow(["TOTAL OPEX CASHFLOW", "", "", "", round(report.total_opex_cashflow, 2), "", "", ""])
             if report.total_opex_low is not None:
                 writer.writerow(["TOTAL OPEX LOW", "", "", "", round(report.total_opex_low, 2), "", "", ""])
+            if report.total_opex_cashflow_low is not None:
+                writer.writerow(["TOTAL OPEX CASHFLOW LOW", "", "", "", round(report.total_opex_cashflow_low, 2), "", "", ""])
             if report.total_opex_high is not None:
                 writer.writerow(["TOTAL OPEX HIGH", "", "", "", round(report.total_opex_high, 2), "", "", ""])
+            if report.total_opex_cashflow_high is not None:
+                writer.writerow(["TOTAL OPEX CASHFLOW HIGH", "", "", "", round(report.total_opex_cashflow_high, 2), "", "", ""])
             
             # Production metrics
             if report.annual_h2_production_kg > 0:

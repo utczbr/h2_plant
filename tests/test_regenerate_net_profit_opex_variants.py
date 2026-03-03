@@ -137,6 +137,23 @@ def test_regenerate_net_profit_default_pairs_capex_and_opex_variants(monkeypatch
     assert len(list(graphs_dir.glob("*.html"))) == 3
 
 
+def test_regenerate_net_profit_paired_mode_prefers_cashflow_opex_variants(monkeypatch, tmp_path):
+    rc, _graphs_dir, _names, opex_values, _capex_values, _calls = _run_regen(
+        monkeypatch,
+        tmp_path,
+        opex_payload={
+            "total_opex": 1000.0,
+            "total_opex_low": 900.0,
+            "total_opex_high": 1100.0,
+            "total_opex_cashflow": 1300.0,
+            "total_opex_cashflow_low": 1200.0,
+            "total_opex_cashflow_high": 1400.0,
+        },
+    )
+    assert rc == 0
+    assert opex_values == [1200.0, 1300.0, 1400.0]
+
+
 def test_regenerate_net_profit_low_opex_variant_keeps_legacy_uniform_mode(monkeypatch, tmp_path):
     rc, graphs_dir, names, opex_values, capex_values, _calls = _run_regen(
         monkeypatch,

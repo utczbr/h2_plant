@@ -73,9 +73,27 @@ CAPEX_VARIANT_SUFFIX = {
     "high": "_Capex_High",
 }
 OPEX_VARIANT_KEY_MAP = {
-    "base": ("total_opex", "opex", "total_annual_opex", "annual_opex"),
-    "low": ("total_opex_low", "opex_low", "total_annual_opex_low", "annual_opex_low"),
-    "high": ("total_opex_high", "opex_high", "total_annual_opex_high", "annual_opex_high"),
+    "base": (
+        "total_opex_cashflow",
+        "total_opex",
+        "opex",
+        "total_annual_opex",
+        "annual_opex",
+    ),
+    "low": (
+        "total_opex_cashflow_low",
+        "total_opex_low",
+        "opex_low",
+        "total_annual_opex_low",
+        "annual_opex_low",
+    ),
+    "high": (
+        "total_opex_cashflow_high",
+        "total_opex_high",
+        "opex_high",
+        "total_annual_opex_high",
+        "annual_opex_high",
+    ),
 }
 OPEX_VARIANT_SUFFIX = {
     "base": "",
