@@ -198,3 +198,45 @@ def test_storage_action_updates_continue_past_1440_steps(tmp_path):
     assert engine.last_storage_action_update_step >= 1441
     assert action[1440] != action[1441]
     assert engine.synthetic_overflow_count == 0
+
+
+def test_economics_report_generation_hook_is_conditional(tmp_path, monkeypatch):
+    import h2_plant.run_integrated_simulation as runner_mod
+
+    calls = []
+
+    def _fake_generate_economics_reports(**kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(runner_mod, "_generate_economics_reports", _fake_generate_economics_reports)
+
+    context = _make_context(duration_hours=2, arbitrage_enabled=False)
+    runner_mod.run_with_dispatch_context(
+        context,
+        data_dir=".",
+        output_dir=tmp_path,
+        allow_graph_dispatch_fallback=True,
+        return_registry=False,
+        generate_economics_reports=False,
+        reports_scenarios_dir=str(tmp_path / "scenario_disabled"),
+    )
+    assert calls == []
+
+    reports_scenarios_dir = str(tmp_path / "scenario_enabled")
+    history = runner_mod.run_with_dispatch_context(
+        context,
+        data_dir=".",
+        output_dir=tmp_path,
+        allow_graph_dispatch_fallback=True,
+        return_registry=False,
+        generate_economics_reports=True,
+        reports_scenarios_dir=reports_scenarios_dir,
+    )
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["context"] is context
+    assert call["history"] is history
+    assert call["output_dir"] == tmp_path
+    assert call["scenarios_dir"] == reports_scenarios_dir
+    assert call["simulation_hours"] == 2

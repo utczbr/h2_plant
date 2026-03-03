@@ -189,6 +189,233 @@ def _inject_replacement_metrics_for_net_profit(
     return merged
 
 
+def _history_to_dataframe(history: Optional[Dict[str, Any]]):
+    """Convert 1D history series to a DataFrame for OPEX fallback paths."""
+    if not history:
+        return None
+
+    import pandas as pd
+
+    scalar_data: Dict[str, np.ndarray] = {}
+    for key, value in history.items():
+        if isinstance(value, np.ndarray):
+            arr = value
+        elif isinstance(value, (list, tuple)):
+            arr = np.asarray(value)
+        else:
+            continue
+
+        if arr.ndim != 1 or arr.size == 0:
+            continue
+        scalar_data[key] = arr
+
+    if not scalar_data:
+        return None
+
+    try:
+        return pd.DataFrame(scalar_data)
+    except ValueError as exc:
+        logger.warning("Failed to build history DataFrame for OPEX fallback: %s", exc)
+        return None
+
+
+def _write_lcoh_csv(report: Any, csv_path: Path) -> None:
+    """Write combined low/base/high LCOH report to CSV."""
+    import csv
+
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Plant Summary by Variant"])
+        writer.writerow([
+            "Variant",
+            "discount_rate",
+            "project_lifetime_years",
+            "discount_factor_sum",
+            "capex_total",
+            "opex_annual_total",
+            "annual_h2_total_kg",
+            "lcoh_total",
+            "lcoh_weighted_plant",
+        ])
+        for variant in report.variant_order:
+            variant_report = report.variants.get(variant)
+            if not variant_report:
+                continue
+            writer.writerow([
+                variant,
+                variant_report.discount_rate,
+                variant_report.project_lifetime_years,
+                variant_report.discount_factor_sum,
+                variant_report.capex_total,
+                variant_report.opex_annual_total,
+                variant_report.annual_h2_total_kg,
+                variant_report.lcoh_total,
+                variant_report.lcoh_weighted_plant,
+            ])
+
+        writer.writerow([])
+        writer.writerow(["Pathway Metrics by Variant"])
+        writer.writerow(["Variant", "Pathway", "Annual_H2_kg", "CAPEX", "OPEX", "LCOH"])
+        for variant in report.variant_order:
+            variant_report = report.variants.get(variant)
+            if not variant_report:
+                continue
+            for key in ["pem", "soec", "atr"]:
+                writer.writerow([
+                    variant,
+                    key,
+                    variant_report.annual_h2_by_pathway.get(key, 0.0),
+                    variant_report.capex_by_pathway.get(key, 0.0),
+                    variant_report.opex_by_pathway.get(key, 0.0),
+                    variant_report.lcoh_by_pathway.get(key, 0.0),
+                ])
+
+        writer.writerow([])
+        writer.writerow(["LCOH Breakdown by Variant"])
+        writer.writerow(["Variant", "Component", "Value"])
+        for variant in report.variant_order:
+            variant_report = report.variants.get(variant)
+            if not variant_report:
+                continue
+            for key, value in variant_report.lcoh_breakdown.items():
+                writer.writerow([variant, key, value])
+
+        if report.warnings:
+            writer.writerow([])
+            writer.writerow(["Warnings"])
+            for warning in report.warnings:
+                writer.writerow([warning])
+
+
+def _generate_economics_reports(
+    *,
+    context,
+    registry,
+    history: Optional[Dict[str, Any]],
+    output_dir: Path,
+    scenarios_dir: str,
+    simulation_hours: float,
+) -> None:
+    """
+    Generate CAPEX/OPEX/LCOH reports into simulation_output for GUI consumption.
+
+    This helper is fail-soft per report type: an error in one report does not
+    prevent the simulation from completing.
+    """
+    scenarios_path = Path(scenarios_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    capex_report = None
+    opex_report = None
+
+    capex_config_path = scenarios_path / "Economics" / "equipment_mappings.yaml"
+    if capex_config_path.exists():
+        try:
+            from h2_plant.economics import CapexGenerator
+
+            logger.info("Generating CAPEX report for GUI results tables...")
+            capex_generator = CapexGenerator.from_yaml(capex_config_path)
+            capex_report = capex_generator.generate(
+                registry=registry,
+                monitoring=None,
+                output_dir=output_dir,
+                simulation_name=getattr(context, "simulation_name", "H2 Plant Simulation"),
+                simulation_hours=simulation_hours,
+            )
+        except ImportError as exc:
+            logger.warning("CAPEX generator not available: %s", exc)
+        except Exception as exc:
+            logger.error("CAPEX report generation failed: %s", exc, exc_info=True)
+    else:
+        logger.info("CAPEX config not found at %s; skipping CAPEX report generation.", capex_config_path)
+
+    opex_config_path = scenarios_path / "Economics" / "opex_config.yaml"
+    if opex_config_path.exists():
+        try:
+            from h2_plant.economics.opex_generator import OpexGenerator
+
+            logger.info("Generating OPEX report for GUI results tables...")
+            opex_generator = OpexGenerator()
+            chunks_dir = output_dir / "history_chunks"
+            has_history_chunks = chunks_dir.exists() and any(chunks_dir.glob("chunk_*.parquet"))
+
+            if has_history_chunks:
+                opex_report = opex_generator.generate_streaming_parquet(
+                    config_path=str(opex_config_path),
+                    chunks_dir=chunks_dir,
+                    capex_report=capex_report,
+                    output_dir=str(output_dir),
+                    simulation_hours=simulation_hours,
+                )
+            else:
+                opex_report = opex_generator.generate(
+                    config_path=str(opex_config_path),
+                    capex_report=capex_report,
+                    history_df=_history_to_dataframe(history),
+                    output_dir=str(output_dir),
+                    simulation_hours=simulation_hours,
+                )
+        except ImportError as exc:
+            logger.warning("OPEX generator not available: %s", exc)
+        except Exception as exc:
+            logger.error("OPEX report generation failed: %s", exc, exc_info=True)
+    else:
+        logger.info("OPEX config not found at %s; skipping OPEX report generation.", opex_config_path)
+
+    if capex_report is None or opex_report is None:
+        logger.info("Skipping LCOH report generation: CAPEX/OPEX reports are required.")
+        return
+
+    chunks_dir = output_dir / "history_chunks"
+    has_history_chunks = chunks_dir.exists() and any(chunks_dir.glob("chunk_*.parquet"))
+    if not has_history_chunks:
+        logger.warning("Skipping LCOH report generation: history_chunks not found at %s", chunks_dir)
+        return
+
+    discount_rate = 0.08
+    project_years = 20
+    economics_params_path = scenarios_path / "economics_parameters.yaml"
+    if economics_params_path.exists():
+        try:
+            import yaml
+
+            economics_params = yaml.safe_load(economics_params_path.read_text(encoding="utf-8")) or {}
+            discount_rate = float(economics_params.get("discount_rate", discount_rate))
+            project_years = int(economics_params.get("project_lifetime_years", project_years))
+        except Exception as exc:
+            logger.warning(
+                "Failed to read economics defaults from %s: %s. Using discount_rate=%s, project_lifetime_years=%s.",
+                economics_params_path,
+                exc,
+                discount_rate,
+                project_years,
+            )
+
+    try:
+        from h2_plant.economics.lcoh_calculator import LcohCalculator, LcohInputs
+
+        logger.info("Generating LCOH report for GUI results tables...")
+        calculator = LcohCalculator()
+        lcoh_report = calculator.generate_variants(
+            LcohInputs(
+                capex_report=capex_report,
+                opex_report=opex_report,
+                history_chunks_dir=chunks_dir,
+                discount_rate=discount_rate,
+                project_years=project_years,
+            )
+        )
+
+        lcoh_json_path = output_dir / "lcoh_report.json"
+        lcoh_csv_path = output_dir / "lcoh_report.csv"
+        lcoh_json_path.write_text(lcoh_report.model_dump_json(indent=2), encoding="utf-8")
+        _write_lcoh_csv(lcoh_report, lcoh_csv_path)
+        logger.info("LCOH report generated at %s", lcoh_json_path)
+    except Exception as exc:
+        logger.error("LCOH report generation failed: %s", exc, exc_info=True)
+
+
 def run_with_dispatch_context(
     context,
     *,
@@ -199,6 +426,8 @@ def run_with_dispatch_context(
     resume_from_hour: Optional[int] = None,
     resume_checkpoint_path: Optional[Path] = None,
     load_history: bool = True,
+    generate_economics_reports: bool = False,
+    reports_scenarios_dir: Optional[str] = None,
     allow_graph_dispatch_fallback: bool = False,
     return_registry: bool = False,
     progress_callback: Optional[Callable[[int, int, float], None]] = None,
@@ -223,6 +452,10 @@ def run_with_dispatch_context(
         resume_checkpoint_path: Checkpoint file for resume.
         load_history: Whether to call ``engine.get_dispatch_history()`` before
             returning (default: True).
+        generate_economics_reports: When True, generate CAPEX/OPEX/LCOH reports
+            into ``output_dir`` (default: False).
+        reports_scenarios_dir: Scenario directory used to resolve Economics
+            input/config files for report generation.
         allow_graph_dispatch_fallback: When True, missing dispatch-critical components
             cause a silent fallback to physics-only mode instead of raising.
             Set True for GUI graph mode; False for CLI and scenario mode.
@@ -451,6 +684,16 @@ def run_with_dispatch_context(
     if load_history:
         history = engine.get_dispatch_history()
 
+    if generate_economics_reports and reports_scenarios_dir:
+        _generate_economics_reports(
+            context=context,
+            registry=registry,
+            history=history,
+            output_dir=output_dir,
+            scenarios_dir=reports_scenarios_dir,
+            simulation_hours=run_duration_hours,
+        )
+
     if return_registry:
         return history, registry
     return history
@@ -571,6 +814,7 @@ def run_with_dispatch_strategy(
 
     # Generate CAPEX Report
     # =========================================================================
+    capex_report = None
     try:
         from h2_plant.economics import CapexGenerator
         
@@ -603,6 +847,7 @@ def run_with_dispatch_strategy(
 
     # Generate OPEX Report
     # =========================================================================
+    opex_report = None
     try:
         from h2_plant.economics.opex_generator import OpexGenerator
         
@@ -672,8 +917,6 @@ def run_with_dispatch_strategy(
     except ImportError as e:
         logger.warning(f"OPEX generator not available: {e}")
     except Exception as e:
-        logger.error(f"OPEX generation failed: {e}", exc_info=True)
-
         logger.error(f"OPEX generation failed: {e}", exc_info=True)
 
 

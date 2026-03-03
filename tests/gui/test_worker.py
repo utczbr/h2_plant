@@ -171,9 +171,37 @@ def test_worker_delegates_to_run_with_dispatch_context():
     call = calls[0]
     assert call["context"] is context
     assert call["return_registry"] is True
+    assert call["kwargs"]["generate_economics_reports"] is False
+    assert call["kwargs"]["reports_scenarios_dir"] is None
     assert callable(call["kwargs"]["progress_callback"])
     assert callable(call["kwargs"]["cancel_check"])
     assert any(v >= 50 for v in progress_values), "worker should emit progress updates"
+
+
+def test_worker_enables_economics_report_generation_in_scenario_mode():
+    calls: list = []
+
+    def _fake_core(context, *, return_registry=False, **kwargs):
+        calls.append({"context": context, "kwargs": kwargs, "return_registry": return_registry})
+        if return_registry:
+            return {}, _FakeRegistry()
+        return {}
+
+    import h2_plant.run_integrated_simulation as runner_mod
+    original = runner_mod.run_with_dispatch_context
+    runner_mod.run_with_dispatch_context = _fake_core
+    try:
+        context = _make_context(arbitrage_enabled=False)
+        worker = SimulationWorker(context=context, scenarios_dir="/tmp/scenario_mode")
+        worker.run()
+    finally:
+        runner_mod.run_with_dispatch_context = original
+
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["return_registry"] is True
+    assert call["kwargs"]["generate_economics_reports"] is True
+    assert call["kwargs"]["reports_scenarios_dir"] == "/tmp/scenario_mode"
 
 
 def test_worker_emits_canceled_if_stopped_before_run():

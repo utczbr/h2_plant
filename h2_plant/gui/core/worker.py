@@ -81,6 +81,8 @@ class SimulationWorker(QThread):
                 data_dir=data_dir,
                 output_dir=output_dir,
                 strategy=self.strategy_override,
+                generate_economics_reports=bool(self.scenarios_dir),
+                reports_scenarios_dir=self.scenarios_dir if self.scenarios_dir else None,
                 allow_graph_dispatch_fallback=not bool(self.scenarios_dir),
                 return_registry=True,
                 progress_callback=_progress_callback,
