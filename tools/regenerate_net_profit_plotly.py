@@ -136,7 +136,9 @@ def _resolve_workers(
         # Conservative auto: min(2, tasks, cpus)
         workers = min(2, n_tasks, cpu)
     else:
-        workers = min(requested, n_tasks, cpu)
+        # Allow explicit requests to exceed CPU count for I/O-bound tasks,
+        # but apply a hard safety cap of 32 to prevent thrashing.
+        workers = min(requested, n_tasks, 32)
 
     # Apply memory cap if specified.
     if max_memory_mb > 0 and est_task_mb > 0:
