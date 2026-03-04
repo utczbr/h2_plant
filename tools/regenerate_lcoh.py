@@ -13,6 +13,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -22,12 +23,41 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from h2_plant.economics.lcoh_calculator import LcohCalculator, LcohInputs  # noqa: E402
-from h2_plant.economics.models import CapexReport  # noqa: E402
-from h2_plant.economics.opex_models import OpexReport  # noqa: E402
+# Lazy-loaded economics classes (kept as module globals for test monkeypatching).
+LcohCalculator = None
+LcohInputs = None
+CapexReport = None
+OpexReport = None
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _ensure_economics_imported() -> None:
+    global LcohCalculator, LcohInputs, CapexReport, OpexReport
+    if (
+        LcohCalculator is not None
+        and LcohInputs is not None
+        and CapexReport is not None
+        and OpexReport is not None
+    ):
+        return
+
+    from h2_plant.economics.lcoh_calculator import (  # noqa: WPS433
+        LcohCalculator as _LcohCalculator,
+        LcohInputs as _LcohInputs,
+    )
+    from h2_plant.economics.models import CapexReport as _CapexReport  # noqa: WPS433
+    from h2_plant.economics.opex_models import OpexReport as _OpexReport  # noqa: WPS433
+
+    if LcohCalculator is None:
+        LcohCalculator = _LcohCalculator
+    if LcohInputs is None:
+        LcohInputs = _LcohInputs
+    if CapexReport is None:
+        CapexReport = _CapexReport
+    if OpexReport is None:
+        OpexReport = _OpexReport
 
 
 def _load_json_report(path: Path, model_cls):
@@ -66,7 +96,22 @@ def _resolve_history_chunks(sim_dir: Path, history_dir: Optional[str]) -> Option
     return _check_base(sim_dir)
 
 
+def _find_report(paths: list[Path], filename: str) -> Optional[Path]:
+    for path in paths:
+        candidate = path / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _effective_worker_count(raw_workers: int) -> int:
+    if raw_workers <= 0:
+        return 0
+    return raw_workers
+
+
 def main() -> None:
+    total_start = time.perf_counter()
     parser = argparse.ArgumentParser(
         description="Regenerate discounted LCOH report from CAPEX/OPEX and history."
     )
@@ -98,9 +143,29 @@ def main() -> None:
         "--history-dir", type=str, default=None,
         help="Path to history source (simulation output dir or history_chunks)"
     )
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help="History scan workers (0=auto, 1=serial)."
+    )
+    parser.add_argument(
+        "--max-memory-mb", type=int, default=0,
+        help="Optional memory cap for history scanning (0=auto/no explicit cap)."
+    )
+    parser.add_argument(
+        "--history-scan-mode", type=str, default="auto", choices=["auto", "serial", "parallel"],
+        help="History scan mode selection."
+    )
 
     args = parser.parse_args()
 
+    if args.workers < 0:
+        logger.error("--workers must be >= 0.")
+        sys.exit(1)
+    if args.max_memory_mb < 0:
+        logger.error("--max-memory-mb must be >= 0.")
+        sys.exit(1)
+
+    stage_input_start = time.perf_counter()
     sim_dir = Path(args.simulation_output_dir).resolve()
     if not sim_dir.exists():
         logger.error(f"Simulation output directory not found: {sim_dir}")
@@ -114,31 +179,55 @@ def main() -> None:
         )
         sys.exit(1)
 
-    economics_dir = Path(args.economics_dir).resolve() if args.economics_dir else (sim_dir / "Economics")
-    if not economics_dir.exists():
-        economics_dir = sim_dir.parent / "Economics"
-    if not economics_dir.exists():
+    economics_candidates = []
+    if args.economics_dir:
+        economics_candidates.append(Path(args.economics_dir).resolve())
+    economics_candidates.extend([
+        sim_dir,
+        sim_dir / "Economics",
+        sim_dir.parent / "Economics",
+    ])
+    economics_candidates_unique = []
+    for candidate in economics_candidates:
+        if candidate not in economics_candidates_unique:
+            economics_candidates_unique.append(candidate)
+    economics_candidates = economics_candidates_unique
+
+    if not any(path.exists() for path in economics_candidates):
         logger.error("Economics directory not found. Provide --economics-dir.")
         sys.exit(1)
 
-    capex_path = economics_dir / "capex_report.json"
-    opex_path = economics_dir / "opex_report.json"
-    if not capex_path.exists():
-        logger.error(f"CAPEX report not found: {capex_path}")
+    capex_path = _find_report(economics_candidates, "capex_report.json")
+    opex_path = _find_report(economics_candidates, "opex_report.json")
+    if capex_path is None:
+        logger.error(
+            "CAPEX report not found. Checked: %s",
+            ", ".join(str(path / "capex_report.json") for path in economics_candidates),
+        )
         sys.exit(1)
-    if not opex_path.exists():
-        logger.error(f"OPEX report not found: {opex_path}")
+    if opex_path is None:
+        logger.error(
+            "OPEX report not found. Checked: %s",
+            ", ".join(str(path / "opex_report.json") for path in economics_candidates),
+        )
         sys.exit(1)
+
+    economics_dir = capex_path.parent
 
     config_dir = Path(args.config_dir).resolve() if args.config_dir else sim_dir.parent
     defaults = _resolve_config_defaults(config_dir)
+    stage_input_seconds = time.perf_counter() - stage_input_start
 
     discount_rate = args.discount_rate if args.discount_rate is not None else defaults.get("discount_rate", 0.08)
     project_years = args.project_years if args.project_years is not None else defaults.get("project_lifetime_years", 20)
 
+    stage_models_start = time.perf_counter()
+    _ensure_economics_imported()
     capex_report = _load_json_report(capex_path, CapexReport)
     opex_report = _load_json_report(opex_path, OpexReport)
+    stage_models_seconds = time.perf_counter() - stage_models_start
 
+    stage_compute_start = time.perf_counter()
     calc = LcohCalculator()
     try:
         report = calc.generate_variants(LcohInputs(
@@ -147,10 +236,16 @@ def main() -> None:
             history_chunks_dir=history_chunks,
             discount_rate=float(discount_rate),
             project_years=int(project_years),
+            history_scan_workers=_effective_worker_count(int(args.workers)),
+            history_scan_max_memory_mb=(
+                int(args.max_memory_mb) if int(args.max_memory_mb) > 0 else None
+            ),
+            history_scan_mode=str(args.history_scan_mode),
         ))
     except ValueError as e:
         logger.error(f"Failed to generate LCOH report: {e}")
         sys.exit(1)
+    stage_compute_seconds = time.perf_counter() - stage_compute_start
 
     output_dir = Path(args.output_dir).resolve() if args.output_dir else economics_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -158,6 +253,7 @@ def main() -> None:
     json_path = output_dir / "lcoh_report.json"
     csv_path = output_dir / "lcoh_report.csv"
 
+    stage_write_start = time.perf_counter()
     json_path.write_text(report.model_dump_json(indent=2))
 
     # Combined CSV export (low/base/high variants)
@@ -218,6 +314,7 @@ def main() -> None:
             writer.writerow(["Warnings"])
             for w in report.warnings:
                 writer.writerow([w])
+    stage_write_seconds = time.perf_counter() - stage_write_start
 
     lcoh_low = report.variants.get("low")
     lcoh_base = report.variants.get("base")
@@ -232,6 +329,14 @@ def main() -> None:
 
     logger.info(f"LCOH report generated: {json_path}")
     logger.info(f"LCOH CSV generated: {csv_path}")
+    logger.info(
+        "Stage timing (s): input_resolve=%.3f, model_load=%.3f, lcoh_compute=%.3f, report_write=%.3f, total=%.3f",
+        stage_input_seconds,
+        stage_models_seconds,
+        stage_compute_seconds,
+        stage_write_seconds,
+        time.perf_counter() - total_start,
+    )
 
 
 if __name__ == "__main__":

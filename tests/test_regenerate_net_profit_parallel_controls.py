@@ -27,10 +27,15 @@ class TestResolveWorkers:
             result = regen._resolve_workers(requested=4, max_memory_mb=0, n_tasks=10)
         assert result == 4
 
-    def test_explicit_workers_capped_by_cpu(self):
+    def test_explicit_workers_exceed_cpu_count(self):
         with mock.patch("os.cpu_count", return_value=2):
             result = regen._resolve_workers(requested=8, max_memory_mb=0, n_tasks=10)
-        assert result == 2
+        assert result == 8
+
+    def test_explicit_workers_hard_capped_at_32(self):
+        with mock.patch("os.cpu_count", return_value=8):
+            result = regen._resolve_workers(requested=50, max_memory_mb=0, n_tasks=100)
+        assert result == 32
 
     def test_explicit_workers_capped_by_n_tasks(self):
         with mock.patch("os.cpu_count", return_value=8):

@@ -6,7 +6,9 @@ Computes discounted Levelized Cost of Hydrogen (LCOH) for plant and pathways.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +24,8 @@ from h2_plant.economics.lcoh_models import LcohReport, LcohVariantsReport
 logger = logging.getLogger(__name__)
 MINUTES_PER_YEAR = 525600.0
 HOURS_PER_YEAR = 8760.0
+AUTO_HISTORY_SCAN_WORKERS = 2
+HISTORY_SCAN_MB_PER_WORKER = 128
 
 
 @dataclass
@@ -31,6 +35,9 @@ class LcohInputs:
     history_chunks_dir: Path
     discount_rate: float
     project_years: int
+    history_scan_workers: int = 0
+    history_scan_max_memory_mb: Optional[int] = None
+    history_scan_mode: str = "auto"
 
 
 class LcohCalculator:
@@ -90,7 +97,151 @@ class LcohCalculator:
             )
         return parsed
 
-    def _load_h2_totals(self, chunks_dir: Path) -> Dict[str, object]:
+    def _resolve_history_scan_workers(
+        self,
+        *,
+        requested_workers: int,
+        max_memory_mb: Optional[int],
+        n_chunks: int,
+        scan_mode: str,
+    ) -> int:
+        mode = str(scan_mode or "auto").strip().lower()
+        if mode not in {"auto", "serial", "parallel"}:
+            raise ValueError(f"Unknown history_scan_mode: {scan_mode}")
+        if mode == "serial" or n_chunks <= 1:
+            return 1
+
+        if requested_workers > 0:
+            effective = int(requested_workers)
+        else:
+            effective = AUTO_HISTORY_SCAN_WORKERS
+
+        effective = min(effective, n_chunks, max(1, int(os.cpu_count() or 1)))
+
+        if max_memory_mb is not None and max_memory_mb > 0:
+            max_by_memory = int(max_memory_mb) // HISTORY_SCAN_MB_PER_WORKER
+            if max_by_memory <= 0:
+                effective = 1
+            else:
+                effective = min(effective, max_by_memory)
+
+        return max(1, effective)
+
+    def _find_minute_origin(self, chunk_files: list[Path]) -> Optional[float]:
+        for chunk_file in chunk_files:
+            try:
+                df_minute = pd.read_parquet(chunk_file, columns=["minute"])
+            except OSError as e:
+                if getattr(e, "errno", None) == 107:
+                    self._raise_disconnected_mount(chunk_file, e)
+                raise
+            if df_minute.empty:
+                continue
+            minute_values = pd.to_numeric(df_minute["minute"], errors="coerce").to_numpy(dtype=float)
+            valid = minute_values[np.isfinite(minute_values)]
+            if valid.size > 0:
+                return float(valid[0])
+        return None
+
+    def _scan_h2_chunk(
+        self,
+        *,
+        chunk_file: Path,
+        required_cols: list[str],
+        minute_origin: Optional[float],
+    ) -> Dict[str, object]:
+        try:
+            df = pd.read_parquet(chunk_file, columns=required_cols)
+        except OSError as e:
+            if getattr(e, "errno", None) == 107:
+                self._raise_disconnected_mount(chunk_file, e)
+            raise
+
+        if df.empty:
+            return {
+                "totals": {"pem": 0.0, "soec": 0.0, "atr": 0.0},
+                "totals_by_year": {"pem": {}, "soec": {}, "atr": {}},
+                "minutes_min": None,
+                "minutes_max": None,
+                "median_diff": None,
+                "year_indices": [],
+            }
+
+        minute_series = pd.to_numeric(df["minute"], errors="coerce")
+        minute_values = minute_series.to_numpy(dtype=float)
+        minute_valid = minute_values[np.isfinite(minute_values)]
+
+        pem_vals = pd.to_numeric(df["H2_pem_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        soec_vals = pd.to_numeric(df["H2_soec_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        atr_vals = pd.to_numeric(df["H2_atr_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+
+        totals = {
+            "pem": float(np.sum(pem_vals)),
+            "soec": float(np.sum(soec_vals)),
+            "atr": float(np.sum(atr_vals)),
+        }
+        totals_by_year = {"pem": {}, "soec": {}, "atr": {}}
+        year_indices: set[int] = set()
+
+        if minute_origin is not None:
+            year_idx = np.full(len(df), -1, dtype=int)
+            valid_mask = np.isfinite(minute_values)
+            year_idx[valid_mask] = np.floor(
+                (minute_values[valid_mask] - minute_origin) / MINUTES_PER_YEAR
+            ).astype(int)
+            year_idx[year_idx < 0] = 0
+            valid_years = np.unique(year_idx[year_idx >= 0])
+            for y in valid_years:
+                year_mask = year_idx == y
+                year_key = int(y)
+                totals_by_year["pem"][year_key] = float(np.sum(pem_vals[year_mask]))
+                totals_by_year["soec"][year_key] = float(np.sum(soec_vals[year_mask]))
+                totals_by_year["atr"][year_key] = float(np.sum(atr_vals[year_mask]))
+                year_indices.add(year_key)
+
+        minutes_min = None
+        min_val = minute_series.min()
+        if pd.notna(min_val):
+            minutes_min = float(min_val)
+        minutes_max = None
+        max_val = minute_series.max()
+        if pd.notna(max_val):
+            minutes_max = float(max_val)
+
+        median_diff = None
+        if len(minute_valid) > 1:
+            diffs = np.diff(minute_valid)
+            if diffs.size > 0:
+                median_diff = float(np.median(diffs))
+
+        return {
+            "totals": totals,
+            "totals_by_year": totals_by_year,
+            "minutes_min": minutes_min,
+            "minutes_max": minutes_max,
+            "median_diff": median_diff,
+            "year_indices": sorted(year_indices),
+        }
+
+    @staticmethod
+    def _merge_year_totals(
+        totals_by_year: Dict[str, Dict[int, float]],
+        partial_totals_by_year: Dict[str, Dict[int, float]],
+    ) -> None:
+        for key in ("pem", "soec", "atr"):
+            for year_idx, value in partial_totals_by_year.get(key, {}).items():
+                totals_by_year[key][int(year_idx)] = (
+                    float(totals_by_year[key].get(int(year_idx), 0.0)) + float(value)
+                )
+
+    def _load_h2_totals(
+        self,
+        chunks_dir: Path,
+        *,
+        workers: int = 0,
+        max_memory_mb: Optional[int] = None,
+        scan_mode: str = "auto",
+    ) -> Dict[str, object]:
         try:
             chunk_files = sorted(
                 chunks_dir.glob("chunk_*.parquet"),
@@ -134,6 +285,15 @@ class LcohCalculator:
                 f"Missing required H2 columns: {missing}. "
                 f"Available H2 columns: {h2_cols[:20]}"
             )
+
+        minute_origin = self._find_minute_origin(chunk_files)
+        resolved_workers = self._resolve_history_scan_workers(
+            requested_workers=int(workers or 0),
+            max_memory_mb=max_memory_mb,
+            n_chunks=len(chunk_files),
+            scan_mode=scan_mode,
+        )
+
         totals = {"pem": 0.0, "soec": 0.0, "atr": 0.0}
         totals_by_year = {
             "pem": {},
@@ -143,67 +303,44 @@ class LcohCalculator:
         minutes_min = None
         minutes_max = None
         diff_samples = []
-        minute_origin: Optional[float] = None
         year_indices_seen: set[int] = set()
 
-        for chunk_file in chunk_files:
-            try:
-                df = pd.read_parquet(chunk_file, columns=required_cols)
-            except OSError as e:
-                if getattr(e, "errno", None) == 107:
-                    self._raise_disconnected_mount(chunk_file, e)
-                raise
-            if df.empty:
-                continue
-            minute_series = pd.to_numeric(df["minute"], errors="coerce")
-            minute_values = minute_series.to_numpy(dtype=float)
-            minute_valid = minute_values[np.isfinite(minute_values)]
-            if minute_origin is None and minute_valid.size > 0:
-                minute_origin = float(minute_valid[0])
+        if resolved_workers <= 1:
+            partials = (
+                self._scan_h2_chunk(
+                    chunk_file=chunk_file,
+                    required_cols=required_cols,
+                    minute_origin=minute_origin,
+                )
+                for chunk_file in chunk_files
+            )
+        else:
+            def _scan_chunk_file(chunk_file: Path) -> Dict[str, object]:
+                return self._scan_h2_chunk(
+                    chunk_file=chunk_file,
+                    required_cols=required_cols,
+                    minute_origin=minute_origin,
+                )
 
-            pem_vals = pd.to_numeric(df["H2_pem_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-            soec_vals = pd.to_numeric(df["H2_soec_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-            atr_vals = pd.to_numeric(df["H2_atr_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            with ThreadPoolExecutor(max_workers=resolved_workers) as executor:
+                partials = list(executor.map(_scan_chunk_file, chunk_files))
+        for partial in partials:
+            totals["pem"] += float(partial["totals"]["pem"])
+            totals["soec"] += float(partial["totals"]["soec"])
+            totals["atr"] += float(partial["totals"]["atr"])
+            self._merge_year_totals(totals_by_year, partial["totals_by_year"])
 
-            totals["pem"] += float(np.sum(pem_vals))
-            totals["soec"] += float(np.sum(soec_vals))
-            totals["atr"] += float(np.sum(atr_vals))
+            partial_min = partial["minutes_min"]
+            partial_max = partial["minutes_max"]
+            if partial_min is not None and (minutes_min is None or partial_min < minutes_min):
+                minutes_min = float(partial_min)
+            if partial_max is not None and (minutes_max is None or partial_max > minutes_max):
+                minutes_max = float(partial_max)
 
-            if minute_origin is not None:
-                year_idx = np.full(len(df), -1, dtype=int)
-                valid_mask = np.isfinite(minute_values)
-                year_idx[valid_mask] = np.floor(
-                    (minute_values[valid_mask] - minute_origin) / MINUTES_PER_YEAR
-                ).astype(int)
-                year_idx[year_idx < 0] = 0
-                valid_years = np.unique(year_idx[year_idx >= 0])
-                for y in valid_years:
-                    year_mask = year_idx == y
-                    totals_by_year["pem"][int(y)] = (
-                        float(totals_by_year["pem"].get(int(y), 0.0))
-                        + float(np.sum(pem_vals[year_mask]))
-                    )
-                    totals_by_year["soec"][int(y)] = (
-                        float(totals_by_year["soec"].get(int(y), 0.0))
-                        + float(np.sum(soec_vals[year_mask]))
-                    )
-                    totals_by_year["atr"][int(y)] = (
-                        float(totals_by_year["atr"].get(int(y), 0.0))
-                        + float(np.sum(atr_vals[year_mask]))
-                    )
-                year_indices_seen.update(int(v) for v in valid_years)
-
-            min_val = minute_series.min()
-            max_val = minute_series.max()
-            if minutes_min is None or (pd.notna(min_val) and min_val < minutes_min):
-                minutes_min = float(min_val)
-            if minutes_max is None or (pd.notna(max_val) and max_val > minutes_max):
-                minutes_max = float(max_val)
-            minute_vals = minute_valid
-            if len(minute_vals) > 1:
-                diffs = np.diff(minute_vals)
-                if diffs.size:
-                    diff_samples.append(np.median(diffs))
+            partial_diff = partial["median_diff"]
+            if partial_diff is not None:
+                diff_samples.append(float(partial_diff))
+            year_indices_seen.update(int(v) for v in partial.get("year_indices", []))
 
         # Estimate simulation hours
         sim_hours = 0.0
@@ -249,8 +386,17 @@ class LcohCalculator:
         history_chunks_dir: Path,
         opex_report: OpexReport,
         warnings: list[str],
+        *,
+        history_scan_workers: int = 0,
+        history_scan_max_memory_mb: Optional[int] = None,
+        history_scan_mode: str = "auto",
     ) -> tuple[Dict[str, float], float, Dict[str, float], Dict[str, object]]:
-        loaded = self._load_h2_totals(history_chunks_dir)
+        loaded = self._load_h2_totals(
+            history_chunks_dir,
+            workers=history_scan_workers,
+            max_memory_mb=history_scan_max_memory_mb,
+            scan_mode=history_scan_mode,
+        )
         totals = dict(loaded.get("totals", {}))
         sim_hours = loaded.get("simulation_hours", 0.0)
 
@@ -641,6 +787,9 @@ class LcohCalculator:
             history_chunks_dir=inputs.history_chunks_dir,
             opex_report=inputs.opex_report,
             warnings=warnings,
+            history_scan_workers=inputs.history_scan_workers,
+            history_scan_max_memory_mb=inputs.history_scan_max_memory_mb,
+            history_scan_mode=inputs.history_scan_mode,
         )
         capex_total = self._extract_capex_variant_totals(inputs.capex_report, strict=False)["base"]
         opex_total = self._extract_opex_variant_totals(inputs.opex_report, strict=False)["base"]
@@ -667,6 +816,9 @@ class LcohCalculator:
             history_chunks_dir=inputs.history_chunks_dir,
             opex_report=inputs.opex_report,
             warnings=shared_warnings,
+            history_scan_workers=inputs.history_scan_workers,
+            history_scan_max_memory_mb=inputs.history_scan_max_memory_mb,
+            history_scan_mode=inputs.history_scan_mode,
         )
 
         capex_totals = self._extract_capex_variant_totals(inputs.capex_report, strict=True)

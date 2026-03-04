@@ -53,6 +53,21 @@ def test_lcoh_calculator_handles_errno_107_during_chunk_read(tmp_path, monkeypat
         calc._load_h2_totals(chunks_dir)
 
 
+def test_lcoh_calculator_handles_errno_107_during_parallel_scan(tmp_path, monkeypatch):
+    chunks_dir = tmp_path / "history_chunks"
+    chunks_dir.mkdir()
+    _write_minimal_chunk(chunks_dir / "chunk_1.parquet")
+
+    def _raise_errno_107(*_args, **_kwargs):
+        raise OSError(107, "Transport endpoint is not connected")
+
+    monkeypatch.setattr(lcoh_module.pd, "read_parquet", _raise_errno_107)
+
+    calc = LcohCalculator()
+    with pytest.raises(ValueError, match="disconnected mount"):
+        calc._load_h2_totals(chunks_dir, workers=4, scan_mode="parallel")
+
+
 def test_resolve_history_chunks_supports_parent_or_direct_path(tmp_path):
     sim_dir = tmp_path / "simulation_output"
     direct_chunks = sim_dir / "history_chunks"
