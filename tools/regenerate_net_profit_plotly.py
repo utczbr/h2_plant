@@ -604,6 +604,62 @@ def _extract_opex_variants(report_path: Path) -> Optional[Dict[str, Optional[flo
     return variants
 
 
+def _extract_opex_yearly_variants(report_path: Path) -> Optional[Dict[str, Optional[List[float]]]]:
+    try:
+        data = json.loads(report_path.read_text())
+    except Exception as e:
+        logger.warning(f"Failed to read OPEX report {report_path}: {e}")
+        return None
+
+    parsed: Dict[str, Optional[List[float]]] = {"low": None, "base": None, "high": None}
+    base_yearly_raw = data.get("total_opex_cashflow_by_year")
+    if base_yearly_raw is None:
+        base_yearly_raw = data.get("total_opex_by_year")
+    base_yearly: Optional[List[float]] = None
+    if isinstance(base_yearly_raw, list) and len(base_yearly_raw) > 0:
+        try:
+            base_yearly = [float(v or 0.0) for v in base_yearly_raw]
+            parsed["base"] = base_yearly
+        except (TypeError, ValueError):
+            base_yearly = None
+
+    field_map = {
+        "low": ("total_opex_cashflow_low_by_year", "total_opex_low_by_year"),
+        "high": ("total_opex_cashflow_high_by_year", "total_opex_high_by_year"),
+    }
+    for variant, fields in field_map.items():
+        raw = None
+        for field in fields:
+            raw = data.get(field)
+            if raw is not None:
+                break
+        if isinstance(raw, list) and len(raw) > 0:
+            try:
+                parsed[variant] = [float(v or 0.0) for v in raw]
+                continue
+            except (TypeError, ValueError):
+                pass
+
+        # Fallback: derive low/high yearly from base yearly + scalar ratio.
+        if base_yearly is None:
+            continue
+        scalar_base = data.get("total_opex_cashflow", data.get("total_opex"))
+        scalar_variant = data.get(
+            "total_opex_cashflow_low" if variant == "low" else "total_opex_cashflow_high",
+            data.get("total_opex_low" if variant == "low" else "total_opex_high"),
+        )
+        try:
+            scalar_base_f = float(scalar_base)
+            scalar_variant_f = float(scalar_variant)
+            if scalar_base_f > 0:
+                scale = scalar_variant_f / scalar_base_f
+                parsed[variant] = [float(v) * scale for v in base_yearly]
+        except (TypeError, ValueError):
+            continue
+
+    return parsed
+
+
 def regenerate_net_profit_plotly(
     output_dir: Path,
     history_dir: Optional[str] = None,
@@ -657,6 +713,7 @@ def regenerate_net_profit_plotly(
 
     paired_mode = (opex_override is None and opex_variant is None)
     opex_map: Dict[str, float] = {}
+    opex_yearly_map: Dict[str, Optional[List[float]]] = {"low": None, "base": None, "high": None}
     selected_uniform_variant = opex_variant or "base"
 
     if paired_mode:
@@ -671,6 +728,9 @@ def regenerate_net_profit_plotly(
         if not extracted:
             logger.error("Failed to parse OPEX variants from opex_report.json.")
             return 1
+        extracted_yearly = _extract_opex_yearly_variants(opex_path)
+        if extracted_yearly:
+            opex_yearly_map = extracted_yearly
         missing_variants = [v for v in ("low", "base", "high") if extracted.get(v) is None]
         if missing_variants:
             details = "; ".join(
@@ -690,6 +750,9 @@ def regenerate_net_profit_plotly(
             opex_path = _find_report(candidates, "opex_report.json")
             if opex_path:
                 opex_uniform = _extract_opex(opex_path, variant=selected_uniform_variant)
+                extracted_yearly = _extract_opex_yearly_variants(opex_path)
+                if extracted_yearly:
+                    opex_yearly_map = extracted_yearly
 
         if opex_uniform is None:
             if selected_uniform_variant == "base":
@@ -801,6 +864,11 @@ def regenerate_net_profit_plotly(
         kwargs_variant = dict(kwargs)
         kwargs_variant["capex"] = capex_val
         kwargs_variant["opex"] = opex_map[variant]
+        yearly_series = opex_yearly_map.get(variant)
+        if not paired_mode:
+            yearly_series = opex_yearly_map.get(selected_uniform_variant)
+        if yearly_series:
+            kwargs_variant["opex_by_year"] = yearly_series
 
         logger.info(
             "Generating net profit graph for CAPEX %s / OPEX %s: CAPEX=%s, OPEX=%s",

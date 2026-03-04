@@ -110,3 +110,7 @@ tests/
 ├── performance/
 └── e2e/
 ```
+
+## Economics Methodology
+
+- OPEX/LCOH thesis methodology (`--capacity-mode design`): `docs/OPEX_LCOH_methodology_design_mode.md`

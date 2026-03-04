@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,6 +20,8 @@ from h2_plant.economics.opex_models import OpexReport
 from h2_plant.economics.lcoh_models import LcohReport, LcohVariantsReport
 
 logger = logging.getLogger(__name__)
+MINUTES_PER_YEAR = 525600.0
+HOURS_PER_YEAR = 8760.0
 
 
 @dataclass
@@ -88,7 +90,7 @@ class LcohCalculator:
             )
         return parsed
 
-    def _load_h2_totals(self, chunks_dir: Path) -> Dict[str, float]:
+    def _load_h2_totals(self, chunks_dir: Path) -> Dict[str, object]:
         try:
             chunk_files = sorted(
                 chunks_dir.glob("chunk_*.parquet"),
@@ -133,9 +135,16 @@ class LcohCalculator:
                 f"Available H2 columns: {h2_cols[:20]}"
             )
         totals = {"pem": 0.0, "soec": 0.0, "atr": 0.0}
+        totals_by_year = {
+            "pem": {},
+            "soec": {},
+            "atr": {},
+        }
         minutes_min = None
         minutes_max = None
         diff_samples = []
+        minute_origin: Optional[float] = None
+        year_indices_seen: set[int] = set()
 
         for chunk_file in chunk_files:
             try:
@@ -146,17 +155,51 @@ class LcohCalculator:
                 raise
             if df.empty:
                 continue
-            totals["pem"] += float(pd.to_numeric(df["H2_pem_kg"], errors="coerce").fillna(0).sum())
-            totals["soec"] += float(pd.to_numeric(df["H2_soec_kg"], errors="coerce").fillna(0).sum())
-            totals["atr"] += float(pd.to_numeric(df["H2_atr_kg"], errors="coerce").fillna(0).sum())
+            minute_series = pd.to_numeric(df["minute"], errors="coerce")
+            minute_values = minute_series.to_numpy(dtype=float)
+            minute_valid = minute_values[np.isfinite(minute_values)]
+            if minute_origin is None and minute_valid.size > 0:
+                minute_origin = float(minute_valid[0])
 
-            min_val = pd.to_numeric(df["minute"], errors="coerce").min()
-            max_val = pd.to_numeric(df["minute"], errors="coerce").max()
+            pem_vals = pd.to_numeric(df["H2_pem_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            soec_vals = pd.to_numeric(df["H2_soec_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+            atr_vals = pd.to_numeric(df["H2_atr_kg"], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+
+            totals["pem"] += float(np.sum(pem_vals))
+            totals["soec"] += float(np.sum(soec_vals))
+            totals["atr"] += float(np.sum(atr_vals))
+
+            if minute_origin is not None:
+                year_idx = np.full(len(df), -1, dtype=int)
+                valid_mask = np.isfinite(minute_values)
+                year_idx[valid_mask] = np.floor(
+                    (minute_values[valid_mask] - minute_origin) / MINUTES_PER_YEAR
+                ).astype(int)
+                year_idx[year_idx < 0] = 0
+                valid_years = np.unique(year_idx[year_idx >= 0])
+                for y in valid_years:
+                    year_mask = year_idx == y
+                    totals_by_year["pem"][int(y)] = (
+                        float(totals_by_year["pem"].get(int(y), 0.0))
+                        + float(np.sum(pem_vals[year_mask]))
+                    )
+                    totals_by_year["soec"][int(y)] = (
+                        float(totals_by_year["soec"].get(int(y), 0.0))
+                        + float(np.sum(soec_vals[year_mask]))
+                    )
+                    totals_by_year["atr"][int(y)] = (
+                        float(totals_by_year["atr"].get(int(y), 0.0))
+                        + float(np.sum(atr_vals[year_mask]))
+                    )
+                year_indices_seen.update(int(v) for v in valid_years)
+
+            min_val = minute_series.min()
+            max_val = minute_series.max()
             if minutes_min is None or (pd.notna(min_val) and min_val < minutes_min):
                 minutes_min = float(min_val)
             if minutes_max is None or (pd.notna(max_val) and max_val > minutes_max):
                 minutes_max = float(max_val)
-            minute_vals = pd.to_numeric(df["minute"], errors="coerce").dropna().values
+            minute_vals = minute_valid
             if len(minute_vals) > 1:
                 diffs = np.diff(minute_vals)
                 if diffs.size:
@@ -173,24 +216,51 @@ class LcohCalculator:
             sim_hours = (minutes_max - minutes_min) / 60.0
             if dt_h is not None:
                 sim_hours += dt_h
-        return {**totals, "simulation_hours": sim_hours}
+
+        # Build year axis/hours from minute span using the same relative-year policy
+        if minute_origin is not None and minutes_max is not None:
+            dt_min = float(np.median(diff_samples)) if diff_samples else 1.0
+            if not np.isfinite(dt_min) or dt_min <= 0:
+                dt_min = 1.0
+            sim_end_min = float(minutes_max) + dt_min
+            span_min = max(0.0, sim_end_min - float(minute_origin))
+            year_count = int(np.ceil(span_min / MINUTES_PER_YEAR)) if span_min > 0 else 1
+            year_indices = list(range(year_count))
+            year_hours: List[float] = []
+            for year_idx in year_indices:
+                year_start = float(minute_origin) + (year_idx * MINUTES_PER_YEAR)
+                year_end = year_start + MINUTES_PER_YEAR
+                overlap_min = max(0.0, min(sim_end_min, year_end) - max(float(minute_origin), year_start))
+                year_hours.append(overlap_min / 60.0)
+        else:
+            year_indices = sorted(year_indices_seen) if year_indices_seen else [0]
+            year_hours = [0.0 for _ in year_indices]
+
+        return {
+            "totals": totals,
+            "totals_by_year": totals_by_year,
+            "year_indices": year_indices,
+            "year_hours": year_hours,
+            "simulation_hours": sim_hours,
+        }
 
     def _resolve_annual_production(
         self,
         history_chunks_dir: Path,
         opex_report: OpexReport,
         warnings: list[str],
-    ) -> tuple[Dict[str, float], float, Dict[str, float]]:
-        totals = self._load_h2_totals(history_chunks_dir)
-        sim_hours = totals.pop("simulation_hours")
+    ) -> tuple[Dict[str, float], float, Dict[str, float], Dict[str, object]]:
+        loaded = self._load_h2_totals(history_chunks_dir)
+        totals = dict(loaded.get("totals", {}))
+        sim_hours = loaded.get("simulation_hours", 0.0)
 
         annual_factor = 0.0
         if sim_hours and sim_hours > 0:
-            annual_factor = 8760.0 / sim_hours
+            annual_factor = HOURS_PER_YEAR / float(sim_hours)
         else:
             fallback_hours = getattr(opex_report, "simulation_hours", 0.0)
             if fallback_hours and fallback_hours > 0:
-                annual_factor = 8760.0 / float(fallback_hours)
+                annual_factor = HOURS_PER_YEAR / float(fallback_hours)
                 warnings.append("Simulation hours inferred from OPEX report.")
             else:
                 warnings.append("Simulation hours could not be determined; annualization set to 0.")
@@ -205,7 +275,7 @@ class LcohCalculator:
             k: (annual_by[k] / annual_total) if annual_total > 0 else 0.0
             for k in annual_by
         }
-        return annual_by, annual_total, prod_shares
+        return annual_by, annual_total, prod_shares, loaded
 
     def _extract_capex_variant_totals(
         self,
@@ -243,6 +313,69 @@ class LcohCalculator:
                 variant=variant,
             )
         return totals
+
+    @staticmethod
+    def _build_h2_yearly_totals(
+        loaded_h2: Dict[str, object],
+    ) -> Tuple[List[int], np.ndarray, Dict[str, np.ndarray]]:
+        year_indices = [int(v) for v in loaded_h2.get("year_indices", [])]
+        if not year_indices:
+            year_indices = [0]
+
+        totals_by_year = loaded_h2.get("totals_by_year", {}) or {}
+        by_path: Dict[str, np.ndarray] = {}
+        for key in ("pem", "soec", "atr"):
+            key_map = totals_by_year.get(key, {}) or {}
+            by_path[key] = np.array(
+                [float(key_map.get(int(y), 0.0) or 0.0) for y in year_indices],
+                dtype=float,
+            )
+
+        total = by_path["pem"] + by_path["soec"] + by_path["atr"]
+        return year_indices, total, by_path
+
+    def _extract_opex_yearly_stream(
+        self,
+        *,
+        opex_report: OpexReport,
+        variant: str,
+        fallback_annual_opex: float,
+        year_count: int,
+    ) -> np.ndarray:
+        variant_field_map = {
+            "base": "total_opex_by_year",
+            "low": "total_opex_low_by_year",
+            "high": "total_opex_high_by_year",
+        }
+        candidate_field = variant_field_map.get(variant, "total_opex_by_year")
+        values = getattr(opex_report, candidate_field, None)
+        if values is None and variant != "base":
+            # In mixed reports, low/high yearly may be missing while base exists.
+            values = getattr(opex_report, "total_opex_by_year", None)
+            if values is not None and fallback_annual_opex > 0 and float(opex_report.total_opex or 0.0) > 0:
+                scale = fallback_annual_opex / float(opex_report.total_opex)
+                values = [float(v) * scale for v in values]
+
+        if isinstance(values, list) and len(values) > 0:
+            arr = np.array([float(v or 0.0) for v in values], dtype=float)
+            if len(arr) >= year_count:
+                return arr[:year_count]
+            out = np.zeros(year_count, dtype=float)
+            out[: len(arr)] = arr
+            return out
+
+        # Backward-compatible fallback: constant annual OPEX over available horizon.
+        return np.full(year_count, float(fallback_annual_opex), dtype=float)
+
+    @staticmethod
+    def _discount_series(values: np.ndarray, discount_rate: float) -> np.ndarray:
+        if values.size == 0:
+            return values
+        years = np.arange(1, len(values) + 1, dtype=float)
+        if discount_rate == 0:
+            return values
+        factors = 1.0 / np.power(1.0 + discount_rate, years)
+        return values * factors
 
     def _allocate_capex_by_block(
         self,
@@ -388,6 +521,7 @@ class LcohCalculator:
         prod_shares: Dict[str, float],
         discount_rate: float,
         project_years: int,
+        loaded_h2: Dict[str, object],
         capex_report: CapexReport,
         shared_warnings: list[str],
         generated_at: str,
@@ -409,16 +543,49 @@ class LcohCalculator:
             target_opex_total=opex_total,
             fallback_shares=prod_shares,
         )
-        df_sum = self._discount_factor_sum(discount_rate, project_years)
 
-        pv_h2_total = annual_total * df_sum
-        lcoh_total = self._safe_div(capex_total + (opex_total * df_sum), pv_h2_total)
+        year_indices, h2_total_by_year, h2_by_pathway_year = self._build_h2_yearly_totals(loaded_h2)
+        available_years = len(year_indices)
+        analysis_years = min(project_years, available_years) if available_years > 0 else 0
+        if analysis_years <= 0:
+            analysis_years = project_years
+            h2_total_series = np.full(analysis_years, annual_total, dtype=float)
+            for key in ("pem", "soec", "atr"):
+                h2_by_pathway_year[key] = np.full(analysis_years, annual_by.get(key, 0.0), dtype=float)
+        else:
+            h2_total_series = h2_total_by_year[:analysis_years]
+            for key in ("pem", "soec", "atr"):
+                h2_by_pathway_year[key] = h2_by_pathway_year[key][:analysis_years]
+            if project_years > available_years:
+                warnings.append(
+                    f"Project lifetime ({project_years} years) exceeds available history horizon "
+                    f"({available_years} years); discounted LCOH computed on available horizon."
+                )
+
+        opex_series = self._extract_opex_yearly_stream(
+            opex_report=opex_report,
+            variant=variant,
+            fallback_annual_opex=opex_total,
+            year_count=len(h2_total_series),
+        )
+        discounted_opex_series = self._discount_series(opex_series, discount_rate)
+        discounted_h2_series = self._discount_series(h2_total_series, discount_rate)
+
+        pv_opex = float(np.sum(discounted_opex_series))
+        pv_h2_total = float(np.sum(discounted_h2_series))
+        df_sum = self._discount_factor_sum(discount_rate, len(h2_total_series))
+        lcoh_total = self._safe_div(capex_total + pv_opex, pv_h2_total)
 
         lcoh_by = {}
+        opex_total_alloc = sum(opex_by.values())
+        opex_share_by_path = {
+            key: (opex_by.get(key, 0.0) / opex_total_alloc) if opex_total_alloc > 0 else prod_shares.get(key, 0.0)
+            for key in ("pem", "soec", "atr")
+        }
         for key in ("pem", "soec", "atr"):
-            pv_h2 = annual_by.get(key, 0.0) * df_sum
+            pv_h2 = float(np.sum(self._discount_series(h2_by_pathway_year.get(key, np.zeros(len(h2_total_series))), discount_rate)))
             lcoh_by[key] = self._safe_div(
-                capex_by.get(key, 0.0) + (opex_by.get(key, 0.0) * df_sum),
+                capex_by.get(key, 0.0) + (pv_opex * opex_share_by_path.get(key, 0.0)),
                 pv_h2,
             )
 
@@ -430,14 +597,21 @@ class LcohCalculator:
             opex_report=opex_report,
             target_opex_total=opex_total,
         )
+        component_share = {
+            key: (opex_component_annual.get(key, 0.0) / opex_total) if opex_total > 0 else 0.0
+            for key in ("energy", "water", "compression", "other_opex")
+        }
         breakdown = {
             "capex": self._safe_div(capex_total, pv_h2_total),
-            "opex": self._safe_div(opex_total * df_sum, pv_h2_total),
-            "energy": self._safe_div(opex_component_annual["energy"] * df_sum, pv_h2_total),
-            "water": self._safe_div(opex_component_annual["water"] * df_sum, pv_h2_total),
-            "compression": self._safe_div(opex_component_annual["compression"] * df_sum, pv_h2_total),
-            "other_opex": self._safe_div(opex_component_annual["other_opex"] * df_sum, pv_h2_total),
+            "opex": self._safe_div(pv_opex, pv_h2_total),
+            "energy": self._safe_div(pv_opex * component_share["energy"], pv_h2_total),
+            "water": self._safe_div(pv_opex * component_share["water"], pv_h2_total),
+            "compression": self._safe_div(pv_opex * component_share["compression"], pv_h2_total),
+            "other_opex": self._safe_div(pv_opex * component_share["other_opex"], pv_h2_total),
         }
+
+        opex_by_year = {str(idx + 1): float(val) for idx, val in enumerate(opex_series)}
+        h2_by_year = {str(idx + 1): float(val) for idx, val in enumerate(h2_total_series)}
 
         return LcohReport(
             generated_at=generated_at,
@@ -446,20 +620,24 @@ class LcohCalculator:
             discount_factor_sum=df_sum,
             capex_total=capex_total,
             opex_annual_total=opex_total,
+            opex_by_year=opex_by_year,
             annual_h2_total_kg=annual_total,
             annual_h2_by_pathway=annual_by,
+            annual_h2_total_kg_by_year=h2_by_year,
             capex_by_pathway=capex_by,
             opex_by_pathway=opex_by,
             lcoh_total=lcoh_total,
             lcoh_by_pathway=lcoh_by,
             lcoh_weighted_plant=weighted,
+            discounted_opex_pv=pv_opex,
+            discounted_h2_pv=pv_h2_total,
             lcoh_breakdown=breakdown,
             warnings=warnings,
         )
 
     def generate(self, inputs: LcohInputs) -> LcohReport:
         warnings: list[str] = []
-        annual_by, annual_total, prod_shares = self._resolve_annual_production(
+        annual_by, annual_total, prod_shares, loaded_h2 = self._resolve_annual_production(
             history_chunks_dir=inputs.history_chunks_dir,
             opex_report=inputs.opex_report,
             warnings=warnings,
@@ -477,6 +655,7 @@ class LcohCalculator:
             prod_shares=prod_shares,
             discount_rate=inputs.discount_rate,
             project_years=inputs.project_years,
+            loaded_h2=loaded_h2,
             capex_report=inputs.capex_report,
             shared_warnings=warnings,
             generated_at=generated_at,
@@ -484,7 +663,7 @@ class LcohCalculator:
 
     def generate_variants(self, inputs: LcohInputs) -> LcohVariantsReport:
         shared_warnings: list[str] = []
-        annual_by, annual_total, prod_shares = self._resolve_annual_production(
+        annual_by, annual_total, prod_shares, loaded_h2 = self._resolve_annual_production(
             history_chunks_dir=inputs.history_chunks_dir,
             opex_report=inputs.opex_report,
             warnings=shared_warnings,
@@ -506,6 +685,7 @@ class LcohCalculator:
                 prod_shares=prod_shares,
                 discount_rate=inputs.discount_rate,
                 project_years=inputs.project_years,
+                loaded_h2=loaded_h2,
                 capex_report=inputs.capex_report,
                 shared_warnings=shared_warnings,
                 generated_at=generated_at,

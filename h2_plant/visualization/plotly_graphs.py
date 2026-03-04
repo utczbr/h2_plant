@@ -2362,6 +2362,38 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     
     if len(missing) == 2:
         return _empty_figure("CAPEX/OPEX values not available. Provide economics data (attrs or columns).")
+
+    def _resolve_yearly_opex_series() -> Optional[List[float]]:
+        candidate_keys = ["opex_by_year", "total_opex_by_year", "annual_opex_by_year"]
+        sources = (
+            ("kwargs", kwargs_lc),
+            ("metrics", metrics_lc),
+            ("config", config_lc),
+        )
+        for source_name, source in sources:
+            for key in candidate_keys:
+                raw = source.get(key)
+                if raw is None:
+                    continue
+                if not isinstance(raw, (list, tuple, np.ndarray)):
+                    logger.warning(
+                        "Ignoring %s key '%s': expected list-like, got %s",
+                        source_name,
+                        key,
+                        type(raw).__name__,
+                    )
+                    continue
+                try:
+                    return [float(v or 0.0) for v in raw]
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Ignoring %s key '%s': contains non-numeric values",
+                        source_name,
+                        key,
+                    )
+        return None
+
+    opex_by_year_input = _resolve_yearly_opex_series()
     
     # --- Lifecycle-aware OPEX and yearly bars ---
     stack_threshold = kwargs.get('stack_power_threshold_mw', 0.01)
@@ -2515,7 +2547,17 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     _apply_events(soec_lifecycle_h, soec_event_cost, event_costs_time_soec, event_costs_year_soec)
 
     event_costs_time_total = event_costs_time_pem + event_costs_time_soec
-    base_opex_per_year = np.full(n_years, base_opex, dtype=float)
+    if opex_by_year_input and len(opex_by_year_input) > 0:
+        raw = np.array(opex_by_year_input, dtype=float)
+        if raw.size >= n_years:
+            total_opex_per_year = raw[:n_years]
+        else:
+            total_opex_per_year = np.zeros(n_years, dtype=float)
+            total_opex_per_year[: raw.size] = raw
+        logger.info("Using provided yearly OPEX series with %s years.", len(total_opex_per_year))
+    else:
+        total_opex_per_year = np.full(n_years, opex, dtype=float)
+    base_opex_per_year = np.maximum(total_opex_per_year - annual_reserve_pem - annual_reserve_soec, 0.0)
     pem_spike_per_year = event_costs_year_pem
     soec_spike_per_year = event_costs_year_soec
 
@@ -2523,7 +2565,13 @@ def plot_cumulative_net_profit(df: pd.DataFrame, **kwargs) -> go.Figure:
     if n_years > 0:
         capex_per_year[0] = capex
 
-    cumulative_opex_time = base_opex * (hours / 8760.0) + np.cumsum(event_costs_time_total)
+    year_clamped = np.clip(year_idx, 0, max(n_years - 1, 0))
+    prefix_base = np.concatenate(([0.0], np.cumsum(base_opex_per_year)))
+    within_year_h = np.clip(hours - (year_clamped * 8760.0), a_min=0.0, a_max=8760.0)
+    cumulative_base_opex_time = prefix_base[year_clamped] + (
+        base_opex_per_year[year_clamped] * (within_year_h / 8760.0)
+    )
+    cumulative_opex_time = cumulative_base_opex_time + np.cumsum(event_costs_time_total)
     net_profit = cumulative_total_revenue - capex - cumulative_opex_time
 
     # Financial KPIs (NPV + break-even)

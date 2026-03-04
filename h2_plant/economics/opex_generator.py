@@ -30,6 +30,8 @@ from h2_plant.economics.opex_strategies import get_opex_strategy
 from h2_plant.economics.models import CapexReport
 
 logger = logging.getLogger(__name__)
+MINUTES_PER_YEAR = 525600.0
+HOURS_PER_YEAR = 8760.0
 
 
 class OpexGenerator:
@@ -181,6 +183,54 @@ class OpexGenerator:
         if isinstance(raw_entry, dict):
             return float(raw_entry.get(metric, 0.0) or 0.0)
         return float(raw_entry or 0.0)
+
+    @staticmethod
+    def _equivalent_annual_from_yearly(yearly_costs: np.ndarray, year_hours: np.ndarray) -> float:
+        total_hours = float(np.nansum(year_hours))
+        total_cost = float(np.nansum(yearly_costs))
+        if total_hours > 0:
+            return total_cost / total_hours * HOURS_PER_YEAR
+        return total_cost
+
+    @staticmethod
+    def _period_quantity_from_metric(raw_qty: float, metric: str, period_hours: float) -> float:
+        if metric == "avg":
+            return float(raw_qty) * float(max(period_hours, 0.0))
+        if metric == "max":
+            return float(raw_qty)
+        return float(raw_qty)
+
+    @staticmethod
+    def _build_year_hours_from_minutes(
+        minute_origin: Optional[float],
+        minute_max: Optional[float],
+        minute_diffs: List[float],
+    ) -> Tuple[List[int], List[float]]:
+        if minute_origin is None or minute_max is None:
+            return [0], [0.0]
+
+        dt_min = float(np.median(minute_diffs)) if minute_diffs else 1.0
+        if not np.isfinite(dt_min) or dt_min <= 0:
+            dt_min = 1.0
+
+        sim_end = float(minute_max) + dt_min
+        total_span = max(0.0, sim_end - float(minute_origin))
+        year_count = int(np.ceil(total_span / MINUTES_PER_YEAR)) if total_span > 0 else 1
+        year_indices = list(range(year_count))
+
+        year_hours: List[float] = []
+        for year_idx in year_indices:
+            year_start = float(minute_origin) + (year_idx * MINUTES_PER_YEAR)
+            year_end = year_start + MINUTES_PER_YEAR
+            overlap_min = max(0.0, min(sim_end, year_end) - max(float(minute_origin), year_start))
+            year_hours.append(overlap_min / 60.0)
+        return year_indices, year_hours
+
+    @staticmethod
+    def _zero_metric_entry(is_dynamic_pair: bool) -> Dict[str, float]:
+        if is_dynamic_pair:
+            return {"sum_product": 0.0}
+        return {"sum": 0.0, "max": 0.0, "avg": 0.0}
 
     @staticmethod
     def _resolve_column_name(resource_id: str, all_cols: List[str]) -> Optional[str]:
@@ -548,7 +598,13 @@ class OpexGenerator:
         csv_path = Path(csv_path)
         history_available = csv_path.exists()
         if csv_path.exists():
-            quantities, inferred_hours = self._extract_quantities_streaming(
+            (
+                quantities,
+                inferred_hours,
+                quantities_by_year,
+                year_indices,
+                year_hours,
+            ) = self._extract_quantities_streaming(
                 csv_path=csv_path,
                 required_items=self._required_variable_items(),
                 chunk_size=chunk_size,
@@ -557,6 +613,9 @@ class OpexGenerator:
         else:
             quantities = {}
             inferred_hours = None
+            quantities_by_year = {}
+            year_indices = [0]
+            year_hours = [0.0]
             logger.warning(f"CSV not found: {csv_path}")
 
         effective_simulation_hours = self._resolve_simulation_hours_for_annualization(
@@ -575,46 +634,147 @@ class OpexGenerator:
             annualization_factor=annualization_factor,
         )
 
+        if not year_indices:
+            year_indices = [0]
+        if len(year_hours) != len(year_indices):
+            year_hours = [0.0 for _ in year_indices]
+        year_hours_arr = np.array(year_hours, dtype=float)
+        if float(np.nansum(year_hours_arr)) <= 0:
+            year_hours_arr = np.zeros(len(year_indices), dtype=float)
+            year_hours_arr[0] = float(effective_simulation_hours) if effective_simulation_hours > 0 else HOURS_PER_YEAR
+
         # Get FCI from CAPEX report
         if capex_report:
             report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
             logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
         
         sorted_items = self._sorted_items()
+        base_eval = self._evaluate_streaming_yearly_for_fci(
+            sorted_items=sorted_items,
+            fci=report.fci,
+            quantities=quantities,
+            quantities_by_year=quantities_by_year,
+            history_available=history_available,
+            annualization_factor=annualization_factor,
+            year_indices=year_indices,
+            year_hours=year_hours_arr,
+            keep_scalar_results=True,
+        )
+        report.items.extend(base_eval["scalar_results"])
+        report.labor_cost = float(base_eval["labor_cost"])
 
-        def item_calculator(item: OpexItemConfig, base_costs: Dict[str, float]) -> OpexResult:
-            return self._calculate_item_streaming(
-                item=item,
+        # Yearly report fields
+        report.year_index = [int(y) + 1 for y in year_indices]
+        report.year_hours = [float(v) for v in year_hours_arr]
+        report.item_annual_cost_by_year = base_eval["item_costs_by_year"]
+        report.total_variable_cost_by_year = [float(v) for v in base_eval["variable_by_year"]]
+        report.total_fixed_cost_by_year = [float(v) for v in base_eval["fixed_by_year"]]
+        report.total_maintenance_cost_by_year = [float(v) for v in base_eval["maintenance_by_year"]]
+        report.total_opex_by_year = [float(v) for v in base_eval["total_by_year"]]
+        report.total_opex_cashflow_by_year = [float(v) for v in base_eval["cashflow_by_year"]]
+
+        # H2 yearly production from cumulative increments
+        h2_year_map = quantities_by_year.get("cumulative_h2_kg", {})
+        h2_by_year = np.array(
+            [
+                float((h2_year_map.get(int(y), {}) or {}).get("sum", 0.0) or 0.0)
+                for y in year_indices
+            ],
+            dtype=float,
+        )
+        report.annual_h2_production_kg_by_year = [float(v) for v in h2_by_year]
+        report.annual_h2_production_kg = self._equivalent_annual_from_yearly(h2_by_year, year_hours_arr)
+        if report.annual_h2_production_kg <= 0:
+            # Fallback for legacy datasets missing cumulative_h2_kg
+            h2_entry = quantities.get('cumulative_h2_kg', 0.0)
+            if isinstance(h2_entry, dict):
+                report.annual_h2_production_kg = float(h2_entry.get('sum', 0.0) or 0.0) * annualization_factor
+            else:
+                report.annual_h2_production_kg = float(h2_entry or 0.0) * annualization_factor
+
+        # Backward-compatible scalar totals from yearly series (equivalent annual)
+        report.total_variable_cost = self._equivalent_annual_from_yearly(base_eval["variable_by_year"], year_hours_arr)
+        report.total_fixed_cost = self._equivalent_annual_from_yearly(base_eval["fixed_by_year"], year_hours_arr)
+        report.total_maintenance_cost = self._equivalent_annual_from_yearly(base_eval["maintenance_by_year"], year_hours_arr)
+        report.total_opex = self._equivalent_annual_from_yearly(base_eval["total_by_year"], year_hours_arr)
+        report.total_credit_cost = self._equivalent_annual_from_yearly(base_eval["credit_by_year"], year_hours_arr)
+        report.total_opex_cashflow = self._equivalent_annual_from_yearly(base_eval["cashflow_by_year"], year_hours_arr)
+        report.opex_per_kg_h2 = (
+            float(report.total_opex) / float(report.annual_h2_production_kg)
+            if float(report.annual_h2_production_kg) > 0
+            else 0.0
+        )
+
+        # Low/high variants with yearly series
+        report.total_opex_low = None
+        report.total_opex_high = None
+        report.total_opex_cashflow_low = None
+        report.total_opex_cashflow_high = None
+        report.total_opex_low_by_year = None
+        report.total_opex_high_by_year = None
+        report.total_opex_cashflow_low_by_year = None
+        report.total_opex_cashflow_high_by_year = None
+
+        capex_low = self._to_positive_float(getattr(capex_report, "total_installed_cost_low", None)) if capex_report else None
+        capex_high = self._to_positive_float(getattr(capex_report, "total_installed_cost_high", None)) if capex_report else None
+
+        if capex_low is not None and capex_high is not None:
+            low_eval = self._evaluate_streaming_yearly_for_fci(
+                sorted_items=sorted_items,
+                fci=capex_low,
                 quantities=quantities,
+                quantities_by_year=quantities_by_year,
                 history_available=history_available,
-                base_costs=base_costs,
                 annualization_factor=annualization_factor,
+                year_indices=year_indices,
+                year_hours=year_hours_arr,
+                keep_scalar_results=False,
+            )
+            high_eval = self._evaluate_streaming_yearly_for_fci(
+                sorted_items=sorted_items,
+                fci=capex_high,
+                quantities=quantities,
+                quantities_by_year=quantities_by_year,
+                history_available=history_available,
+                annualization_factor=annualization_factor,
+                year_indices=year_indices,
+                year_hours=year_hours_arr,
+                keep_scalar_results=False,
             )
 
-        base_results, labor_cost = self._evaluate_items_for_fci(
-            sorted_items=sorted_items,
-            item_calculator=item_calculator,
-            fci=report.fci,
-        )
-        report.items.extend(base_results)
-        report.labor_cost = labor_cost
-        
-        # Set H2 production from streaming extraction
-        h2_entry = quantities.get('cumulative_h2_kg', 0.0)
-        if isinstance(h2_entry, dict):
-            report.annual_h2_production_kg = h2_entry.get('sum', 0.0) * annualization_factor
+            report.total_opex_low_by_year = [float(v) for v in low_eval["total_by_year"]]
+            report.total_opex_high_by_year = [float(v) for v in high_eval["total_by_year"]]
+            report.total_opex_cashflow_low_by_year = [float(v) for v in low_eval["cashflow_by_year"]]
+            report.total_opex_cashflow_high_by_year = [float(v) for v in high_eval["cashflow_by_year"]]
+            report.total_opex_low = self._equivalent_annual_from_yearly(low_eval["total_by_year"], year_hours_arr)
+            report.total_opex_high = self._equivalent_annual_from_yearly(high_eval["total_by_year"], year_hours_arr)
+            report.total_opex_cashflow_low = self._equivalent_annual_from_yearly(low_eval["cashflow_by_year"], year_hours_arr)
+            report.total_opex_cashflow_high = self._equivalent_annual_from_yearly(high_eval["cashflow_by_year"], year_hours_arr)
+            logger.info(
+                "Computed OPEX low/high by recomputing config with CAPEX low/high "
+                "(low=%s, high=%s).",
+                f"{capex_low:,.0f}",
+                f"{capex_high:,.0f}",
+            )
         else:
-            report.annual_h2_production_kg = h2_entry * annualization_factor
-        
-        # Calculate totals
-        report.calculate_totals()
-        self._populate_opex_variants(
-            report=report,
-            capex_report=capex_report,
-            sorted_items=sorted_items,
-            item_calculator=item_calculator,
-        )
-        self._populate_cashflow_fields(report)
+            self._apply_uncertainty_bands(report, capex_report)
+            if report.total_opex > 0:
+                low_scale = (float(report.total_opex_low) / float(report.total_opex)) if report.total_opex_low is not None else 0.0
+                high_scale = (float(report.total_opex_high) / float(report.total_opex)) if report.total_opex_high is not None else 0.0
+                base_total = np.array(base_eval["total_by_year"], dtype=float)
+                base_cash = np.array(base_eval["cashflow_by_year"], dtype=float)
+                if report.total_opex_low is not None:
+                    low_total = base_total * low_scale
+                    low_cash = base_cash * low_scale
+                    report.total_opex_low_by_year = [float(v) for v in low_total]
+                    report.total_opex_cashflow_low_by_year = [float(v) for v in low_cash]
+                    report.total_opex_cashflow_low = self._equivalent_annual_from_yearly(low_cash, year_hours_arr)
+                if report.total_opex_high is not None:
+                    high_total = base_total * high_scale
+                    high_cash = base_cash * high_scale
+                    report.total_opex_high_by_year = [float(v) for v in high_total]
+                    report.total_opex_cashflow_high_by_year = [float(v) for v in high_cash]
+                    report.total_opex_cashflow_high = self._equivalent_annual_from_yearly(high_cash, year_hours_arr)
         
         # Export if output_dir provided
         if output_dir:
@@ -664,7 +824,13 @@ class OpexGenerator:
         chunks_path = Path(chunks_dir)
         history_available = chunks_path.exists() and any(chunks_path.glob("chunk_*.parquet"))
 
-        quantities, inferred_hours = self._extract_quantities_parquet_chunks(
+        (
+            quantities,
+            inferred_hours,
+            quantities_by_year,
+            year_indices,
+            year_hours,
+        ) = self._extract_quantities_parquet_chunks(
             chunks_dir=chunks_dir,
             required_items=self._required_variable_items(),
         )
@@ -686,44 +852,142 @@ class OpexGenerator:
             annualization_factor=annualization_factor,
         )
 
+        if not year_indices:
+            year_indices = [0]
+        if len(year_hours) != len(year_indices):
+            year_hours = [0.0 for _ in year_indices]
+        year_hours_arr = np.array(year_hours, dtype=float)
+        if float(np.nansum(year_hours_arr)) <= 0:
+            year_hours_arr = np.zeros(len(year_indices), dtype=float)
+            year_hours_arr[0] = float(effective_simulation_hours) if effective_simulation_hours > 0 else HOURS_PER_YEAR
+
         # Get FCI from CAPEX report
         if capex_report:
             report.fci = capex_report.total_installed_cost or capex_report.total_C_BM or 0.0
             logger.info(f"Using FCI from CAPEX: ${report.fci:,.0f}")
 
         sorted_items = self._sorted_items()
+        base_eval = self._evaluate_streaming_yearly_for_fci(
+            sorted_items=sorted_items,
+            fci=report.fci,
+            quantities=quantities,
+            quantities_by_year=quantities_by_year,
+            history_available=history_available,
+            annualization_factor=annualization_factor,
+            year_indices=year_indices,
+            year_hours=year_hours_arr,
+            keep_scalar_results=True,
+        )
+        report.items.extend(base_eval["scalar_results"])
+        report.labor_cost = float(base_eval["labor_cost"])
 
-        def item_calculator(item: OpexItemConfig, base_costs: Dict[str, float]) -> OpexResult:
-            return self._calculate_item_streaming(
-                item=item,
+        report.year_index = [int(y) + 1 for y in year_indices]
+        report.year_hours = [float(v) for v in year_hours_arr]
+        report.item_annual_cost_by_year = base_eval["item_costs_by_year"]
+        report.total_variable_cost_by_year = [float(v) for v in base_eval["variable_by_year"]]
+        report.total_fixed_cost_by_year = [float(v) for v in base_eval["fixed_by_year"]]
+        report.total_maintenance_cost_by_year = [float(v) for v in base_eval["maintenance_by_year"]]
+        report.total_opex_by_year = [float(v) for v in base_eval["total_by_year"]]
+        report.total_opex_cashflow_by_year = [float(v) for v in base_eval["cashflow_by_year"]]
+
+        h2_year_map = quantities_by_year.get("cumulative_h2_kg", {})
+        h2_by_year = np.array(
+            [
+                float((h2_year_map.get(int(y), {}) or {}).get("sum", 0.0) or 0.0)
+                for y in year_indices
+            ],
+            dtype=float,
+        )
+        report.annual_h2_production_kg_by_year = [float(v) for v in h2_by_year]
+        report.annual_h2_production_kg = self._equivalent_annual_from_yearly(h2_by_year, year_hours_arr)
+        if report.annual_h2_production_kg <= 0:
+            h2_entry = quantities.get('cumulative_h2_kg', 0.0)
+            if isinstance(h2_entry, dict):
+                report.annual_h2_production_kg = float(h2_entry.get('sum', 0.0) or 0.0) * annualization_factor
+            else:
+                report.annual_h2_production_kg = float(h2_entry or 0.0) * annualization_factor
+
+        report.total_variable_cost = self._equivalent_annual_from_yearly(base_eval["variable_by_year"], year_hours_arr)
+        report.total_fixed_cost = self._equivalent_annual_from_yearly(base_eval["fixed_by_year"], year_hours_arr)
+        report.total_maintenance_cost = self._equivalent_annual_from_yearly(base_eval["maintenance_by_year"], year_hours_arr)
+        report.total_opex = self._equivalent_annual_from_yearly(base_eval["total_by_year"], year_hours_arr)
+        report.total_credit_cost = self._equivalent_annual_from_yearly(base_eval["credit_by_year"], year_hours_arr)
+        report.total_opex_cashflow = self._equivalent_annual_from_yearly(base_eval["cashflow_by_year"], year_hours_arr)
+        report.opex_per_kg_h2 = (
+            float(report.total_opex) / float(report.annual_h2_production_kg)
+            if float(report.annual_h2_production_kg) > 0
+            else 0.0
+        )
+
+        report.total_opex_low = None
+        report.total_opex_high = None
+        report.total_opex_cashflow_low = None
+        report.total_opex_cashflow_high = None
+        report.total_opex_low_by_year = None
+        report.total_opex_high_by_year = None
+        report.total_opex_cashflow_low_by_year = None
+        report.total_opex_cashflow_high_by_year = None
+
+        capex_low = self._to_positive_float(getattr(capex_report, "total_installed_cost_low", None)) if capex_report else None
+        capex_high = self._to_positive_float(getattr(capex_report, "total_installed_cost_high", None)) if capex_report else None
+
+        if capex_low is not None and capex_high is not None:
+            low_eval = self._evaluate_streaming_yearly_for_fci(
+                sorted_items=sorted_items,
+                fci=capex_low,
                 quantities=quantities,
+                quantities_by_year=quantities_by_year,
                 history_available=history_available,
-                base_costs=base_costs,
                 annualization_factor=annualization_factor,
+                year_indices=year_indices,
+                year_hours=year_hours_arr,
+                keep_scalar_results=False,
+            )
+            high_eval = self._evaluate_streaming_yearly_for_fci(
+                sorted_items=sorted_items,
+                fci=capex_high,
+                quantities=quantities,
+                quantities_by_year=quantities_by_year,
+                history_available=history_available,
+                annualization_factor=annualization_factor,
+                year_indices=year_indices,
+                year_hours=year_hours_arr,
+                keep_scalar_results=False,
             )
 
-        base_results, labor_cost = self._evaluate_items_for_fci(
-            sorted_items=sorted_items,
-            item_calculator=item_calculator,
-            fci=report.fci,
-        )
-        report.items.extend(base_results)
-        report.labor_cost = labor_cost
-
-        h2_entry = quantities.get('cumulative_h2_kg', 0.0)
-        if isinstance(h2_entry, dict):
-            report.annual_h2_production_kg = h2_entry.get('sum', 0.0) * annualization_factor
+            report.total_opex_low_by_year = [float(v) for v in low_eval["total_by_year"]]
+            report.total_opex_high_by_year = [float(v) for v in high_eval["total_by_year"]]
+            report.total_opex_cashflow_low_by_year = [float(v) for v in low_eval["cashflow_by_year"]]
+            report.total_opex_cashflow_high_by_year = [float(v) for v in high_eval["cashflow_by_year"]]
+            report.total_opex_low = self._equivalent_annual_from_yearly(low_eval["total_by_year"], year_hours_arr)
+            report.total_opex_high = self._equivalent_annual_from_yearly(high_eval["total_by_year"], year_hours_arr)
+            report.total_opex_cashflow_low = self._equivalent_annual_from_yearly(low_eval["cashflow_by_year"], year_hours_arr)
+            report.total_opex_cashflow_high = self._equivalent_annual_from_yearly(high_eval["cashflow_by_year"], year_hours_arr)
+            logger.info(
+                "Computed OPEX low/high by recomputing config with CAPEX low/high "
+                "(low=%s, high=%s).",
+                f"{capex_low:,.0f}",
+                f"{capex_high:,.0f}",
+            )
         else:
-            report.annual_h2_production_kg = h2_entry * annualization_factor
-
-        report.calculate_totals()
-        self._populate_opex_variants(
-            report=report,
-            capex_report=capex_report,
-            sorted_items=sorted_items,
-            item_calculator=item_calculator,
-        )
-        self._populate_cashflow_fields(report)
+            self._apply_uncertainty_bands(report, capex_report)
+            if report.total_opex > 0:
+                low_scale = (float(report.total_opex_low) / float(report.total_opex)) if report.total_opex_low is not None else 0.0
+                high_scale = (float(report.total_opex_high) / float(report.total_opex)) if report.total_opex_high is not None else 0.0
+                base_total = np.array(base_eval["total_by_year"], dtype=float)
+                base_cash = np.array(base_eval["cashflow_by_year"], dtype=float)
+                if report.total_opex_low is not None:
+                    low_total = base_total * low_scale
+                    low_cash = base_cash * low_scale
+                    report.total_opex_low_by_year = [float(v) for v in low_total]
+                    report.total_opex_cashflow_low_by_year = [float(v) for v in low_cash]
+                    report.total_opex_cashflow_low = self._equivalent_annual_from_yearly(low_cash, year_hours_arr)
+                if report.total_opex_high is not None:
+                    high_total = base_total * high_scale
+                    high_cash = base_cash * high_scale
+                    report.total_opex_high_by_year = [float(v) for v in high_total]
+                    report.total_opex_cashflow_high_by_year = [float(v) for v in high_cash]
+                    report.total_opex_cashflow_high = self._equivalent_annual_from_yearly(high_cash, year_hours_arr)
 
         if output_dir:
             output_path = Path(output_dir)
@@ -750,7 +1014,13 @@ class OpexGenerator:
         csv_path: Path,
         required_items: List[OpexItemConfig],
         chunk_size: int = 50_000,
-    ) -> Tuple[Dict[str, Dict[str, float]], Optional[float]]:
+    ) -> Tuple[
+        Dict[str, Dict[str, float]],
+        Optional[float],
+        Dict[str, Dict[int, Dict[str, float]]],
+        List[int],
+        List[float],
+    ]:
         """
         Extract quantities using chunked streaming with column filtering.
         
@@ -762,7 +1032,12 @@ class OpexGenerator:
             chunk_size: Rows per chunk
             
         Returns:
-            Tuple (quantities_by_resource_id, inferred_simulation_hours)
+            Tuple:
+              (quantities_by_resource_id,
+               inferred_simulation_hours,
+               quantities_by_resource_id_by_year,
+               year_indices_zero_based,
+               year_hours)
         """
         import gc
         
@@ -796,7 +1071,7 @@ class OpexGenerator:
         needed_cols = list(set(col_map.values()))
         if not needed_cols:
             logger.warning("No matching columns found for OPEX extraction")
-            return {}, None
+            return {}, None, {}, [0], [0.0]
         
         logger.info(f"Streaming OPEX: reading {len(needed_cols)} columns in chunks of {chunk_size}")
         
@@ -812,22 +1087,39 @@ class OpexGenerator:
                 "is_cumulative": True if is_cumulative else False,
             }
 
+        yearly_accumulators: Dict[str, Dict[int, Dict[str, float]]] = {
+            res_id: {} for res_id in accumulators if res_id != "minute"
+        }
+
         rows_processed = 0
         minutes_min: Optional[float] = None
         minutes_max: Optional[float] = None
         minute_diffs: List[float] = []
         last_minute: Optional[float] = None
         dynamic_pair_products = {pair_key: 0.0 for pair_key in dynamic_pairs}
+        dynamic_pair_products_by_year: Dict[str, Dict[int, float]] = {
+            pair_key: {} for pair_key in dynamic_pairs
+        }
+        minute_origin: Optional[float] = None
+        year_indices_seen: set[int] = set()
         
         # 4. Process chunks
         try:
             for chunk in pd.read_csv(csv_path, usecols=needed_cols, chunksize=chunk_size):
                 rows_processed += len(chunk)
+                minute_values: Optional[np.ndarray] = None
+                year_idx_values: Optional[np.ndarray] = None
 
                 minute_signal_col = col_map.get("minute")
                 if minute_signal_col and minute_signal_col in chunk.columns:
-                    minute_series = pd.to_numeric(chunk[minute_signal_col], errors="coerce").dropna()
+                    minute_series = pd.to_numeric(chunk[minute_signal_col], errors="coerce")
+                    minute_values = minute_series.to_numpy(dtype=float)
+                    minute_valid = minute_values[np.isfinite(minute_values)]
+                    minute_series_clean = pd.Series(minute_valid)
+                    minute_series = minute_series_clean
                     if not minute_series.empty:
+                        if minute_origin is None:
+                            minute_origin = float(minute_series.iloc[0])
                         chunk_minutes = minute_series.values.astype(float)
                         chunk_min = float(np.min(chunk_minutes))
                         chunk_max = float(np.max(chunk_minutes))
@@ -846,12 +1138,21 @@ class OpexGenerator:
                             if positive.size > 0:
                                 minute_diffs.append(float(np.median(positive)))
                         last_minute = float(chunk_minutes[-1])
+                    if minute_origin is not None:
+                        year_idx_values = np.full(len(minute_values), -1, dtype=int)
+                        valid_mask = np.isfinite(minute_values)
+                        year_idx_values[valid_mask] = np.floor(
+                            (minute_values[valid_mask] - minute_origin) / MINUTES_PER_YEAR
+                        ).astype(int)
+                        year_idx_values[year_idx_values < 0] = 0
+                        if valid_mask.any():
+                            year_indices_seen.update(int(v) for v in np.unique(year_idx_values[valid_mask]))
                 
                 for res_id, col in col_map.items():
                     if res_id == "minute":
                         continue
                     if col in chunk.columns:
-                        series = chunk[col]
+                        series = pd.to_numeric(chunk[col], errors="coerce")
                         is_cumulative = bool(accumulators[res_id]["is_cumulative"])
                         if is_cumulative:
                             if len(series) > 0:
@@ -870,6 +1171,47 @@ class OpexGenerator:
                             if pd.notna(series_count):
                                 accumulators[res_id]["count"] += series_count
 
+                        # Per-year accumulation
+                        if year_idx_values is None:
+                            local_year_indices = np.zeros(len(series), dtype=int)
+                            year_indices_seen.add(0)
+                        else:
+                            local_year_indices = year_idx_values
+                        values = series.to_numpy(dtype=float)
+                        finite_mask = np.isfinite(values) & (local_year_indices >= 0)
+                        if not np.any(finite_mask):
+                            continue
+                        valid_years = local_year_indices[finite_mask]
+                        valid_values = values[finite_mask]
+                        for year_idx in np.unique(valid_years):
+                            year_mask = valid_years == year_idx
+                            year_values = valid_values[year_mask]
+                            year_acc = yearly_accumulators[res_id].setdefault(
+                                int(year_idx),
+                                {
+                                    "sum": 0.0,
+                                    "max": float("-inf"),
+                                    "count": 0.0,
+                                    "last": 0.0,
+                                    "is_cumulative": True if is_cumulative else False,
+                                },
+                            )
+                            if is_cumulative:
+                                year_acc["last"] = float(year_values[-1])
+                                year_max = float(np.max(year_values))
+                                if np.isfinite(year_max):
+                                    year_acc["max"] = max(year_acc["max"], year_max)
+                            else:
+                                year_sum = float(np.sum(year_values))
+                                year_max = float(np.max(year_values))
+                                year_count = float(year_values.size)
+                                if np.isfinite(year_sum):
+                                    year_acc["sum"] += year_sum
+                                if np.isfinite(year_max):
+                                    year_acc["max"] = max(year_acc["max"], year_max)
+                                if np.isfinite(year_count):
+                                    year_acc["count"] += year_count
+
                 for pair_key, (quantity_signal, price_signal) in dynamic_pairs.items():
                     quantity_col = col_map.get(quantity_signal)
                     price_col = col_map.get(price_signal)
@@ -879,7 +1221,27 @@ class OpexGenerator:
                         continue
                     qty_series = pd.to_numeric(chunk[quantity_col], errors="coerce").fillna(0.0)
                     price_series = pd.to_numeric(chunk[price_col], errors="coerce").fillna(0.0)
-                    dynamic_pair_products[pair_key] += float((qty_series * price_series).sum())
+                    step_products = (qty_series * price_series).to_numpy(dtype=float)
+                    dynamic_pair_products[pair_key] += float(np.sum(step_products))
+
+                    if year_idx_values is None:
+                        dynamic_pair_products_by_year[pair_key][0] = (
+                            dynamic_pair_products_by_year[pair_key].get(0, 0.0)
+                            + float(np.sum(step_products))
+                        )
+                        year_indices_seen.add(0)
+                    else:
+                        valid_mask = np.isfinite(step_products) & (year_idx_values >= 0)
+                        if not np.any(valid_mask):
+                            continue
+                        valid_years = year_idx_values[valid_mask]
+                        valid_products = step_products[valid_mask]
+                        for year_idx in np.unique(valid_years):
+                            year_mask = valid_years == year_idx
+                            dynamic_pair_products_by_year[pair_key][int(year_idx)] = (
+                                dynamic_pair_products_by_year[pair_key].get(int(year_idx), 0.0)
+                                + float(np.sum(valid_products[year_mask]))
+                            )
                 
                 # Periodic cleanup
                 if rows_processed % (chunk_size * 5) == 0:
@@ -887,7 +1249,7 @@ class OpexGenerator:
         
         except Exception as e:
             logger.error(f"Error in streaming extraction: {e}")
-            return {}, None
+            return {}, None, {}, [0], [0.0]
         
         # Finalize metrics
         quantities: Dict[str, Dict[str, float]] = {}
@@ -926,13 +1288,69 @@ class OpexGenerator:
             if inferred_hours <= 0:
                 inferred_hours = None
 
-        return quantities, inferred_hours
+        year_indices_axis, year_hours = self._build_year_hours_from_minutes(
+            minute_origin=minute_origin,
+            minute_max=minutes_max,
+            minute_diffs=minute_diffs,
+        )
+        if minute_origin is None and year_indices_seen:
+            year_indices_axis = sorted(int(v) for v in year_indices_seen)
+            year_hours = [0.0] * len(year_indices_axis)
+
+        yearly_quantities: Dict[str, Dict[int, Dict[str, float]]] = {}
+        for res_id, by_year in yearly_accumulators.items():
+            res_year: Dict[int, Dict[str, float]] = {}
+            if not by_year:
+                yearly_quantities[res_id] = res_year
+                continue
+            is_cumulative = bool(next(iter(by_year.values())).get("is_cumulative", False))
+            if is_cumulative:
+                prev_last = 0.0
+                for year_idx in sorted(by_year):
+                    last_val = float(by_year[year_idx].get("last", 0.0) or 0.0)
+                    delta = max(0.0, last_val - prev_last)
+                    prev_last = last_val
+                    res_year[int(year_idx)] = {
+                        "sum": delta,
+                        "max": last_val,
+                        "avg": delta,
+                    }
+            else:
+                for year_idx in sorted(by_year):
+                    acc = by_year[year_idx]
+                    max_val = acc["max"] if acc["max"] != float("-inf") else 0.0
+                    avg_val = (acc["sum"] / acc["count"]) if acc["count"] > 0 else 0.0
+                    res_year[int(year_idx)] = {
+                        "sum": float(acc["sum"]),
+                        "max": float(max_val),
+                        "avg": float(avg_val),
+                    }
+            yearly_quantities[res_id] = res_year
+
+        for pair_key, by_year in dynamic_pair_products_by_year.items():
+            yearly_quantities[pair_key] = {
+                int(year_idx): {"sum_product": float(value)}
+                for year_idx, value in by_year.items()
+            }
+
+        for res_id, by_year in yearly_quantities.items():
+            is_pair = res_id.startswith("__dynamic_pair__")
+            for year_idx in year_indices_axis:
+                by_year.setdefault(int(year_idx), self._zero_metric_entry(is_pair))
+
+        return quantities, inferred_hours, yearly_quantities, year_indices_axis, year_hours
 
     def _extract_quantities_parquet_chunks(
         self,
         chunks_dir: Path,
         required_items: List[OpexItemConfig],
-    ) -> Tuple[Dict[str, Dict[str, float]], Optional[float]]:
+    ) -> Tuple[
+        Dict[str, Dict[str, float]],
+        Optional[float],
+        Dict[str, Dict[int, Dict[str, float]]],
+        List[int],
+        List[float],
+    ]:
         """
         Extract quantities from Parquet history chunks with metric-aware aggregation.
         
@@ -941,7 +1359,12 @@ class OpexGenerator:
             required_items: OPEX items requiring simulation data
             
         Returns:
-            Tuple (quantities_by_resource_id, inferred_simulation_hours)
+            Tuple:
+              (quantities_by_resource_id,
+               inferred_simulation_hours,
+               quantities_by_resource_id_by_year,
+               year_indices_zero_based,
+               year_hours)
         """
         try:
             chunk_files = sorted(
@@ -953,7 +1376,7 @@ class OpexGenerator:
 
         if not chunk_files:
             logger.warning(f"No chunk files found in {chunks_dir}")
-            return {}, None
+            return {}, None, {}, [0], [0.0]
 
         # Resolve available columns
         all_cols: List[str] = []
@@ -967,7 +1390,7 @@ class OpexGenerator:
                 del df_preview
             except Exception as e:
                 logger.warning(f"Failed to read parquet schema: {e}")
-                return {}, None
+                return {}, None, {}, [0], [0.0]
 
         col_map = self._resolve_required_columns(
             all_cols=all_cols,
@@ -993,7 +1416,7 @@ class OpexGenerator:
         needed_cols = list(set(col_map.values()))
         if not needed_cols:
             logger.warning("No matching columns found for Parquet OPEX extraction")
-            return {}, None
+            return {}, None, {}, [0], [0.0]
 
         accumulators: Dict[str, Dict[str, float]] = {}
         for res_id, col in col_map.items():
@@ -1006,11 +1429,20 @@ class OpexGenerator:
                 "is_cumulative": True if is_cumulative else False,
             }
 
+        yearly_accumulators: Dict[str, Dict[int, Dict[str, float]]] = {
+            res_id: {} for res_id in accumulators if res_id != "minute"
+        }
+
         minutes_min: Optional[float] = None
         minutes_max: Optional[float] = None
         minute_diffs: List[float] = []
         last_minute: Optional[float] = None
         dynamic_pair_products = {pair_key: 0.0 for pair_key in dynamic_pairs}
+        dynamic_pair_products_by_year: Dict[str, Dict[int, float]] = {
+            pair_key: {} for pair_key in dynamic_pairs
+        }
+        minute_origin: Optional[float] = None
+        year_indices_seen: set[int] = set()
 
         for chunk_file in chunk_files:
             try:
@@ -1029,11 +1461,17 @@ class OpexGenerator:
 
             if df.empty:
                 continue
+            year_idx_values: Optional[np.ndarray] = None
 
             minute_signal_col = col_map.get("minute")
             if minute_signal_col and minute_signal_col in df.columns:
-                minute_series = pd.to_numeric(df[minute_signal_col], errors="coerce").dropna()
+                minute_series = pd.to_numeric(df[minute_signal_col], errors="coerce")
+                minute_values = minute_series.to_numpy(dtype=float)
+                minute_valid = minute_values[np.isfinite(minute_values)]
+                minute_series = pd.Series(minute_valid)
                 if not minute_series.empty:
+                    if minute_origin is None:
+                        minute_origin = float(minute_series.iloc[0])
                     chunk_minutes = minute_series.values.astype(float)
                     chunk_min = float(np.min(chunk_minutes))
                     chunk_max = float(np.max(chunk_minutes))
@@ -1051,16 +1489,26 @@ class OpexGenerator:
                         if positive.size > 0:
                             minute_diffs.append(float(np.median(positive)))
                     last_minute = float(chunk_minutes[-1])
+                if minute_origin is not None:
+                    year_idx_values = np.full(len(df), -1, dtype=int)
+                    valid_mask = np.isfinite(minute_values)
+                    year_idx_values[valid_mask] = np.floor(
+                        (minute_values[valid_mask] - minute_origin) / MINUTES_PER_YEAR
+                    ).astype(int)
+                    year_idx_values[year_idx_values < 0] = 0
+                    if valid_mask.any():
+                        year_indices_seen.update(int(v) for v in np.unique(year_idx_values[valid_mask]))
 
             for res_id, col in col_map.items():
                 if res_id == "minute":
                     continue
                 if col not in df.columns:
                     continue
-                series = df[col]
+                series = pd.to_numeric(df[col], errors="coerce")
                 is_cumulative = bool(accumulators[res_id]["is_cumulative"])
                 if is_cumulative:
-                    accumulators[res_id]["last"] = series.iloc[-1]
+                    if len(series) > 0:
+                        accumulators[res_id]["last"] = series.iloc[-1]
                     series_max = series.max()
                     if pd.notna(series_max):
                         accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
@@ -1075,6 +1523,47 @@ class OpexGenerator:
                     if pd.notna(series_count):
                         accumulators[res_id]["count"] += series_count
 
+                # Per-year accumulation
+                if year_idx_values is None:
+                    local_year_indices = np.zeros(len(series), dtype=int)
+                    year_indices_seen.add(0)
+                else:
+                    local_year_indices = year_idx_values
+                values = series.to_numpy(dtype=float)
+                finite_mask = np.isfinite(values) & (local_year_indices >= 0)
+                if not np.any(finite_mask):
+                    continue
+                valid_years = local_year_indices[finite_mask]
+                valid_values = values[finite_mask]
+                for year_idx in np.unique(valid_years):
+                    year_mask = valid_years == year_idx
+                    year_values = valid_values[year_mask]
+                    year_acc = yearly_accumulators[res_id].setdefault(
+                        int(year_idx),
+                        {
+                            "sum": 0.0,
+                            "max": float("-inf"),
+                            "count": 0.0,
+                            "last": 0.0,
+                            "is_cumulative": True if is_cumulative else False,
+                        },
+                    )
+                    if is_cumulative:
+                        year_acc["last"] = float(year_values[-1])
+                        year_max = float(np.max(year_values))
+                        if np.isfinite(year_max):
+                            year_acc["max"] = max(year_acc["max"], year_max)
+                    else:
+                        year_sum = float(np.sum(year_values))
+                        year_max = float(np.max(year_values))
+                        year_count = float(year_values.size)
+                        if np.isfinite(year_sum):
+                            year_acc["sum"] += year_sum
+                        if np.isfinite(year_max):
+                            year_acc["max"] = max(year_acc["max"], year_max)
+                        if np.isfinite(year_count):
+                            year_acc["count"] += year_count
+
             for pair_key, (quantity_signal, price_signal) in dynamic_pairs.items():
                 quantity_col = col_map.get(quantity_signal)
                 price_col = col_map.get(price_signal)
@@ -1084,7 +1573,27 @@ class OpexGenerator:
                     continue
                 qty_series = pd.to_numeric(df[quantity_col], errors="coerce").fillna(0.0)
                 price_series = pd.to_numeric(df[price_col], errors="coerce").fillna(0.0)
-                dynamic_pair_products[pair_key] += float((qty_series * price_series).sum())
+                step_products = (qty_series * price_series).to_numpy(dtype=float)
+                dynamic_pair_products[pair_key] += float(np.sum(step_products))
+
+                if year_idx_values is None:
+                    dynamic_pair_products_by_year[pair_key][0] = (
+                        dynamic_pair_products_by_year[pair_key].get(0, 0.0)
+                        + float(np.sum(step_products))
+                    )
+                    year_indices_seen.add(0)
+                else:
+                    valid_mask = np.isfinite(step_products) & (year_idx_values >= 0)
+                    if not np.any(valid_mask):
+                        continue
+                    valid_years = year_idx_values[valid_mask]
+                    valid_products = step_products[valid_mask]
+                    for year_idx in np.unique(valid_years):
+                        year_mask = valid_years == year_idx
+                        dynamic_pair_products_by_year[pair_key][int(year_idx)] = (
+                            dynamic_pair_products_by_year[pair_key].get(int(year_idx), 0.0)
+                            + float(np.sum(valid_products[year_mask]))
+                        )
 
         quantities: Dict[str, Dict[str, float]] = {}
         for res_id, acc in accumulators.items():
@@ -1121,7 +1630,57 @@ class OpexGenerator:
             if inferred_hours <= 0:
                 inferred_hours = None
 
-        return quantities, inferred_hours
+        year_indices_axis, year_hours = self._build_year_hours_from_minutes(
+            minute_origin=minute_origin,
+            minute_max=minutes_max,
+            minute_diffs=minute_diffs,
+        )
+        if minute_origin is None and year_indices_seen:
+            year_indices_axis = sorted(int(v) for v in year_indices_seen)
+            year_hours = [0.0] * len(year_indices_axis)
+
+        yearly_quantities: Dict[str, Dict[int, Dict[str, float]]] = {}
+        for res_id, by_year in yearly_accumulators.items():
+            res_year: Dict[int, Dict[str, float]] = {}
+            if not by_year:
+                yearly_quantities[res_id] = res_year
+                continue
+            is_cumulative = bool(next(iter(by_year.values())).get("is_cumulative", False))
+            if is_cumulative:
+                prev_last = 0.0
+                for year_idx in sorted(by_year):
+                    last_val = float(by_year[year_idx].get("last", 0.0) or 0.0)
+                    delta = max(0.0, last_val - prev_last)
+                    prev_last = last_val
+                    res_year[int(year_idx)] = {
+                        "sum": delta,
+                        "max": last_val,
+                        "avg": delta,
+                    }
+            else:
+                for year_idx in sorted(by_year):
+                    acc = by_year[year_idx]
+                    max_val = acc["max"] if acc["max"] != float("-inf") else 0.0
+                    avg_val = (acc["sum"] / acc["count"]) if acc["count"] > 0 else 0.0
+                    res_year[int(year_idx)] = {
+                        "sum": float(acc["sum"]),
+                        "max": float(max_val),
+                        "avg": float(avg_val),
+                    }
+            yearly_quantities[res_id] = res_year
+
+        for pair_key, by_year in dynamic_pair_products_by_year.items():
+            yearly_quantities[pair_key] = {
+                int(year_idx): {"sum_product": float(value)}
+                for year_idx, value in by_year.items()
+            }
+
+        for res_id, by_year in yearly_quantities.items():
+            is_pair = res_id.startswith("__dynamic_pair__")
+            for year_idx in year_indices_axis:
+                by_year.setdefault(int(year_idx), self._zero_metric_entry(is_pair))
+
+        return quantities, inferred_hours, yearly_quantities, year_indices_axis, year_hours
 
     @staticmethod
     def _normalize_pathway_shares(pathway_totals: Dict[str, float]) -> Dict[str, float]:
@@ -1203,6 +1762,167 @@ class OpexGenerator:
             f"{item.cost_multiplier:.6g} × {item.price:.6g}"
         )
         return annual_cost, formula
+
+    def _calculate_dynamic_yearly_cost_from_quantities(
+        self,
+        *,
+        item: OpexItemConfig,
+        quantities_by_year: Dict[str, Dict[int, Dict[str, float]]],
+        year_indices: List[int],
+    ) -> np.ndarray:
+        pair_key = self._dynamic_pair_key(item)
+        if pair_key is None:
+            return np.zeros(len(year_indices), dtype=float)
+
+        by_year = quantities_by_year.get(pair_key, {})
+        out = np.zeros(len(year_indices), dtype=float)
+        for idx, year_idx in enumerate(year_indices):
+            entry = by_year.get(int(year_idx), {})
+            period_sum = float(entry.get("sum_product", 0.0) or 0.0)
+            out[idx] = period_sum * float(item.cost_multiplier) * float(item.price)
+        return out
+
+    @staticmethod
+    def _metric_to_yearly_quantity(raw_qty: float, metric: str, period_hours: float) -> float:
+        return OpexGenerator._period_quantity_from_metric(raw_qty, metric, period_hours)
+
+    def _calculate_item_streaming_yearly(
+        self,
+        *,
+        item: OpexItemConfig,
+        quantities: Dict[str, Dict[str, float]],
+        quantities_by_year: Dict[str, Dict[int, Dict[str, float]]],
+        history_available: bool,
+        base_costs: Dict[str, float],
+        annualization_factor: float,
+        year_indices: List[int],
+        year_hours: np.ndarray,
+    ) -> Tuple[OpexResult, np.ndarray]:
+        scalar_result = self._calculate_item_streaming(
+            item=item,
+            quantities=quantities,
+            history_available=history_available,
+            base_costs=base_costs,
+            annualization_factor=annualization_factor,
+        )
+
+        year_count = len(year_indices)
+        if year_count == 0:
+            return scalar_result, np.zeros(0, dtype=float)
+
+        year_scale = np.clip(year_hours, a_min=0.0, a_max=None) / HOURS_PER_YEAR
+
+        if item.strategy == "variable" and item.resource_id:
+            if not history_available:
+                return scalar_result, np.zeros(year_count, dtype=float)
+
+            if item.price_resource_id:
+                yearly_costs = self._calculate_dynamic_yearly_cost_from_quantities(
+                    item=item,
+                    quantities_by_year=quantities_by_year,
+                    year_indices=year_indices,
+                )
+                return scalar_result, yearly_costs
+
+            signal_by_year = quantities_by_year.get(item.resource_id, {})
+            yearly_costs = np.zeros(year_count, dtype=float)
+            for idx, year_idx in enumerate(year_indices):
+                raw_entry = signal_by_year.get(int(year_idx), {})
+                raw_qty = float(raw_entry.get(item.metric, 0.0) or 0.0)
+                period_qty = self._metric_to_yearly_quantity(
+                    raw_qty=raw_qty,
+                    metric=item.metric,
+                    period_hours=float(year_hours[idx]),
+                )
+                yearly_costs[idx] = (
+                    period_qty
+                    * float(item.price)
+                    * float(item.cost_multiplier)
+                )
+            return scalar_result, yearly_costs
+
+        yearly_costs = np.full(year_count, float(scalar_result.annual_cost), dtype=float) * year_scale
+        return scalar_result, yearly_costs
+
+    def _evaluate_streaming_yearly_for_fci(
+        self,
+        *,
+        sorted_items: List[OpexItemConfig],
+        fci: float,
+        quantities: Dict[str, Dict[str, float]],
+        quantities_by_year: Dict[str, Dict[int, Dict[str, float]]],
+        history_available: bool,
+        annualization_factor: float,
+        year_indices: List[int],
+        year_hours: np.ndarray,
+        keep_scalar_results: bool = False,
+    ) -> Dict[str, Any]:
+        base_costs = {
+            "FCI": float(fci),
+            "Labor": 0.0,
+            "C_OL": 0.0,
+        }
+        year_count = len(year_indices)
+        variable_by_year = np.zeros(year_count, dtype=float)
+        fixed_by_year = np.zeros(year_count, dtype=float)
+        maintenance_by_year = np.zeros(year_count, dtype=float)
+        credit_by_year = np.zeros(year_count, dtype=float)
+        scalar_results: List[OpexResult] = []
+        labor_cost = 0.0
+
+        item_costs_by_year: Dict[str, List[float]] = {}
+        name_count: Dict[str, int] = {}
+
+        for item in sorted_items:
+            scalar_result, yearly_costs = self._calculate_item_streaming_yearly(
+                item=item,
+                quantities=quantities,
+                quantities_by_year=quantities_by_year,
+                history_available=history_available,
+                base_costs=base_costs,
+                annualization_factor=annualization_factor,
+                year_indices=year_indices,
+                year_hours=year_hours,
+            )
+
+            if self._is_primary_labor_item(item):
+                labor_cost = float(scalar_result.annual_cost)
+                base_costs["Labor"] = labor_cost
+                base_costs["C_OL"] = labor_cost
+
+            if item.category == OpexCategory.VARIABLE:
+                variable_by_year += yearly_costs
+            elif item.category == OpexCategory.FIXED:
+                fixed_by_year += yearly_costs
+            elif item.category == OpexCategory.MAINTENANCE:
+                maintenance_by_year += yearly_costs
+
+            if bool(getattr(item, "is_credit", False)):
+                credit_by_year += yearly_costs
+
+            base_name = str(item.name)
+            n = name_count.get(base_name, 0) + 1
+            name_count[base_name] = n
+            key_name = base_name if n == 1 else f"{base_name} [{n}]"
+            item_costs_by_year[key_name] = [float(v) for v in yearly_costs]
+
+            if keep_scalar_results:
+                scalar_results.append(scalar_result)
+
+        total_by_year = variable_by_year + fixed_by_year + maintenance_by_year
+        cashflow_by_year = total_by_year - credit_by_year
+
+        return {
+            "scalar_results": scalar_results,
+            "labor_cost": float(labor_cost),
+            "item_costs_by_year": item_costs_by_year,
+            "variable_by_year": variable_by_year,
+            "fixed_by_year": fixed_by_year,
+            "maintenance_by_year": maintenance_by_year,
+            "credit_by_year": credit_by_year,
+            "total_by_year": total_by_year,
+            "cashflow_by_year": cashflow_by_year,
+        }
 
     def _calculate_dynamic_annual_cost_from_dataframe(
         self,

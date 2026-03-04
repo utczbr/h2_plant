@@ -19,15 +19,25 @@ class LcohReport(BaseModel):
 
     capex_total: float = Field(0.0, description="Total installed CAPEX (EUR)")
     opex_annual_total: float = Field(0.0, description="Total annual OPEX (EUR/year)")
+    opex_by_year: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Year-indexed OPEX values used in discounted calculation",
+    )
 
     annual_h2_total_kg: float = Field(0.0, description="Annual H2 production (kg/year)")
     annual_h2_by_pathway: Dict[str, float] = Field(default_factory=dict)
+    annual_h2_total_kg_by_year: Dict[str, float] = Field(
+        default_factory=dict,
+        description="Year-indexed H2 production values used in discounted calculation",
+    )
     capex_by_pathway: Dict[str, float] = Field(default_factory=dict)
     opex_by_pathway: Dict[str, float] = Field(default_factory=dict)
 
     lcoh_total: float = Field(0.0, description="Plant LCOH (EUR/kg)")
     lcoh_by_pathway: Dict[str, float] = Field(default_factory=dict)
     lcoh_weighted_plant: float = Field(0.0, description="Production-weighted LCOH (EUR/kg)")
+    discounted_opex_pv: float = Field(0.0, description="Present value of OPEX stream (EUR)")
+    discounted_h2_pv: float = Field(0.0, description="Present value of H2 production stream (kg)")
 
     lcoh_breakdown: Dict[str, float] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)

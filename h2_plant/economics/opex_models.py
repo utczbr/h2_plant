@@ -117,6 +117,60 @@ class OpexReport(BaseModel):
     )
     total_opex_cashflow_low: Optional[float] = Field(None, description="Low annual OPEX cash outflow")
     total_opex_cashflow_high: Optional[float] = Field(None, description="High annual OPEX cash outflow")
+
+    # Year-by-year diagnostics (optional, backward-compatible)
+    year_index: Optional[List[int]] = Field(
+        default=None,
+        description="Simulation-relative year index (1..N) for yearly OPEX series",
+    )
+    year_hours: Optional[List[float]] = Field(
+        default=None,
+        description="Covered simulation hours per year window",
+    )
+    total_opex_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Total yearly OPEX cash terms (EUR) per simulation-relative year",
+    )
+    total_opex_cashflow_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Total yearly OPEX cash outflow after explicit credits",
+    )
+    total_variable_cost_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Variable category yearly totals",
+    )
+    total_fixed_cost_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Fixed category yearly totals",
+    )
+    total_maintenance_cost_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Maintenance category yearly totals",
+    )
+    total_opex_low_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Low yearly OPEX totals (aligned to CAPEX low variant)",
+    )
+    total_opex_high_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="High yearly OPEX totals (aligned to CAPEX high variant)",
+    )
+    total_opex_cashflow_low_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Low yearly OPEX cash outflow",
+    )
+    total_opex_cashflow_high_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="High yearly OPEX cash outflow",
+    )
+    annual_h2_production_kg_by_year: Optional[List[float]] = Field(
+        default=None,
+        description="Annualized H2 production by simulation-relative year",
+    )
+    item_annual_cost_by_year: Optional[Dict[str, List[float]]] = Field(
+        default=None,
+        description="Per-item yearly OPEX cost vectors (item name -> yearly costs)",
+    )
     
     # Reference Values (from CAPEX)
     fci: float = Field(0.0, description="Fixed Capital Investment (from CAPEX)")
