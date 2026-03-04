@@ -13,6 +13,7 @@ import csv
 import difflib
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, Optional, Any, List, Callable, Tuple
 
@@ -804,6 +805,8 @@ class OpexGenerator:
         capex_report: Optional[CapexReport] = None,
         output_dir: Optional[str] = None,
         simulation_hours: float = 8760.0,
+        workers: int = 0,
+        max_memory_mb: Optional[int] = None,
     ) -> OpexReport:
         """
         Generate OPEX report using streaming Parquet history (history_chunks).
@@ -814,6 +817,8 @@ class OpexGenerator:
             capex_report: Previous CAPEX report (for FCI reference)
             output_dir: Directory for output files (JSON, CSV)
             simulation_hours: Hours of simulation data (for annualization)
+            workers: Thread workers for chunk processing (0 = auto).
+            max_memory_mb: Optional soft memory cap used to bound workers.
         """
         import time
         start_time = time.time()
@@ -833,6 +838,8 @@ class OpexGenerator:
         ) = self._extract_quantities_parquet_chunks(
             chunks_dir=chunks_dir,
             required_items=self._required_variable_items(),
+            workers=workers,
+            max_memory_mb=max_memory_mb,
         )
         logger.info(f"Extracted {len(quantities)} quantities from Parquet chunks")
 
@@ -1344,6 +1351,8 @@ class OpexGenerator:
         self,
         chunks_dir: Path,
         required_items: List[OpexItemConfig],
+        workers: int = 0,
+        max_memory_mb: Optional[int] = None,
     ) -> Tuple[
         Dict[str, Dict[str, float]],
         Optional[float],
@@ -1357,6 +1366,8 @@ class OpexGenerator:
         Args:
             chunks_dir: Path to history_chunks with chunk_*.parquet files
             required_items: OPEX items requiring simulation data
+            workers: Thread workers for chunk map stage (0 = auto).
+            max_memory_mb: Optional soft memory cap used to bound workers.
             
         Returns:
             Tuple:
@@ -1369,7 +1380,7 @@ class OpexGenerator:
         try:
             chunk_files = sorted(
                 chunks_dir.glob("chunk_*.parquet"),
-                key=lambda p: int(p.stem.split('_')[-1])
+                key=lambda p: int(p.stem.split('_')[-1]),
             )
         except Exception:
             chunk_files = sorted(chunks_dir.glob("chunk_*.parquet"))
@@ -1418,6 +1429,48 @@ class OpexGenerator:
             logger.warning("No matching columns found for Parquet OPEX extraction")
             return {}, None, {}, [0], [0.0]
 
+        def _resolve_workers() -> int:
+            file_count = len(chunk_files)
+            if file_count <= 1:
+                return 1
+
+            resolved = workers if workers > 0 else 2
+            resolved = max(1, min(resolved, file_count))
+
+            if max_memory_mb is not None and max_memory_mb > 0:
+                estimated_worker_mb = max(96.0, min(512.0, len(needed_cols) * 0.3))
+                max_by_memory = max(1, int(max_memory_mb // estimated_worker_mb))
+                resolved = max(1, min(resolved, max_by_memory, file_count))
+            return resolved
+
+        def _read_chunk(chunk_file: Path) -> pd.DataFrame:
+            try:
+                return pd.read_parquet(chunk_file, columns=needed_cols)
+            except Exception:
+                try:
+                    import pyarrow.parquet as pq
+                    schema_cols = pq.read_schema(chunk_file).names
+                    valid_cols = [c for c in needed_cols if c in schema_cols]
+                    if not valid_cols:
+                        return pd.DataFrame()
+                    return pd.read_parquet(chunk_file, columns=valid_cols)
+                except Exception as e:
+                    logger.warning(f"Skipping {chunk_file.name}: {e}")
+                    return pd.DataFrame()
+
+        def _discover_minute_origin() -> Optional[float]:
+            if minute_col is None:
+                return None
+            for chunk_file in chunk_files:
+                preview_df = _read_chunk(chunk_file)
+                if preview_df.empty or minute_col not in preview_df.columns:
+                    continue
+                minute_values = pd.to_numeric(preview_df[minute_col], errors="coerce").to_numpy(dtype=float)
+                finite = minute_values[np.isfinite(minute_values)]
+                if finite.size > 0:
+                    return float(finite[0])
+            return None
+
         accumulators: Dict[str, Dict[str, float]] = {}
         for res_id, col in col_map.items():
             is_cumulative = 'cumulative' in col.lower()
@@ -1433,119 +1486,127 @@ class OpexGenerator:
             res_id: {} for res_id in accumulators if res_id != "minute"
         }
 
-        minutes_min: Optional[float] = None
-        minutes_max: Optional[float] = None
-        minute_diffs: List[float] = []
-        last_minute: Optional[float] = None
-        dynamic_pair_products = {pair_key: 0.0 for pair_key in dynamic_pairs}
-        dynamic_pair_products_by_year: Dict[str, Dict[int, float]] = {
-            pair_key: {} for pair_key in dynamic_pairs
-        }
-        minute_origin: Optional[float] = None
-        year_indices_seen: set[int] = set()
+        minute_origin: Optional[float] = _discover_minute_origin()
 
-        for chunk_file in chunk_files:
-            try:
-                df = pd.read_parquet(chunk_file, columns=needed_cols)
-            except Exception:
-                try:
-                    import pyarrow.parquet as pq
-                    schema_cols = pq.read_schema(chunk_file).names
-                    valid_cols = [c for c in needed_cols if c in schema_cols]
-                    if not valid_cols:
-                        continue
-                    df = pd.read_parquet(chunk_file, columns=valid_cols)
-                except Exception as e:
-                    logger.warning(f"Skipping {chunk_file.name}: {e}")
-                    continue
-
+        def _process_chunk(chunk_file: Path) -> Dict[str, Any]:
+            df = _read_chunk(chunk_file)
             if df.empty:
-                continue
+                return {
+                    "minutes_min": None,
+                    "minutes_max": None,
+                    "first_minute": None,
+                    "last_minute": None,
+                    "intra_chunk_minute_diff": None,
+                    "accumulators": {},
+                    "yearly_accumulators": {},
+                    "dynamic_pair_products": {},
+                    "dynamic_pair_products_by_year": {},
+                    "year_indices_seen": set(),
+                }
+
+            local_accumulators: Dict[str, Dict[str, float]] = {}
+            local_yearly_accumulators: Dict[str, Dict[int, Dict[str, float]]] = {}
+            local_dynamic_products: Dict[str, float] = {
+                pair_key: 0.0 for pair_key in dynamic_pairs
+            }
+            local_dynamic_products_by_year: Dict[str, Dict[int, float]] = {
+                pair_key: {} for pair_key in dynamic_pairs
+            }
+            local_year_indices_seen: set[int] = set()
+
             year_idx_values: Optional[np.ndarray] = None
+            local_minutes_min: Optional[float] = None
+            local_minutes_max: Optional[float] = None
+            local_first_minute: Optional[float] = None
+            local_last_minute: Optional[float] = None
+            local_intra_diff: Optional[float] = None
 
             minute_signal_col = col_map.get("minute")
             if minute_signal_col and minute_signal_col in df.columns:
                 minute_series = pd.to_numeric(df[minute_signal_col], errors="coerce")
                 minute_values = minute_series.to_numpy(dtype=float)
                 minute_valid = minute_values[np.isfinite(minute_values)]
-                minute_series = pd.Series(minute_valid)
-                if not minute_series.empty:
-                    if minute_origin is None:
-                        minute_origin = float(minute_series.iloc[0])
-                    chunk_minutes = minute_series.values.astype(float)
-                    chunk_min = float(np.min(chunk_minutes))
-                    chunk_max = float(np.max(chunk_minutes))
-                    if minutes_min is None or chunk_min < minutes_min:
-                        minutes_min = chunk_min
-                    if minutes_max is None or chunk_max > minutes_max:
-                        minutes_max = chunk_max
-                    if last_minute is not None:
-                        cross_diff = chunk_minutes[0] - last_minute
-                        if cross_diff > 0:
-                            minute_diffs.append(float(cross_diff))
-                    if chunk_minutes.size > 1:
-                        diffs = np.diff(chunk_minutes)
-                        positive = diffs[diffs > 0]
+                if minute_valid.size > 0:
+                    local_first_minute = float(minute_valid[0])
+                    local_last_minute = float(minute_valid[-1])
+                    local_minutes_min = float(np.min(minute_valid))
+                    local_minutes_max = float(np.max(minute_valid))
+                    if minute_valid.size > 1:
+                        positive = np.diff(minute_valid)
+                        positive = positive[positive > 0]
                         if positive.size > 0:
-                            minute_diffs.append(float(np.median(positive)))
-                    last_minute = float(chunk_minutes[-1])
+                            local_intra_diff = float(np.median(positive))
+
                 if minute_origin is not None:
-                    year_idx_values = np.full(len(df), -1, dtype=int)
+                    year_idx_values = np.full(len(minute_values), -1, dtype=int)
                     valid_mask = np.isfinite(minute_values)
                     year_idx_values[valid_mask] = np.floor(
                         (minute_values[valid_mask] - minute_origin) / MINUTES_PER_YEAR
                     ).astype(int)
                     year_idx_values[year_idx_values < 0] = 0
                     if valid_mask.any():
-                        year_indices_seen.update(int(v) for v in np.unique(year_idx_values[valid_mask]))
+                        local_year_indices_seen.update(
+                            int(v) for v in np.unique(year_idx_values[valid_mask])
+                        )
 
             for res_id, col in col_map.items():
-                if res_id == "minute":
+                if res_id == "minute" or col not in df.columns:
                     continue
-                if col not in df.columns:
-                    continue
+
                 series = pd.to_numeric(df[col], errors="coerce")
                 is_cumulative = bool(accumulators[res_id]["is_cumulative"])
+                acc = local_accumulators.setdefault(
+                    res_id,
+                    {
+                        "sum": 0.0,
+                        "max": float("-inf"),
+                        "count": 0.0,
+                        "last": 0.0,
+                        "is_cumulative": is_cumulative,
+                    },
+                )
                 if is_cumulative:
                     if len(series) > 0:
-                        accumulators[res_id]["last"] = series.iloc[-1]
+                        last_value = series.iloc[-1]
+                        acc["last"] = float(last_value) if pd.notna(last_value) else 0.0
                     series_max = series.max()
                     if pd.notna(series_max):
-                        accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
+                        acc["max"] = max(acc["max"], float(series_max))
                 else:
                     series_sum = series.sum()
                     series_max = series.max()
                     series_count = series.count()
                     if pd.notna(series_sum):
-                        accumulators[res_id]["sum"] += series_sum
+                        acc["sum"] += float(series_sum)
                     if pd.notna(series_max):
-                        accumulators[res_id]["max"] = max(accumulators[res_id]["max"], series_max)
+                        acc["max"] = max(acc["max"], float(series_max))
                     if pd.notna(series_count):
-                        accumulators[res_id]["count"] += series_count
+                        acc["count"] += float(series_count)
 
-                # Per-year accumulation
                 if year_idx_values is None:
                     local_year_indices = np.zeros(len(series), dtype=int)
-                    year_indices_seen.add(0)
+                    local_year_indices_seen.add(0)
                 else:
                     local_year_indices = year_idx_values
+
                 values = series.to_numpy(dtype=float)
                 finite_mask = np.isfinite(values) & (local_year_indices >= 0)
                 if not np.any(finite_mask):
                     continue
                 valid_years = local_year_indices[finite_mask]
                 valid_values = values[finite_mask]
+                local_by_year = local_yearly_accumulators.setdefault(res_id, {})
                 for year_idx in np.unique(valid_years):
                     year_mask = valid_years == year_idx
                     year_values = valid_values[year_mask]
-                    year_acc = yearly_accumulators[res_id].setdefault(
+                    year_acc = local_by_year.setdefault(
                         int(year_idx),
                         {
                             "sum": 0.0,
                             "max": float("-inf"),
                             "count": 0.0,
                             "last": 0.0,
-                            "is_cumulative": True if is_cumulative else False,
+                            "is_cumulative": is_cumulative,
                         },
                     )
                     if is_cumulative:
@@ -1571,17 +1632,18 @@ class OpexGenerator:
                     continue
                 if quantity_col not in df.columns or price_col not in df.columns:
                     continue
+
                 qty_series = pd.to_numeric(df[quantity_col], errors="coerce").fillna(0.0)
                 price_series = pd.to_numeric(df[price_col], errors="coerce").fillna(0.0)
                 step_products = (qty_series * price_series).to_numpy(dtype=float)
-                dynamic_pair_products[pair_key] += float(np.sum(step_products))
+                local_dynamic_products[pair_key] += float(np.sum(step_products))
 
                 if year_idx_values is None:
-                    dynamic_pair_products_by_year[pair_key][0] = (
-                        dynamic_pair_products_by_year[pair_key].get(0, 0.0)
+                    local_dynamic_products_by_year[pair_key][0] = (
+                        local_dynamic_products_by_year[pair_key].get(0, 0.0)
                         + float(np.sum(step_products))
                     )
-                    year_indices_seen.add(0)
+                    local_year_indices_seen.add(0)
                 else:
                     valid_mask = np.isfinite(step_products) & (year_idx_values >= 0)
                     if not np.any(valid_mask):
@@ -1590,10 +1652,122 @@ class OpexGenerator:
                     valid_products = step_products[valid_mask]
                     for year_idx in np.unique(valid_years):
                         year_mask = valid_years == year_idx
-                        dynamic_pair_products_by_year[pair_key][int(year_idx)] = (
-                            dynamic_pair_products_by_year[pair_key].get(int(year_idx), 0.0)
+                        local_dynamic_products_by_year[pair_key][int(year_idx)] = (
+                            local_dynamic_products_by_year[pair_key].get(int(year_idx), 0.0)
                             + float(np.sum(valid_products[year_mask]))
                         )
+
+            return {
+                "minutes_min": local_minutes_min,
+                "minutes_max": local_minutes_max,
+                "first_minute": local_first_minute,
+                "last_minute": local_last_minute,
+                "intra_chunk_minute_diff": local_intra_diff,
+                "accumulators": local_accumulators,
+                "yearly_accumulators": local_yearly_accumulators,
+                "dynamic_pair_products": local_dynamic_products,
+                "dynamic_pair_products_by_year": local_dynamic_products_by_year,
+                "year_indices_seen": local_year_indices_seen,
+            }
+
+        resolved_workers = _resolve_workers()
+        logger.info(
+            "Parquet OPEX extraction: %d chunks, %d columns, workers=%d",
+            len(chunk_files),
+            len(needed_cols),
+            resolved_workers,
+        )
+
+        if resolved_workers <= 1:
+            chunk_results = [_process_chunk(chunk_file) for chunk_file in chunk_files]
+        else:
+            with ThreadPoolExecutor(max_workers=resolved_workers) as executor:
+                # map preserves the sorted chunk order for deterministic reduction.
+                chunk_results = list(executor.map(_process_chunk, chunk_files))
+
+        minutes_min: Optional[float] = None
+        minutes_max: Optional[float] = None
+        minute_diffs: List[float] = []
+        previous_last_minute: Optional[float] = None
+        dynamic_pair_products = {pair_key: 0.0 for pair_key in dynamic_pairs}
+        dynamic_pair_products_by_year: Dict[str, Dict[int, float]] = {
+            pair_key: {} for pair_key in dynamic_pairs
+        }
+        year_indices_seen: set[int] = set()
+
+        for result in chunk_results:
+            chunk_min = result["minutes_min"]
+            chunk_max = result["minutes_max"]
+            chunk_first = result["first_minute"]
+            chunk_last = result["last_minute"]
+            intra_chunk_diff = result["intra_chunk_minute_diff"]
+            year_indices_seen.update(int(v) for v in result["year_indices_seen"])
+
+            if chunk_min is not None:
+                minutes_min = chunk_min if minutes_min is None else min(minutes_min, chunk_min)
+            if chunk_max is not None:
+                minutes_max = chunk_max if minutes_max is None else max(minutes_max, chunk_max)
+            if previous_last_minute is not None and chunk_first is not None:
+                cross_diff = chunk_first - previous_last_minute
+                if cross_diff > 0:
+                    minute_diffs.append(float(cross_diff))
+            if intra_chunk_diff is not None and intra_chunk_diff > 0:
+                minute_diffs.append(float(intra_chunk_diff))
+            if chunk_last is not None:
+                previous_last_minute = chunk_last
+
+            for res_id, local_acc in result["accumulators"].items():
+                if res_id not in accumulators:
+                    continue
+                is_cumulative = bool(accumulators[res_id]["is_cumulative"])
+                if is_cumulative:
+                    accumulators[res_id]["last"] = float(local_acc.get("last", 0.0) or 0.0)
+                    local_max = float(local_acc.get("max", float("-inf")))
+                    if np.isfinite(local_max):
+                        accumulators[res_id]["max"] = max(accumulators[res_id]["max"], local_max)
+                else:
+                    accumulators[res_id]["sum"] += float(local_acc.get("sum", 0.0) or 0.0)
+                    accumulators[res_id]["count"] += float(local_acc.get("count", 0.0) or 0.0)
+                    local_max = float(local_acc.get("max", float("-inf")))
+                    if np.isfinite(local_max):
+                        accumulators[res_id]["max"] = max(accumulators[res_id]["max"], local_max)
+
+            for res_id, local_by_year in result["yearly_accumulators"].items():
+                if res_id not in yearly_accumulators:
+                    yearly_accumulators[res_id] = {}
+                for year_idx, local_acc in local_by_year.items():
+                    is_cumulative = bool(local_acc.get("is_cumulative", False))
+                    year_acc = yearly_accumulators[res_id].setdefault(
+                        int(year_idx),
+                        {
+                            "sum": 0.0,
+                            "max": float("-inf"),
+                            "count": 0.0,
+                            "last": 0.0,
+                            "is_cumulative": is_cumulative,
+                        },
+                    )
+                    if is_cumulative:
+                        year_acc["last"] = float(local_acc.get("last", 0.0) or 0.0)
+                        local_max = float(local_acc.get("max", float("-inf")))
+                        if np.isfinite(local_max):
+                            year_acc["max"] = max(year_acc["max"], local_max)
+                    else:
+                        year_acc["sum"] += float(local_acc.get("sum", 0.0) or 0.0)
+                        year_acc["count"] += float(local_acc.get("count", 0.0) or 0.0)
+                        local_max = float(local_acc.get("max", float("-inf")))
+                        if np.isfinite(local_max):
+                            year_acc["max"] = max(year_acc["max"], local_max)
+
+            for pair_key, local_sum in result["dynamic_pair_products"].items():
+                if pair_key not in dynamic_pair_products:
+                    dynamic_pair_products[pair_key] = 0.0
+                dynamic_pair_products[pair_key] += float(local_sum or 0.0)
+
+            for pair_key, by_year in result["dynamic_pair_products_by_year"].items():
+                year_bucket = dynamic_pair_products_by_year.setdefault(pair_key, {})
+                for year_idx, value in by_year.items():
+                    year_bucket[int(year_idx)] = year_bucket.get(int(year_idx), 0.0) + float(value or 0.0)
 
         quantities: Dict[str, Dict[str, float]] = {}
         for res_id, acc in accumulators.items():

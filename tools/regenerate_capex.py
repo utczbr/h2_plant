@@ -16,8 +16,10 @@ Usage:
 """
 
 import argparse
+import contextlib
 import logging
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Tuple, Sequence
 
@@ -27,6 +29,22 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _scoped_component_logging(verbose_components: bool):
+    """Temporarily suppress noisy component logs unless explicitly requested."""
+    if verbose_components:
+        yield
+        return
+
+    target_logger = logging.getLogger("h2_plant")
+    previous_level = target_logger.level
+    target_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        target_logger.setLevel(previous_level)
 
 
 def _infer_output_dir(scenarios_dir: Path, cli_output_dir: Optional[str]) -> Path:
@@ -123,7 +141,7 @@ def _resolve_history_source(
     return None, None
 
 
-def _build_registry(scenarios_dir: Path) -> Tuple:
+def _build_registry(scenarios_dir: Path, verbose_components: bool = False) -> Tuple:
     """
     Reconstruct ComponentRegistry from scenario YAML files.
 
@@ -134,17 +152,18 @@ def _build_registry(scenarios_dir: Path) -> Tuple:
     from h2_plant.core.graph_builder import PlantGraphBuilder
     from h2_plant.core.component_registry import ComponentRegistry
 
-    logger.info("Loading configuration...")
-    loader = ConfigLoader(str(scenarios_dir))
-    context = loader.load_context()
+    with _scoped_component_logging(verbose_components):
+        logger.info("Loading configuration...")
+        loader = ConfigLoader(str(scenarios_dir))
+        context = loader.load_context()
 
-    logger.info("Building component graph...")
-    builder = PlantGraphBuilder(context)
-    components = builder.build()
+        logger.info("Building component graph...")
+        builder = PlantGraphBuilder(context)
+        components = builder.build()
 
-    registry = ComponentRegistry()
-    for cid, comp in components.items():
-        registry.register(cid, comp)
+        registry = ComponentRegistry()
+        for cid, comp in components.items():
+            registry.register(cid, comp)
 
     logger.info(f"Registry populated: {len(components)} components")
     return registry, context
@@ -161,6 +180,9 @@ def regenerate_capex(
     generate_opex: bool = True,
     opex_config: Optional[Path] = None,
     history_dir: Optional[Path] = None,
+    workers: int = 0,
+    max_memory_mb: Optional[int] = None,
+    verbose_components: bool = False,
 ) -> int:
     """
     Generate CAPEX report from scenario configuration files.
@@ -170,9 +192,17 @@ def regenerate_capex(
     """
     from h2_plant.economics import CapexGenerator
 
+    stage_timings: dict[str, float] = {}
+
     # Build registry from YAML
     try:
-        registry, context = _build_registry(config_dir or scenarios_dir)
+        t0 = time.perf_counter()
+        registry, context = _build_registry(
+            config_dir or scenarios_dir,
+            verbose_components=verbose_components,
+        )
+        stage_timings["registry_build_s"] = time.perf_counter() - t0
+        logger.info(f"[timing] registry_build: {stage_timings['registry_build_s']:.3f}s")
     except Exception as e:
         logger.error(f"Failed to build registry: {e}")
         return 1
@@ -206,13 +236,19 @@ def regenerate_capex(
     logger.info("Generating CAPEX report...")
 
     try:
+        t0 = time.perf_counter()
         report = generator.generate(
             registry=registry,
             monitoring=None,
             output_dir=output_dir,
             simulation_name=scenario_name,
             simulation_hours=simulation_hours,
+            history_scan_workers=workers,
+            history_scan_max_memory_mb=max_memory_mb,
+            history_scan_mode="auto",
         )
+        stage_timings["capex_s"] = time.perf_counter() - t0
+        logger.info(f"[timing] capex: {stage_timings['capex_s']:.3f}s")
     except Exception as e:
         logger.error(f"CAPEX generation failed: {e}", exc_info=True)
         return 1
@@ -272,6 +308,7 @@ def regenerate_capex(
             chunks_dir, csv_path = _resolve_history_source(output_dir, str(history_dir) if history_dir else None)
 
             try:
+                t0 = time.perf_counter()
                 if chunks_dir:
                     logger.info(f"Generating OPEX report from Parquet history: {chunks_dir}")
                     opex_report = opex_generator.generate_streaming_parquet(
@@ -280,6 +317,8 @@ def regenerate_capex(
                         capex_report=report,
                         output_dir=str(output_dir),
                         simulation_hours=opex_hours,
+                        workers=workers,
+                        max_memory_mb=max_memory_mb,
                     )
                 elif csv_path:
                     logger.info(f"Generating OPEX report from CSV history: {csv_path}")
@@ -299,6 +338,8 @@ def regenerate_capex(
                         output_dir=str(output_dir),
                         simulation_hours=opex_hours,
                     )
+                stage_timings["opex_s"] = time.perf_counter() - t0
+                logger.info(f"[timing] opex: {stage_timings['opex_s']:.3f}s")
             except Exception as e:
                 logger.error(f"OPEX generation failed: {e}", exc_info=True)
                 return 1
@@ -323,6 +364,10 @@ def regenerate_capex(
             print(f"  Output:  {output_dir / 'opex_report.json'}")
             print(f"           {output_dir / 'opex_report.csv'}")
             print("=" * 60)
+
+    if stage_timings:
+        ordered = ", ".join(f"{k}={v:.3f}s" for k, v in sorted(stage_timings.items()))
+        logger.info(f"[timing] stage_summary: {ordered}")
 
     return 0
 
@@ -370,8 +415,24 @@ def main() -> None:
         "--history-dir", type=str, default=None,
         help="Path to simulation output or history_chunks directory for OPEX history"
     )
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help="Parallel worker count for history scans (0 = auto, default: 0)"
+    )
+    parser.add_argument(
+        "--max-memory-mb", type=int, default=0,
+        help="Soft memory cap in MB for history scan workers (0 = auto, default: 0)"
+    )
+    parser.add_argument(
+        "--verbose-components", action="store_true",
+        help="Enable verbose component-level logs while rebuilding the graph"
+    )
 
     args = parser.parse_args()
+    if args.workers < 0:
+        parser.error("--workers must be >= 0")
+    if args.max_memory_mb < 0:
+        parser.error("--max-memory-mb must be >= 0")
 
     scenarios_dir = Path(args.scenarios_dir).resolve()
     if not scenarios_dir.exists():
@@ -398,6 +459,11 @@ def main() -> None:
         logger.info(f"History Dir:   {args.history_dir}")
     if args.capacity_mode:
         logger.info(f"Capacity Mode: {args.capacity_mode}")
+    logger.info(f"Workers:       {args.workers} ({'auto' if args.workers == 0 else 'fixed'})")
+    if args.max_memory_mb > 0:
+        logger.info(f"Max Memory:    {args.max_memory_mb} MB")
+    if args.verbose_components:
+        logger.info("Verbose Comp:  enabled")
     logger.info("=" * 60)
 
     rc = regenerate_capex(
@@ -411,6 +477,9 @@ def main() -> None:
         generate_opex=not args.no_opex,
         opex_config=opex_config,
         history_dir=Path(args.history_dir).resolve() if args.history_dir else None,
+        workers=args.workers,
+        max_memory_mb=(args.max_memory_mb if args.max_memory_mb > 0 else None),
+        verbose_components=args.verbose_components,
     )
     sys.exit(rc)
 

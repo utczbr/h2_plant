@@ -11,9 +11,10 @@ Professional-grade CAPEX generator that:
 import json
 import csv
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Set
 
 import yaml
 import numpy as np
@@ -118,6 +119,49 @@ class CapexGenerator:
         generator.load_config("equipment_mappings.yaml")
         report = generator.generate(registry, monitoring, output_dir)
     """
+
+    PARAM_MAPPINGS: Dict[str, List[str]] = {
+        "cross_sectional_area_m2": [
+            "cross_sectional_area_m2", "area_cross_section_m2",
+        ],
+        "power_kw": [
+            "max_power_kw", "rated_power_kw", "power_kw", "P_max",
+            "rated_power_mw", "max_power_mw", "max_power_nominal_mw",
+        ],
+        "area_m2": [
+            "area_m2", "heat_transfer_area_m2", "A_hx", "exchange_area_m2",
+        ],
+        "volume_m3": [
+            "volume_m3", "V_tank", "total_volume_m3", "capacity_m3",
+        ],
+        "flow_kg_h": [
+            "max_flow_kg_h", "design_flow_kg_h", "capacity_kg_h", "rated_flow_kg_h",
+        ],
+        "flow_nm3_h": [
+            "capacity_nm3_h", "design_capacity_nm3_h", "rated_capacity_nm3_h",
+        ],
+        "flow_m3_s": [
+            "flow_m3_s", "volumetric_flow_m3_s",
+        ],
+    }
+
+    HISTORY_MAPPINGS: Dict[str, List[str]] = {
+        "power_kw": [
+            "power_kw", "power_input_kw", "P_consumed_kw", "electrical_power_kw",
+            "timestep_power_kw", "power_shaft_kw", "power_fluid_kw",
+            "energy_consumed_kwh",
+        ],
+        "flow_kg_h": [
+            "mass_flow_kg_h", "outlet_mass_flow_kg_h", "actual_mass_transferred_kg",
+        ],
+        "area_m2": [
+            "heat_duty_kw",
+            "q_transferred_kw",
+            "heat_rejected_kw",
+            "cooling_load_kw",
+            "tqc_duty_kw",
+        ],
+    }
     
     def __init__(
         self,
@@ -141,6 +185,11 @@ class CapexGenerator:
         self.mappings: List[EquipmentMapping] = []
         self.type_coefficients = DEFAULT_COEFFICIENTS.copy()
         self._history_maxima: Dict[str, float] = {}  # Cache for CSV/Parquet history maxima
+        self._history_maxima_loaded: bool = False
+        self._history_scan_output_dir: Optional[Path] = None
+        self._history_scan_workers: int = 0
+        self._history_scan_max_memory_mb: Optional[int] = None
+        self._history_scan_mode: str = "auto"
         self.installation_factors: Dict[str, Dict[str, float]] = {}  # Block -> Category -> %
     
     @classmethod
@@ -242,6 +291,169 @@ class CapexGenerator:
                 self.mappings.append(EquipmentMapping(**mapping_data))
         
         logger.info(f"Loaded {len(self.mappings)} equipment mappings from {path}")
+
+    def _derive_required_history_columns(self) -> Set[str]:
+        """Build required history column names from mappings/topology IDs."""
+        required_columns: Set[str] = set()
+        for mapping in self.mappings:
+            history_keys = self.HISTORY_MAPPINGS.get(
+                mapping.capacity_variable,
+                [mapping.capacity_variable],
+            )
+            for topology_id in mapping.topology_ids:
+                if not topology_id:
+                    continue
+                for key in history_keys:
+                    required_columns.add(f"{topology_id}_{key}")
+        return required_columns
+
+    @staticmethod
+    def _merge_maxima(target: Dict[str, float], source: Dict[str, float]) -> None:
+        """In-place max-reduction of column maxima."""
+        for col_name, value in source.items():
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not np.isfinite(parsed):
+                continue
+            if col_name in target:
+                target[col_name] = max(target[col_name], parsed)
+            else:
+                target[col_name] = parsed
+
+    @staticmethod
+    def _compute_numeric_column_maxima(df: pd.DataFrame) -> Dict[str, float]:
+        maxima: Dict[str, float] = {}
+        for col_name in df.columns:
+            numeric = pd.to_numeric(df[col_name], errors="coerce")
+            if numeric.notna().any():
+                maxima[col_name] = float(numeric.max())
+        return maxima
+
+    def _resolve_history_scan_workers(
+        self,
+        *,
+        requested_workers: int,
+        file_count: int,
+        max_memory_mb: Optional[int],
+        needed_columns_count: int,
+    ) -> int:
+        if file_count <= 1:
+            return 1
+
+        workers = requested_workers if requested_workers > 0 else 2
+        workers = max(1, min(workers, file_count))
+
+        if max_memory_mb and max_memory_mb > 0:
+            # Conservative bound per worker; scales with selected column count.
+            estimated_worker_mb = max(64.0, min(512.0, max(1, needed_columns_count) * 0.25))
+            max_workers_by_memory = max(1, int(max_memory_mb // estimated_worker_mb))
+            workers = max(1, min(workers, max_workers_by_memory, file_count))
+
+        return workers
+
+    def _scan_parquet_file_maxima(
+        self,
+        pq_file: Path,
+        required_columns: Optional[Set[str]],
+        scan_mode: str,
+    ) -> Dict[str, float]:
+        """
+        Compute maxima for one parquet file with optional stats-first mode.
+
+        scan_mode:
+            - auto: row-group stats first; fallback to column read for missing stats.
+            - stats: row-group stats only.
+            - read: direct column read only.
+        """
+        mode = scan_mode.lower()
+        if mode not in {"auto", "stats", "read"}:
+            mode = "auto"
+
+        file_maxima: Dict[str, float] = {}
+        try:
+            import pyarrow.parquet as pq
+
+            parquet_file = pq.ParquetFile(pq_file)
+            schema_names = parquet_file.schema.names
+            if required_columns:
+                selected_columns = [c for c in schema_names if c in required_columns]
+            else:
+                selected_columns = list(schema_names)
+
+            if not selected_columns:
+                return {}
+
+            if mode == "read":
+                df = pd.read_parquet(pq_file, columns=selected_columns)
+                return self._compute_numeric_column_maxima(df)
+
+            # Stats-based path
+            column_indices = {name: idx for idx, name in enumerate(schema_names)}
+            missing_stats: Set[str] = set()
+            for rg_idx in range(parquet_file.metadata.num_row_groups):
+                row_group = parquet_file.metadata.row_group(rg_idx)
+                for col_name in selected_columns:
+                    col_idx = column_indices[col_name]
+                    stats = row_group.column(col_idx).statistics
+                    if stats is None or stats.max is None:
+                        missing_stats.add(col_name)
+                        continue
+                    try:
+                        value = float(stats.max)
+                    except (TypeError, ValueError):
+                        missing_stats.add(col_name)
+                        continue
+                    if not np.isfinite(value):
+                        missing_stats.add(col_name)
+                        continue
+                    if col_name in file_maxima:
+                        file_maxima[col_name] = max(file_maxima[col_name], value)
+                    else:
+                        file_maxima[col_name] = value
+
+            if mode == "stats":
+                return file_maxima
+
+            fallback_columns = [
+                c for c in selected_columns
+                if c not in file_maxima or c in missing_stats
+            ]
+            if fallback_columns:
+                fallback_df = pd.read_parquet(pq_file, columns=fallback_columns)
+                fallback_maxima = self._compute_numeric_column_maxima(fallback_df)
+                self._merge_maxima(file_maxima, fallback_maxima)
+        except Exception as exc:
+            logger.warning(f"Failed to scan parquet maxima from {pq_file}: {exc}")
+            return {}
+
+        return file_maxima
+
+    def _ensure_history_maxima_loaded(self) -> None:
+        """Load history maxima on first use, only if needed."""
+        if self._history_maxima_loaded:
+            return
+
+        if self._history_scan_output_dir is None:
+            self._history_maxima = {}
+            self._history_maxima_loaded = True
+            return
+
+        required_columns = self._derive_required_history_columns()
+        if not required_columns:
+            self._history_maxima = {}
+            self._history_maxima_loaded = True
+            return
+
+        self._history_maxima = self._load_history_maxima(
+            output_dir=self._history_scan_output_dir,
+            required_columns=required_columns,
+            workers=self._history_scan_workers,
+            max_memory_mb=self._history_scan_max_memory_mb,
+            scan_mode=self._history_scan_mode,
+        )
+        self._history_maxima_loaded = True
     
     def _extract_capacity(
         self,
@@ -283,52 +495,7 @@ class CapexGenerator:
         notes = []
         source = "unknown"
         total_num_units = 1  # Default unit count multiplier
-        
-        # Mapping of capacity_variable to potential attribute names
-        param_mappings = {
-            "cross_sectional_area_m2": [
-                "cross_sectional_area_m2", "area_cross_section_m2",
-            ],
-            "power_kw": [
-                "max_power_kw", "rated_power_kw", "power_kw", "P_max",
-                "rated_power_mw", "max_power_mw", "max_power_nominal_mw",  # Need to convert MW to kW
-            ],
-            "area_m2": [
-                "area_m2", "heat_transfer_area_m2", "A_hx", "exchange_area_m2",
-            ],
-            "volume_m3": [
-                "volume_m3", "V_tank", "total_volume_m3", "capacity_m3",
-            ],
-            "flow_kg_h": [
-                "max_flow_kg_h", "design_flow_kg_h", "capacity_kg_h", "rated_flow_kg_h",
-            ],
-            "flow_nm3_h": [
-                "capacity_nm3_h", "design_capacity_nm3_h", "rated_capacity_nm3_h",
-            ],
-            "flow_m3_s": [
-                "flow_m3_s", "volumetric_flow_m3_s",
-            ],
-        }
-        
-        # History-based mappings for monitoring data
-        history_mappings = {
-            "power_kw": [
-                "power_kw", "power_input_kw", "P_consumed_kw", "electrical_power_kw",
-                "timestep_power_kw", "power_shaft_kw", "power_fluid_kw",
-                "energy_consumed_kwh",  # Need to derive power
-            ],
-            "flow_kg_h": [
-                "mass_flow_kg_h", "outlet_mass_flow_kg_h", "actual_mass_transferred_kg",
-            ],
-            "area_m2": [
-                "heat_duty_kw",
-                "q_transferred_kw",
-                "heat_rejected_kw",
-                "cooling_load_kw",
-                "tqc_duty_kw",
-            ],
-        }
-        
+
         for comp_id in topology_ids:
             comp_value = None
             comp_source = None
@@ -348,7 +515,7 @@ class CapexGenerator:
                 
                 # Try monitoring history first
                 history_val = self._extract_from_history(
-                    comp_id, capacity_variable, monitoring, history_mappings
+                    comp_id, capacity_variable, monitoring, self.HISTORY_MAPPINGS
                 )
                 if history_val is not None:
                     comp_value, hist_note = history_val
@@ -357,7 +524,7 @@ class CapexGenerator:
                 
                 # Fallback to design parameters if no history
                 if comp_value is None and comp is not None:
-                    param_names = param_mappings.get(capacity_variable, [capacity_variable])
+                    param_names = self.PARAM_MAPPINGS.get(capacity_variable, [capacity_variable])
                     for param in param_names:
                         if hasattr(comp, param):
                             val = getattr(comp, param)
@@ -376,7 +543,7 @@ class CapexGenerator:
                         )
                         if calculated is not None:
                             comp_value, calc_note = calculated
-                            tried = param_mappings.get(capacity_variable, [capacity_variable])
+                            tried = self.PARAM_MAPPINGS.get(capacity_variable, [capacity_variable])
                             comp_source = calc_note
                             source = f"calculated (fallback; {capacity_variable} not in history or params: {', '.join(tried)})"
             
@@ -386,7 +553,7 @@ class CapexGenerator:
                 
                 if comp is not None:
                     # ===== TIER 1: Direct component parameters =====
-                    param_names = param_mappings.get(capacity_variable, [capacity_variable])
+                    param_names = self.PARAM_MAPPINGS.get(capacity_variable, [capacity_variable])
                     
                     for param in param_names:
                         if hasattr(comp, param):
@@ -409,7 +576,7 @@ class CapexGenerator:
                         )
                         if calculated is not None:
                             comp_value, calc_note = calculated
-                            tried = param_mappings.get(capacity_variable, [capacity_variable])
+                            tried = self.PARAM_MAPPINGS.get(capacity_variable, [capacity_variable])
                             comp_source = calc_note
                             source = f"calculated (fallback; {capacity_variable} not in params: {', '.join(tried)})"
                 
@@ -417,7 +584,7 @@ class CapexGenerator:
                 # Try this even if component is not in registry (uses CSV cache)
                 if comp_value is None:
                     history_val = self._extract_from_history(
-                        comp_id, capacity_variable, monitoring, history_mappings
+                        comp_id, capacity_variable, monitoring, self.HISTORY_MAPPINGS
                     )
                     if history_val is not None:
                         comp_value, hist_note = history_val
@@ -432,7 +599,7 @@ class CapexGenerator:
                 if comp is None:
                     notes.append(f"❌ {comp_id} not found in registry or history")
                 else:
-                    tried = param_mappings.get(capacity_variable, [capacity_variable])
+                    tried = self.PARAM_MAPPINGS.get(capacity_variable, [capacity_variable])
                     notes.append(f"⚠️ {comp_id}: no {capacity_variable} found (tried params: {', '.join(tried)})")
         
         # Aggregate values across all components
@@ -664,6 +831,9 @@ class CapexGenerator:
                                 return max_val, f"{comp_id}: max({key}) from memory = {max_val:.2f}"
         
         # TIER 3b: Try CSV history cache (loaded from file)
+        if not self._history_maxima_loaded:
+            self._ensure_history_maxima_loaded()
+
         if self._history_maxima:
             for key in history_keys:
                 # Build column name pattern: comp_id_key
@@ -671,11 +841,18 @@ class CapexGenerator:
                 if col_name in self._history_maxima:
                     max_val = self._history_maxima[col_name]
                     if max_val > 0:
-                        return max_val, f"{comp_id}: max({key}) from CSV = {max_val:.2f}"
+                        return max_val, f"{comp_id}: max({key}) from history = {max_val:.2f}"
         
         return None
     
-    def _load_history_maxima(self, output_dir: Path) -> Dict[str, float]:
+    def _load_history_maxima(
+        self,
+        output_dir: Path,
+        required_columns: Optional[Set[str]] = None,
+        workers: int = 0,
+        max_memory_mb: Optional[int] = None,
+        scan_mode: str = "auto",
+    ) -> Dict[str, float]:
         """
         Load simulation history and extract max values per column.
         
@@ -686,73 +863,116 @@ class CapexGenerator:
         
         Args:
             output_dir: Directory containing history files
+            required_columns: Optional explicit subset of columns to scan.
+            workers: Thread-pool workers for parquet file scans (0 = auto).
+            max_memory_mb: Optional soft memory cap for worker resolution.
+            scan_mode: auto | stats | read.
             
         Returns:
             Dict mapping column names to their max values
         """
         maxima: Dict[str, float] = {}
-        
-        def _try_dir(base_dir: Path) -> Optional[Dict[str, float]]:
-            # Try CSV first
+        required = set(required_columns) if required_columns else None
+
+        def _chunk_sort_key(path: Path) -> tuple[int, int, str]:
+            stem = path.stem
+            suffix = stem.split("_")[-1]
+            if suffix.isdigit():
+                return (0, int(suffix), path.name)
+            return (1, 0, path.name)
+
+        def _load_csv_maxima(csv_path: Path) -> Dict[str, float]:
+            csv_maxima: Dict[str, float] = {}
+            try:
+                header_df = pd.read_csv(csv_path, nrows=0)
+                available_cols = list(header_df.columns)
+            except Exception as exc:
+                logger.warning(f"Failed to inspect CSV history {csv_path}: {exc}")
+                return {}
+
+            if required is not None:
+                usecols = [c for c in available_cols if c in required]
+            else:
+                usecols = available_cols
+
+            if not usecols:
+                return {}
+
+            try:
+                for chunk in pd.read_csv(csv_path, usecols=usecols, chunksize=10_000):
+                    self._merge_maxima(csv_maxima, self._compute_numeric_column_maxima(chunk))
+            except Exception as exc:
+                logger.warning(f"Failed to load CSV history from {csv_path}: {exc}")
+                return {}
+
+            return csv_maxima
+
+        def _load_parquet_maxima(parquet_files: List[Path]) -> Dict[str, float]:
+            if not parquet_files:
+                return {}
+
+            needed_columns_count = len(required) if required is not None else 1
+            resolved_workers = self._resolve_history_scan_workers(
+                requested_workers=workers,
+                file_count=len(parquet_files),
+                max_memory_mb=max_memory_mb,
+                needed_columns_count=needed_columns_count,
+            )
+            logger.info(
+                "History maxima scan: %d parquet files, workers=%d, mode=%s",
+                len(parquet_files),
+                resolved_workers,
+                scan_mode,
+            )
+
+            parquet_maxima: Dict[str, float] = {}
+            ordered_files = sorted(parquet_files, key=_chunk_sort_key)
+
+            def _scan(path: Path) -> Dict[str, float]:
+                return self._scan_parquet_file_maxima(path, required, scan_mode)
+
+            if resolved_workers <= 1:
+                for pq_file in ordered_files:
+                    self._merge_maxima(parquet_maxima, _scan(pq_file))
+                return parquet_maxima
+
+            with ThreadPoolExecutor(max_workers=resolved_workers) as executor:
+                # executor.map preserves input ordering for deterministic reduction
+                scanned = executor.map(_scan, ordered_files)
+                for file_maxima in scanned:
+                    self._merge_maxima(parquet_maxima, file_maxima)
+            return parquet_maxima
+
+        def _try_dir(base_dir: Path) -> Dict[str, float]:
+            dir_maxima: Dict[str, float] = {}
+
             csv_path = base_dir / "simulation_history.csv"
             if csv_path.exists():
-                try:
-                    df = pd.read_csv(csv_path, nrows=0)  # Get columns only
-                    columns = df.columns.tolist()
-                    
-                    # Read in chunks to handle large files
-                    chunk_size = 10000
-                    for chunk in pd.read_csv(csv_path, chunksize=chunk_size):
-                        for col in chunk.columns:
-                            if chunk[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                                chunk_max = chunk[col].max()
-                                if col in maxima:
-                                    maxima[col] = max(maxima[col], chunk_max)
-                                else:
-                                    maxima[col] = chunk_max
-                    
-                    logger.info(f"Loaded {len(maxima)} column maxima from {csv_path}")
-                    return maxima
-                except Exception as e:
-                    logger.warning(f"Failed to load CSV history from {csv_path}: {e}")
-            
-            # Try Parquet chunks (Standard Location: base_dir/history_chunks/chunk_*.parquet)
+                self._merge_maxima(dir_maxima, _load_csv_maxima(csv_path))
+
             chunks_dir = base_dir / "history_chunks"
-            parquet_pattern = []
-            
+            parquet_files: List[Path] = []
             if chunks_dir.exists():
-                parquet_pattern = list(chunks_dir.glob("chunk_*.parquet"))
-            
-            # Fallback: Check older/flat structure
-            if not parquet_pattern:
-                 parquet_pattern = list(base_dir.glob("chunk_*.parquet"))
-                 
-            if parquet_pattern:
-                try:
-                    for pq_file in sorted(parquet_pattern):
-                        df = pd.read_parquet(pq_file)
-                        for col in df.columns:
-                            if df[col].dtype in ['float64', 'float32', 'int64', 'int32']:
-                                chunk_max = df[col].max()
-                                if col in maxima:
-                                    maxima[col] = max(maxima[col], chunk_max)
-                                else:
-                                    maxima[col] = chunk_max
-                    
-                    logger.info(f"Loaded {len(maxima)} column maxima from {len(parquet_pattern)} Parquet files")
-                    return maxima
-                except Exception as e:
-                    logger.warning(f"Failed to load Parquet history from {base_dir}: {e}")
-            
-            return None
+                parquet_files = list(chunks_dir.glob("chunk_*.parquet"))
+            if not parquet_files:
+                parquet_files = list(base_dir.glob("chunk_*.parquet"))
+            if parquet_files:
+                self._merge_maxima(dir_maxima, _load_parquet_maxima(parquet_files))
+
+            return dir_maxima
 
         # Try output_dir first, then parent (common when output_dir is /Economics)
-        _try_dir(output_dir)
+        self._merge_maxima(maxima, _try_dir(output_dir))
         if not maxima and output_dir.name.lower() == "economics":
-            _try_dir(output_dir.parent)
+            self._merge_maxima(maxima, _try_dir(output_dir.parent))
         elif not maxima and output_dir.parent != output_dir:
-            _try_dir(output_dir.parent)
-        
+            self._merge_maxima(maxima, _try_dir(output_dir.parent))
+
+        if maxima:
+            logger.info(f"Loaded {len(maxima)} history maxima columns")
+        else:
+            logger.info("No history maxima loaded (no matching columns/files found)")
+
         return maxima
 
     
@@ -894,7 +1114,10 @@ class CapexGenerator:
         monitoring: Any = None,
         output_dir: Optional[Path] = None,
         simulation_name: Optional[str] = None,
-        simulation_hours: Optional[int] = None
+        simulation_hours: Optional[int] = None,
+        history_scan_workers: int = 0,
+        history_scan_max_memory_mb: Optional[int] = None,
+        history_scan_mode: str = "auto",
     ) -> CapexReport:
         """
         Generate CAPEX report.
@@ -905,14 +1128,35 @@ class CapexGenerator:
             output_dir: Directory for output files
             simulation_name: Name for report metadata
             simulation_hours: Simulation duration for metadata
+            history_scan_workers: Worker count for history scans (0 = auto).
+            history_scan_max_memory_mb: Optional soft cap for history scan workers.
+            history_scan_mode: History scan mode: auto | stats | read.
             
         Returns:
             CapexReport with all entries and totals
         """
-        # Load history maxima from CSV/Parquet (for TIER 3b extraction)
-        if output_dir:
-            output_path = Path(output_dir) if not isinstance(output_dir, Path) else output_dir
-            self._history_maxima = self._load_history_maxima(output_path)
+        # Reset history cache and defer loading until actually needed by fallback extraction.
+        self._history_maxima = {}
+        self._history_maxima_loaded = False
+        self._history_scan_output_dir = (
+            Path(output_dir) if output_dir and not isinstance(output_dir, Path) else output_dir
+        )
+        self._history_scan_workers = max(0, int(history_scan_workers or 0))
+        self._history_scan_max_memory_mb = (
+            int(history_scan_max_memory_mb)
+            if history_scan_max_memory_mb is not None
+            else None
+        )
+        if self._history_scan_max_memory_mb is not None and self._history_scan_max_memory_mb <= 0:
+            self._history_scan_max_memory_mb = None
+        mode = (history_scan_mode or "auto").lower()
+        if mode not in {"auto", "stats", "read"}:
+            logger.warning(
+                "Invalid history_scan_mode '%s'; falling back to 'auto'.",
+                history_scan_mode,
+            )
+            mode = "auto"
+        self._history_scan_mode = mode
         
         report = CapexReport(
             generated_at=datetime.now().isoformat(),

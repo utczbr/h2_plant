@@ -61,7 +61,11 @@ def _install_fake_generators(monkeypatch, opex_report):
 
     monkeypatch.setattr(economics_pkg, "CapexGenerator", FakeCapexGenerator)
     monkeypatch.setattr(opex_module, "OpexGenerator", FakeOpexGenerator)
-    monkeypatch.setattr(regen_capex, "_build_registry", lambda _cfg_dir: (object(), object()))
+    monkeypatch.setattr(
+        regen_capex,
+        "_build_registry",
+        lambda _cfg_dir, **_kwargs: (object(), object()),
+    )
 
 
 def test_regenerate_capex_prints_opex_low_high_when_available(tmp_path, monkeypatch, capsys):
