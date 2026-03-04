@@ -23,7 +23,9 @@ Usage:
 import argparse
 import json
 import logging
+import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict
 
@@ -44,8 +46,7 @@ NET_PROFIT_OUTPUT_FILENAME = {
     "base": "Economic_Performance_Overview_Base.CAPEX_(Interactive).html",
     "high": "Economic_Performance_Overview_High.CAPEX_(Interactive).html",
 }
-# Suppress GraphCatalog import-time logs triggered by plotly_graphs dependencies.
-logging.getLogger("h2_plant.visualization.graph_catalog").setLevel(logging.WARNING)
+
 
 NET_H2_MIXER_FLOW_COL = "H2_Production_Mixer_outlet_mass_flow_kg_h"
 NET_H2_PSA_FLOW_COLS = [
@@ -109,6 +110,42 @@ DEFAULT_DISCOUNT_RATE = 0.08
 DEFAULT_PROJECT_LIFETIME_YEARS = 20
 
 
+def _resolve_workers(
+    requested: int,
+    max_memory_mb: int,
+    n_tasks: int,
+    est_task_mb: float = 50.0,
+) -> int:
+    """
+    Resolve effective worker count for bounded thread pools.
+
+    Args:
+        requested: User-requested workers.  0 = auto, 1 = sequential.
+        max_memory_mb: Memory cap (0 = no cap).
+        n_tasks: Number of independent tasks to distribute.
+        est_task_mb: Estimated per-task memory footprint (MB).
+
+    Returns:
+        Effective number of workers (>= 1).
+    """
+    if requested == 1:
+        return 1
+
+    cpu = os.cpu_count() or 1
+    if requested <= 0:
+        # Conservative auto: min(2, tasks, cpus)
+        workers = min(2, n_tasks, cpu)
+    else:
+        workers = min(requested, n_tasks, cpu)
+
+    # Apply memory cap if specified.
+    if max_memory_mb > 0 and est_task_mb > 0:
+        mem_limited = max(1, int(max_memory_mb / est_task_mb))
+        workers = min(workers, mem_limited)
+
+    return max(1, workers)
+
+
 def _resolve_history_chunks(
     output_dir: Path,
     history_dir: Optional[str],
@@ -149,9 +186,79 @@ def _resolve_history_chunks(
     return None
 
 
+def _read_chunk_local(
+    chunk_file: Path,
+    cols_to_read: List[str],
+    flow_cols: List[str],
+    sell_power_col: Optional[str],
+    sell_price_col: Optional[str],
+    present_optional: List[str],
+) -> Optional[Dict]:
+    """
+    Read one Parquet chunk and compute chunk-local arrays (no cumulative state).
+
+    Returns a dict with chunk-local arrays or None if chunk is empty.
+    Thread-safe: no shared mutable state.
+    """
+    try:
+        df_chunk = pd.read_parquet(chunk_file, columns=cols_to_read)
+    except OSError as e:
+        if getattr(e, "errno", None) == 107:
+            raise ValueError(
+                "History chunks are on a disconnected mount. "
+                "Ensure the drive is mounted or copy history locally."
+            ) from e
+        raise
+    n_rows = len(df_chunk)
+    if n_rows == 0:
+        return None
+
+    minute_vals = pd.to_numeric(df_chunk["minute"], errors="coerce").to_numpy(dtype=float)
+    flow_vals = np.zeros(n_rows, dtype=float)
+    for col in flow_cols:
+        flow_vals += pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+
+    # Compute intra-chunk dt (boundary dt[0] is set to NaN; fixed by reducer).
+    dt_h = np.full(n_rows, np.nan, dtype=float)
+    median_dt_h = 1.0 / 60.0
+    if n_rows > 1:
+        local_diff_h = np.diff(minute_vals) / 60.0
+        dt_h[1:] = local_diff_h
+        valid_local = local_diff_h[np.isfinite(local_diff_h) & (local_diff_h > 0)]
+        if valid_local.size:
+            median_dt_h = float(np.median(valid_local))
+
+    # Step-level values (not cumulative).
+    step_h2_kg = flow_vals  # Will be multiplied by dt_h in reducer after boundary fix.
+
+    if sell_power_col and sell_price_col:
+        sold_mw = pd.to_numeric(df_chunk[sell_power_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        sold_mw = np.clip(sold_mw, a_min=0.0, a_max=None)
+        spot_price = pd.to_numeric(df_chunk[sell_price_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        step_grid_revenue_rate = sold_mw * spot_price
+    else:
+        step_grid_revenue_rate = np.zeros(n_rows, dtype=float)
+
+    optional_data = {}
+    for col in present_optional:
+        optional_data[col] = pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+
+    return {
+        "minute_vals": minute_vals,
+        "flow_vals": flow_vals,
+        "dt_h": dt_h,
+        "median_dt_h": median_dt_h,
+        "step_h2_rate": step_h2_kg,
+        "step_grid_revenue_rate": step_grid_revenue_rate,
+        "n_rows": n_rows,
+        "optional": optional_data,
+    }
+
+
 def _load_minimal_history(
     chunks_dir: Path,
     downsample_factor: int,
+    effective_workers: int = 1,
 ) -> pd.DataFrame:
     try:
         chunk_files = sorted(
@@ -246,6 +353,45 @@ def _load_minimal_history(
     if sell_price_col:
         cols_to_read.append(sell_price_col)
 
+    # ------------------------------------------------------------------
+    # Phase 1: Read chunks (possibly in parallel).
+    # ------------------------------------------------------------------
+    use_parallel_read = effective_workers >= 2 and len(chunk_files) > 1
+    chunk_results: List[Optional[Dict]] = [None] * len(chunk_files)
+
+    if use_parallel_read:
+        pool_size = min(effective_workers, len(chunk_files))
+        logger.info("Reading %d chunks with %d workers.", len(chunk_files), pool_size)
+        with ThreadPoolExecutor(max_workers=pool_size) as pool:
+            future_to_idx = {
+                pool.submit(
+                    _read_chunk_local,
+                    chunk_file,
+                    cols_to_read,
+                    flow_cols,
+                    sell_power_col,
+                    sell_price_col,
+                    present_optional,
+                ): idx
+                for idx, chunk_file in enumerate(chunk_files)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                chunk_results[idx] = future.result()
+    else:
+        for idx, chunk_file in enumerate(chunk_files):
+            chunk_results[idx] = _read_chunk_local(
+                chunk_file,
+                cols_to_read,
+                flow_cols,
+                sell_power_col,
+                sell_price_col,
+                present_optional,
+            )
+
+    # ------------------------------------------------------------------
+    # Phase 2: Main-thread reducer — boundary-aware cumulative merge.
+    # ------------------------------------------------------------------
     dfs: List[pd.DataFrame] = []
     global_idx = 0
     factor = max(1, int(downsample_factor))
@@ -254,55 +400,37 @@ def _load_minimal_history(
     prev_minute: Optional[float] = None
     last_dt_h = 1.0 / 60.0
     last_full_row: Optional[pd.DataFrame] = None
+    n_chunks = len(chunk_files)
 
-    for chunk_idx, chunk_file in enumerate(chunk_files):
-        try:
-            df_chunk = pd.read_parquet(chunk_file, columns=cols_to_read)
-        except OSError as e:
-            if getattr(e, "errno", None) == 107:
-                raise ValueError(
-                    "History chunks are on a disconnected mount. "
-                    "Ensure the drive is mounted or copy history locally."
-                ) from e
-            raise
-        n_rows = len(df_chunk)
-        if n_rows == 0:
+    for chunk_idx, cr in enumerate(chunk_results):
+        if cr is None:
             continue
 
-        minute_vals = pd.to_numeric(df_chunk["minute"], errors="coerce").to_numpy(dtype=float)
-        flow_vals = np.zeros(n_rows, dtype=float)
-        for col in flow_cols:
-            flow_vals += pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        minute_vals = cr["minute_vals"]
+        dt_h = cr["dt_h"]
+        n_rows = cr["n_rows"]
+        median_dt_h = cr["median_dt_h"]
 
-        # Integrate step mass with chunk-boundary-aware dt.
-        dt_h = np.full(n_rows, np.nan, dtype=float)
-        if n_rows > 1:
-            local_diff_h = np.diff(minute_vals) / 60.0
-            dt_h[1:] = local_diff_h
-            valid_local = local_diff_h[np.isfinite(local_diff_h) & (local_diff_h > 0)]
-            if valid_local.size:
-                last_dt_h = float(np.median(valid_local))
-
+        # Fix boundary dt[0] using previous chunk's last minute.
         if np.isfinite(minute_vals[0]) and prev_minute is not None:
             boundary_dt_h = (minute_vals[0] - prev_minute) / 60.0
             if np.isfinite(boundary_dt_h) and boundary_dt_h > 0:
                 dt_h[0] = boundary_dt_h
 
+        # Use this chunk's median for any remaining invalid dt values.
+        if median_dt_h > 0:
+            last_dt_h = median_dt_h
+
         invalid_dt = ~np.isfinite(dt_h) | (dt_h <= 0)
         if invalid_dt.any():
             dt_h[invalid_dt] = last_dt_h
 
-        step_h2_kg = flow_vals * dt_h
+        # Compute cumulative values with running offsets.
+        step_h2_kg = cr["step_h2_rate"] * dt_h
         cumulative_h2 = running_cumulative_h2 + np.cumsum(step_h2_kg)
         running_cumulative_h2 = float(cumulative_h2[-1])
 
-        if sell_power_col and sell_price_col:
-            sold_mw = pd.to_numeric(df_chunk[sell_power_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-            sold_mw = np.clip(sold_mw, a_min=0.0, a_max=None)
-            spot_price = pd.to_numeric(df_chunk[sell_price_col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
-            step_grid_revenue_eur = sold_mw * spot_price * dt_h
-        else:
-            step_grid_revenue_eur = np.zeros(n_rows, dtype=float)
+        step_grid_revenue_eur = cr["step_grid_revenue_rate"] * dt_h
         cumulative_grid_revenue_eur = running_cumulative_grid_revenue + np.cumsum(step_grid_revenue_eur)
         running_cumulative_grid_revenue = float(cumulative_grid_revenue_eur[-1])
 
@@ -314,8 +442,8 @@ def _load_minimal_history(
             "cumulative_h2_kg": cumulative_h2,
             "cumulative_grid_revenue_eur": cumulative_grid_revenue_eur,
         })
-        for col in present_optional:
-            out_chunk[col] = pd.to_numeric(df_chunk[col], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+        for col, arr in cr["optional"].items():
+            out_chunk[col] = arr
 
         global_idx += n_rows
         last_full_row = out_chunk.iloc[[-1]].copy()
@@ -324,7 +452,7 @@ def _load_minimal_history(
             idx = np.arange(global_idx - n_rows, global_idx)
             mask = (idx % factor) == 0
             # Always keep the last point from the final chunk for endpoint stability.
-            if chunk_idx == (len(chunk_files) - 1) and n_rows > 0:
+            if chunk_idx == (n_chunks - 1) and n_rows > 0:
                 mask[-1] = True
             out_chunk = out_chunk.loc[mask]
 
@@ -670,7 +798,12 @@ def regenerate_net_profit_plotly(
     opex_variant: Optional[str] = None,
     economics_dir: Optional[str] = None,
     h2_price_eur_kg: Optional[float] = None,
+    workers: int = 0,
+    max_memory_mb: int = 0,
+    parallel_mode: str = "auto",
 ) -> int:
+    # Suppress GraphCatalog import-time logs triggered by plotly_graphs deps.
+    logging.getLogger("h2_plant.visualization.graph_catalog").setLevel(logging.WARNING)
     from h2_plant.visualization.plotly_graphs import plot_cumulative_net_profit
     graphs_dir = graphs_dir or (output_dir / "graphs")
     graphs_dir.mkdir(parents=True, exist_ok=True)
@@ -681,7 +814,16 @@ def regenerate_net_profit_plotly(
         return 1
 
     try:
-        df = _load_minimal_history(chunks_dir, downsample_factor)
+        chunk_workers = _resolve_workers(
+            requested=workers,
+            max_memory_mb=max_memory_mb,
+            n_tasks=20,  # conservative estimate of chunk count
+            est_task_mb=50.0,
+        )
+        df = _load_minimal_history(
+            chunks_dir, downsample_factor,
+            effective_workers=chunk_workers if parallel_mode != "off" else 1,
+        )
     except Exception as e:
         logger.error(f"Failed to load minimal history: {e}")
         return 1
@@ -858,8 +1000,10 @@ def regenerate_net_profit_plotly(
     if soec_reserve_pct is not None:
         kwargs["soec_reserve_pct"] = soec_reserve_pct
 
-    saved = 0
-    for variant in ("low", "base", "high"):
+    # Build per-variant kwargs list (deterministic order)
+    variant_order = ("low", "base", "high")
+    variant_tasks: List[Tuple[str, Dict]] = []
+    for variant in variant_order:
         capex_val = capex_variants[variant]
         kwargs_variant = dict(kwargs)
         kwargs_variant["capex"] = capex_val
@@ -869,16 +1013,11 @@ def regenerate_net_profit_plotly(
             yearly_series = opex_yearly_map.get(selected_uniform_variant)
         if yearly_series:
             kwargs_variant["opex_by_year"] = yearly_series
+        variant_tasks.append((variant, kwargs_variant))
 
-        logger.info(
-            "Generating net profit graph for CAPEX %s / OPEX %s: CAPEX=%s, OPEX=%s",
-            variant.upper(),
-            variant.upper() if paired_mode else selected_uniform_variant.upper(),
-            f"{capex_val:,.0f}",
-            f"{kwargs_variant['opex']:,.0f}",
-        )
-        fig = plot_cumulative_net_profit(df, **kwargs_variant)
-
+    def _generate_variant(variant: str, kw: Dict) -> Tuple[str, Path]:
+        """Generate a single net-profit variant chart (thread-safe)."""
+        fig = plot_cumulative_net_profit(df, **kw)
         filename = NET_PROFIT_OUTPUT_FILENAME[variant]
         output_path = graphs_dir / filename
         fig.write_html(
@@ -887,8 +1026,51 @@ def regenerate_net_profit_plotly(
             full_html=True,
             config={"displayModeBar": True, "responsive": True, "editable": True},
         )
-        saved += 1
-        logger.info(f"✓ Net profit graph ({variant}) saved: {output_path}")
+        return variant, output_path
+
+    effective_workers = _resolve_workers(
+        requested=workers,
+        max_memory_mb=max_memory_mb,
+        n_tasks=len(variant_tasks),
+        est_task_mb=80.0,
+    )
+    use_parallel = (
+        effective_workers >= 2
+        and parallel_mode != "off"
+        and len(variant_tasks) > 1
+    )
+
+    for variant, kw in variant_tasks:
+        logger.info(
+            "Generating net profit graph for CAPEX %s / OPEX %s: CAPEX=%s, OPEX=%s",
+            variant.upper(),
+            variant.upper() if paired_mode else selected_uniform_variant.upper(),
+            f"{kw['capex']:,.0f}",
+            f"{kw['opex']:,.0f}",
+        )
+
+    saved = 0
+    if use_parallel:
+        logger.info("Using %d workers for variant chart generation.", effective_workers)
+        with ThreadPoolExecutor(max_workers=min(3, effective_workers)) as pool:
+            futures = {
+                pool.submit(_generate_variant, v, kw): v
+                for v, kw in variant_tasks
+            }
+            results: Dict[str, Path] = {}
+            for future in as_completed(futures):
+                variant, output_path = future.result()
+                results[variant] = output_path
+        # Log in deterministic order
+        for variant in variant_order:
+            if variant in results:
+                logger.info(f"✓ Net profit graph ({variant}) saved: {results[variant]}")
+                saved += 1
+    else:
+        for variant, kw in variant_tasks:
+            _variant, output_path = _generate_variant(variant, kw)
+            saved += 1
+            logger.info(f"✓ Net profit graph ({variant}) saved: {output_path}")
 
     logger.info(f"✓ Net profit graph generation completed: {saved} files")
     return 0
@@ -956,6 +1138,19 @@ def main() -> None:
         "--h2-price", type=float, default=None,
         help="Override H2 price (EUR/kg)"
     )
+    parser.add_argument(
+        "--workers", type=int, default=0,
+        help="Worker threads (0=auto, 1=sequential)"
+    )
+    parser.add_argument(
+        "--max-memory-mb", type=int, default=0,
+        help="Memory cap in MB for worker pool sizing (0=no cap)"
+    )
+    parser.add_argument(
+        "--parallel-mode", type=str, default="auto",
+        choices=["auto", "off", "threads"],
+        help="Parallelism mode (default: auto)"
+    )
 
     args = parser.parse_args()
 
@@ -977,6 +1172,9 @@ def main() -> None:
         opex_variant=args.opex_variant,
         economics_dir=args.economics_dir,
         h2_price_eur_kg=args.h2_price,
+        workers=args.workers,
+        max_memory_mb=args.max_memory_mb,
+        parallel_mode=args.parallel_mode,
     )
     sys.exit(rc)
 
