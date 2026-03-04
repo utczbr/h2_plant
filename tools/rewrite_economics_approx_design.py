@@ -97,6 +97,15 @@ def _parse_args() -> argparse.Namespace:
         help="Number of sampled chunks per year for degradation ramp (default: 5).",
     )
     parser.add_argument(
+        "--progress-every",
+        type=int,
+        default=50,
+        help=(
+            "Emit progress log every N chunks during long loops "
+            "(metadata scan and sampled reads). Use 0 to disable periodic heartbeat."
+        ),
+    )
+    parser.add_argument(
         "--design-capex-reference",
         default=None,
         help="Optional reference capex_report.json (design-mode) for scale derivation.",
@@ -212,7 +221,15 @@ def _find_minute_col_index(parquet_file: pq.ParquetFile) -> Optional[int]:
     return None
 
 
-def _collect_chunk_metadata(chunk_files: List[Path]) -> Dict[str, Any]:
+def _should_log_progress(current: int, total: int, every: int) -> bool:
+    if total <= 0:
+        return False
+    if current <= 1 or current >= total:
+        return True
+    return every > 0 and (current % every == 0)
+
+
+def _collect_chunk_metadata(chunk_files: List[Path], progress_every: int) -> Dict[str, Any]:
     chunks: List[ChunkMeta] = []
     minute_global_min: Optional[float] = None
     minute_global_max: Optional[float] = None
@@ -220,7 +237,19 @@ def _collect_chunk_metadata(chunk_files: List[Path]) -> Dict[str, Any]:
     minute_stats_missing = 0
     col_names: List[str] = []
 
+    total_chunks = len(chunk_files)
+    LOGGER.info("Stage 1/4: scanning Parquet metadata (%d chunks)...", total_chunks)
     for order_idx, chunk_path in enumerate(chunk_files):
+        processed = order_idx + 1
+        if _should_log_progress(processed, total_chunks, progress_every):
+            pct = (processed / total_chunks) * 100.0 if total_chunks > 0 else 100.0
+            LOGGER.info(
+                "  Metadata progress: %d/%d chunks (%.1f%%) | current=%s",
+                processed,
+                total_chunks,
+                pct,
+                chunk_path.name,
+            )
         parquet_file = pq.ParquetFile(chunk_path)
         metadata = parquet_file.metadata
         row_count = int(metadata.num_rows)
@@ -623,6 +652,7 @@ def _build_degradation_ramp(
     history_meta: Optional[Dict[str, Any]],
     n_years: int,
     samples_per_year: int,
+    progress_every: int,
 ) -> Dict[str, Any]:
     if not history_meta or n_years <= 0:
         return {
@@ -663,6 +693,13 @@ def _build_degradation_ramp(
         positions = _sample_positions(len(year_chunks), max(1, samples_per_year))
         samples_by_year[y] = [year_chunks[pos] for pos in positions]
 
+    total_selected = sum(len(v) for v in samples_by_year.values())
+    LOGGER.info(
+        "Stage 2/4: reading sampled chunks for degradation ramp (%d selected across %d years)...",
+        total_selected,
+        n_years,
+    )
+
     # Assume schema is stable across chunks; take first chunk schema names.
     try:
         col_names = set(history_meta.get("column_names") or [])
@@ -675,6 +712,7 @@ def _build_degradation_ramp(
 
     raw_ratio = np.full(n_years, np.nan, dtype=float)
     sampled_chunk_count = 0
+    sampled_processed = 0
     samples_manifest: Dict[str, List[str]] = {}
     for y in range(n_years):
         weighted_numer = 0.0
@@ -682,6 +720,17 @@ def _build_degradation_ramp(
         samples_manifest[str(y + 1)] = [sample.path.name for sample in samples_by_year.get(y, [])]
         for sample in samples_by_year.get(y, []):
             sampled_chunk_count += 1
+            sampled_processed += 1
+            if _should_log_progress(sampled_processed, max(total_selected, 1), progress_every):
+                pct = (sampled_processed / max(total_selected, 1)) * 100.0
+                LOGGER.info(
+                    "  Sample-read progress: %d/%d chunks (%.1f%%) | year=%d file=%s",
+                    sampled_processed,
+                    max(total_selected, 1),
+                    pct,
+                    y + 1,
+                    sample.path.name,
+                )
             read_cols: List[str] = list(available_h2)
             if available_primary_elec:
                 read_cols.extend(available_primary_elec)
@@ -1047,7 +1096,7 @@ def main() -> None:
     if chunks_dir:
         chunk_files = _sorted_chunk_files(chunks_dir)
         if chunk_files:
-            history_meta = _collect_chunk_metadata(chunk_files)
+            history_meta = _collect_chunk_metadata(chunk_files, progress_every=max(0, int(args.progress_every)))
             LOGGER.info(
                 "History metadata scanned: %d chunks (minute stats missing in %d chunks).",
                 len(history_meta["chunks"]),
@@ -1069,13 +1118,16 @@ def main() -> None:
         else:
             year_hours = year_hours[:n_years]
 
+    LOGGER.info("Stage 3/4: building yearly model and synthesizing degradation ramp...")
     ramp_info = _build_degradation_ramp(
         history_meta=history_meta,
         n_years=n_years,
         samples_per_year=max(1, int(args.samples_per_year)),
+        progress_every=max(0, int(args.progress_every)),
     )
     ramp = np.array(ramp_info["ramp"], dtype=float)
 
+    LOGGER.info("Stage 4/4: rewriting CAPEX/OPEX reports and writing outputs...")
     capex_scales = _derive_capex_scales(
         src_capex=src_capex,
         ref_capex=ref_capex,
