@@ -1,5 +1,17 @@
 # Component Tracking Reference
 
+> **⚠ Document Status — Structurally Stale (March 2026)**
+>
+> The high-level architecture described here (component execution → state exposure → `engine_dispatch.py` recording → history DataFrame → downstream graphs) remains correct. However, several specific sections no longer reflect the live implementation:
+>
+> - **Visualization pipeline** — updated below; `static_graphs.py` / `GRAPH_MAP` loop has been replaced.
+> - **Global Metrics table** — known to be incomplete; many fields tracked in `HybridArbitrageEngineStrategy` are not listed here (see note in that section).
+> - **Per-component metric tables** — some entries do not appear in the current `CONFIG_MAP`; treat as indicative, not authoritative.
+> - **Recording fallback logic** — corrected below; the old description was an oversimplification.
+> - **Column Aliases** — the table in this document was **never implemented** in the current codebase and has been retracted.
+>
+> For the authoritative dispatch-history schema, refer directly to `HybridArbitrageEngineStrategy` in `h2_plant/control/engine_dispatch.py`. This document is retained for its debugging guidance and workflow explanations.
+
 This document describes the metrics tracked for each component type in `engine_dispatch.py`, explains how missing properties are handled, and how this affects graph visualization.
 
 ---
@@ -7,19 +19,21 @@ This document describes the metrics tracked for each component type in `engine_d
 ## Overview: Data Flow Architecture
 
 ```
-Component.step()  →  Component.get_state()  →  engine_dispatch.record_post_step()  →  History DataFrame  →  Graph Functions
+Component.step()  →  Component.get_state()  →  engine_dispatch.record_post_step()  →  History DataFrame  →  GraphOrchestrator
 ```
 
 1. **Component Execution**: Each component's `step()` method executes physics calculations.
 2. **State Exposure**: `get_state()` returns a dictionary of metrics.
 3. **Recording**: `engine_dispatch.py` reads these metrics and stores them in pre-allocated NumPy arrays.
-4. **Visualization**: Graph functions in `static_graphs.py` read columns from the history DataFrame.
+4. **Visualization**: `GraphOrchestrator` drives post-run graph generation via `graph_catalog.py` and `UnifiedGraphExecutor`, reading columns from the history DataFrame. The legacy `GRAPH_MAP` loop and direct calls into `static_graphs.py` have been removed.
 
 ---
 
 ## Global Metrics (System-Level)
 
-These are tracked regardless of which components exist:
+These are tracked regardless of which components exist.
+
+> **⚠ Incomplete table.** The fields below are a subset of the columns actually written by `HybridArbitrageEngineStrategy`. Known omissions from the live codebase include (non-exhaustive): `H2_atr_kg`, `pem_current_density`, `pem_efficiency`, `storage_*` fields, RFNBO metrics, BOP cost fields, cooling-manager fields, grid-usage fields, and per-module SOEC degradation fields. Consult `engine_dispatch.py` for the full schema.
 
 | Column Name | Description | Units |
 |-------------|-------------|-------|
@@ -49,6 +63,8 @@ These are tracked regardless of which components exist:
 
 ## Per-Component Metrics
 
+> **⚠ Partially stale.** Several entries in the tables below (especially for Chiller, Coalescer, Deoxo, Knock-Out Drum, Hydrogen Multi-Cyclone, and Heat Exchanger) do not appear in the current `CONFIG_MAP` or recording logic in `engine_dispatch.py`. Fields such as `enthalpy`, `dissolved_gas_*`, `conversion_percent`, `inlet_pressure_bar`, and `tqc_duty_kw` are flagged in analysis as absent from the active recorder. Verify against `CONFIG_MAP` in `engine_dispatch.py` before relying on specific field names.
+
 ### SOEC Operator
 
 | Metric | Source Attribute | Description |
@@ -71,7 +87,7 @@ These are tracked regardless of which components exist:
 | `{cid}_outlet_temp_c` | Stream temperature | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Coalescer
 
@@ -80,13 +96,13 @@ These are tracked regardless of which components exist:
 | `{cid}_delta_p_bar` | `delta_p_bar` | Pressure drop |
 | `{cid}_drain_flow_kg_h` | `drain_flow_kg_h` | Drain water flow |
 | `{cid}_outlet_o2_ppm_mol` | `outlet_o2_ppm_mol` | O₂ impurity |
-| `{cid}_dissolved_gas_ppm` | `dissolved_gas_ppm` | Dissolved gas concentration |
-| `{cid}_dissolved_gas_in_kg_h` | `dissolved_gas_in_kg_h` | Inlet dissolved gas load |
-| `{cid}_dissolved_gas_out_kg_h` | `dissolved_gas_out_kg_h` | Outlet dissolved gas load |
+| `{cid}_dissolved_gas_ppm` ⚠ | `dissolved_gas_ppm` | Dissolved gas — verify against CONFIG_MAP |
+| `{cid}_dissolved_gas_in_kg_h` ⚠ | `dissolved_gas_in_kg_h` | Inlet dissolved gas load — verify against CONFIG_MAP |
+| `{cid}_dissolved_gas_out_kg_h` ⚠ | `dissolved_gas_out_kg_h` | Outlet dissolved gas load — verify against CONFIG_MAP |
 | `{cid}_outlet_temp_c` | Stream temperature | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Deoxo Reactor
 
@@ -94,15 +110,15 @@ These are tracked regardless of which components exist:
 |--------|------------------|-------------|
 | `{cid}_outlet_o2_ppm_mol` | `outlet_o2_ppm_mol` | Residual O₂ |
 | `{cid}_inlet_temp_c` | `inlet_temp_c` | Inlet temperature |
-| `{cid}_inlet_pressure_bar` | `inlet_pressure_bar` | Inlet pressure |
+| `{cid}_inlet_pressure_bar` ⚠ | `inlet_pressure_bar` | Inlet pressure — verify against CONFIG_MAP |
 | `{cid}_o2_in_kg_h` | `o2_in_kg_h` | Inlet O₂ mass flow |
 | `{cid}_peak_temp_c` | `peak_temp_c` | Reaction peak temp |
-| `{cid}_conversion_percent` | `conversion_percent` | O₂ conversion efficiency |
+| `{cid}_conversion_percent` ⚠ | `conversion_percent` | O₂ conversion efficiency — verify against CONFIG_MAP |
 | `{cid}_mass_flow_kg_h` | `mass_flow_kg_h` | Total mass flow |
 | `{cid}_outlet_temp_c` | Stream temperature | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### PSA (Pressure Swing Adsorption)
 
@@ -118,14 +134,14 @@ These are tracked regardless of which components exist:
 | `{cid}_water_removed_kg_h` | `water_removed_kg_h` | Water separation rate |
 | `{cid}_drain_temp_k` | `drain_temp_k` | Drain temperature |
 | `{cid}_drain_pressure_bar` | `drain_pressure_bar` | Drain pressure |
-| `{cid}_dissolved_gas_ppm` | `dissolved_gas_ppm` | Dissolved gas in drain |
+| `{cid}_dissolved_gas_ppm` ⚠ | `dissolved_gas_ppm` | Dissolved gas in drain — verify against CONFIG_MAP |
 | `{cid}_m_dot_H2O_liq_accomp_kg_s` | `m_dot_H2O_liq_accomp_kg_s` | Entrained liquid |
-| `{cid}_dissolved_gas_in_kg_h` | `dissolved_gas_in_kg_h` | Inlet dissolved gas |
-| `{cid}_dissolved_gas_out_kg_h` | `dissolved_gas_out_kg_h` | Outlet dissolved gas |
+| `{cid}_dissolved_gas_in_kg_h` ⚠ | `dissolved_gas_in_kg_h` | Inlet dissolved gas — verify against CONFIG_MAP |
+| `{cid}_dissolved_gas_out_kg_h` ⚠ | `dissolved_gas_out_kg_h` | Outlet dissolved gas — verify against CONFIG_MAP |
 | `{cid}_outlet_temp_c` | Stream temperature | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Hydrogen Multi-Cyclone
 
@@ -135,14 +151,14 @@ These are tracked regardless of which components exist:
 | `{cid}_water_removed_kg_h` | `water_removed_kg_h` | Water separation rate |
 | `{cid}_drain_temp_k` | `drain_temp_k` | Drain temperature |
 | `{cid}_drain_pressure_bar` | `drain_pressure_bar` | Drain pressure |
-| `{cid}_dissolved_gas_ppm` | `dissolved_gas_ppm` | Dissolved gas in drain |
-| `{cid}_dissolved_gas_in_kg_h` | `dissolved_gas_in_kg_h` | Inlet dissolved gas |
-| `{cid}_dissolved_gas_out_kg_h` | `dissolved_gas_out_kg_h` | Outlet dissolved gas |
+| `{cid}_dissolved_gas_ppm` ⚠ | `dissolved_gas_ppm` | Dissolved gas in drain — verify against CONFIG_MAP |
+| `{cid}_dissolved_gas_in_kg_h` ⚠ | `dissolved_gas_in_kg_h` | Inlet dissolved gas — verify against CONFIG_MAP |
+| `{cid}_dissolved_gas_out_kg_h` ⚠ | `dissolved_gas_out_kg_h` | Outlet dissolved gas — verify against CONFIG_MAP |
 | `{cid}_pressure_drop_mbar` | `pressure_drop_mbar` | Cyclone pressure drop |
 | `{cid}_outlet_temp_c` | Stream temperature | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Compressor
 
@@ -153,7 +169,7 @@ These are tracked regardless of which components exist:
 | `{cid}_outlet_temp_c` | `outlet_temp_c` | Discharge temperature |
 | `{cid}_outlet_pressure_bar` | Stream/state | Discharge pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Dry Cooler
 
@@ -161,13 +177,13 @@ These are tracked regardless of which components exist:
 |--------|------------------|-------------|
 | `{cid}_outlet_o2_ppm_mol` | `outlet_o2_ppm_mol` | O₂ impurity |
 | `{cid}_heat_rejected_kw` | `heat_rejected_kw` | Total heat rejected |
-| `{cid}_tqc_duty_kw` | `tqc_duty_kw` | TQC section duty |
+| `{cid}_tqc_duty_kw` ⚠ | `tqc_duty_kw` | TQC section duty — verify against CONFIG_MAP |
 | `{cid}_dc_duty_kw` | `dc_duty_kw` | DC section duty |
 | `{cid}_fan_power_kw` | `fan_power_kw` | Fan electrical power |
 | `{cid}_outlet_temp_c` | `outlet_temp_c` | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Heat Exchanger
 
@@ -178,7 +194,7 @@ These are tracked regardless of which components exist:
 | `{cid}_outlet_temp_c` | Stream temperature | Outlet temperature |
 | `{cid}_outlet_pressure_bar` | Stream pressure | Outlet pressure |
 | `{cid}_outlet_h2o_frac` | Stream composition | Water fraction |
-| `{cid}_outlet_enthalpy_kj_kg` | Stream enthalpy | Specific enthalpy |
+| `{cid}_outlet_enthalpy_kj_kg` ⚠ | Stream enthalpy | Specific enthalpy — verify against CONFIG_MAP |
 
 ### Drain Recorder Mixer
 
@@ -195,15 +211,22 @@ These are tracked regardless of which components exist:
 
 ### Recording Behavior
 
-When `engine_dispatch.py` records a metric, it uses the pattern:
+When `engine_dispatch.py` records a per-component metric it uses a two-stage lookup — **not** a simple `state.get()` call:
 
 ```python
-self._history[f"{cid}_metric"][step_idx] = state.get('metric', 0.0)
+# Stage 1: try direct attribute access on the component object
+value = getattr(rec.component, attr_name, None)
+
+# Stage 2: fall back to get_state() if the attribute is absent
+if value is None:
+    value = rec.component.get_state().get(attr_name, 0.0)
 ```
 
-The `state.get('metric', 0.0)` pattern means:
-- **If the key exists**: The actual value is recorded.
-- **If the key is missing**: `0.0` is recorded as the default.
+The practical consequence is:
+- If the attribute exists directly on the component (e.g. as a property or instance variable), that value is used and `get_state()` is **not** called for this field.
+- Only when `getattr` returns `None` does the recorder fall back to the state dictionary, using `0.0` as the final default.
+
+This distinction matters when debugging: a metric that always returns `0.0` may be failing at the `getattr` stage (wrong attribute name on the object), not necessarily a missing `get_state()` key.
 
 ### Pre-Allocation Behavior
 
@@ -233,13 +256,13 @@ This means:
 ### Issue: Graph shows constant 0
 
 **Possible Causes:**
-1. **Missing `get_state()` key**: Component doesn't expose the required metric.
-2. **Wrong attribute name**: `engine_dispatch.py` reads wrong attribute (e.g., `last_steam_output_kg` vs `last_step_steam_input_kg`).
+1. **Wrong attribute name**: `engine_dispatch.py` records via `getattr(component, attr_name)` first; a mismatched name silently returns `None` and falls back to 0.
+2. **Missing `get_state()` key**: If `getattr` falls through to `get_state()`, the key may still be absent.
 3. **Component not in topology**: The component type isn't instantiated.
 
 **Resolution:**
-1. Check component's `get_state()` method for the expected key.
-2. Verify `engine_dispatch.py` uses the correct attribute name.
+1. Check `CONFIG_MAP` in `engine_dispatch.py` for the exact `attr_name` used for this field.
+2. Verify the attribute name matches what the component exposes (directly as an attribute, or via `get_state()`).
 3. Confirm the component exists in `plant_topology.yaml`.
 
 ### Issue: Graph shows "No data available"
@@ -289,20 +312,23 @@ for comp in self._components:
 ### Step 3: Record in engine_dispatch.py
 
 ```python
-# In record_post_step(), within the component loop
-for comp in self._components:
-    cid = comp.component_id
-    state = comp.get_state()
-    self._history[f"{cid}_new_metric"][step_idx] = state.get('new_metric', 0.0)
+# In record_post_step(), add to CONFIG_MAP or the component's recording block.
+# The recorder tries getattr(component, 'new_metric', None) first,
+# then falls back to get_state().get('new_metric', 0.0).
 ```
 
-### Step 4: Use in Graph
+### Step 4: Register in graph_catalog.py
+
+Add the new column to the appropriate graph entry in `graph_catalog.py`. `GraphOrchestrator` uses `UnifiedGraphExecutor` to drive all post-run graphs from this catalog — there is no longer a `static_graphs.py` function to update.
 
 ```python
-# In static_graphs.py graph function
-metric_col = _find_component_columns(df, 'ComponentID', 'new_metric')
-if metric_col:
-    ax.plot(df['minute'], df[metric_col], label='New Metric')
+# In graph_catalog.py — add column to the relevant graph's series definition
+{
+    "graph_id": "my_graph",
+    "series": [
+        {"column": "{cid}_new_metric", "label": "New Metric", "unit": "kW"}
+    ]
+}
 ```
 
 ---
@@ -315,17 +341,7 @@ if metric_col:
 | `metric` (no prefix) | System-level aggregate | `cumulative_h2_kg` |
 | `soec_module_powers_{i}` | Per-module SOEC data | `soec_module_powers_1` |
 
-### Column Aliases
-
-`run_integrated_simulation.py` applies aliases for legacy graph compatibility:
-
-| Original Name | Alias |
-|---------------|-------|
-| `H2_soec_kg` | `H2_soec` |
-| `H2_pem_kg` | `H2_pem` |
-| `steam_soec_kg` | `Steam_soec` |
-| `H2O_pem_kg` | `H2O_pem` |
-| `spot_price` | `Spot` |
+> **⚠ Column Aliases — Retracted.** A previous version of this document listed a set of column aliases applied by `run_integrated_simulation.py` (e.g. `H2_soec_kg` → `H2_soec`). **These aliases are not implemented in the current codebase.** The alias table has been removed to avoid misleading debugging. If you are chasing a missing column and suspect a rename is involved, check `run_integrated_simulation.py` directly.
 
 ---
 
@@ -336,7 +352,7 @@ When a graph shows unexpected zeros:
 - [ ] **Check component exists**: Is it in `plant_topology.yaml`?
 - [ ] **Check detection**: Is the component type in `engine_dispatch._find_*()` or `isinstance()` checks?
 - [ ] **Check allocation**: Is the history array allocated in `__init__`?
-- [ ] **Check exposure**: Does `get_state()` return the required key?
-- [ ] **Check attribute name**: Does `engine_dispatch.py` use the correct attribute/key name?
+- [ ] **Check `CONFIG_MAP`**: Is the field listed with the correct `attr_name`? (`getattr` is tried first — attribute name must match the component object, not just `get_state()`.)
+- [ ] **Check exposure**: Does `get_state()` return the required key (used as fallback)?
 - [ ] **Check recording**: Is the value being recorded in `record_post_step()`?
-- [ ] **Check aliases**: Is there a column alias defined for graph compatibility?
+- [ ] **Check catalog**: Is the column referenced correctly in `graph_catalog.py`? (Column aliases from the old pipeline do not exist.)
