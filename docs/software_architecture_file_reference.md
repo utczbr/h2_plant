@@ -1,5 +1,15 @@
 # Software Architecture File Reference
 
+> **⚠ Document Status — Partially Outdated (March 2026)**
+>
+> The infrastructure sections (config, engine, data models, optimization, test suite) remain accurate. The following sections have been corrected in this revision:
+>
+> - **Visualization pipeline** (sections 6.1, 6.4, Execution Flow) — the active path uses `graph_catalog.py` + `UnifiedGraphExecutor`, not `GraphOrchestrator` + `static_graphs.*`.
+> - **Component physics paths** (sections 6.3, 7.3) — `SOECOperator` lives in `electrolysis/soec_operator.py`, `Chiller` lives in `thermal/chiller.py`, and `IntegratedATRPlant` lives in `reforming/`.
+> - **Component namespace table** (section 6.3) — expanded to include all current `h2_plant/components/` sub-packages.
+>
+> The authoritative merge target for this file is `docs/ARCHITECTURE.md`. Until that merge occurs, treat line-number counts as indicative (they drift as the codebase evolves).
+
 This document maps each section of the software architecture documentation to the specific source files that implement them.
 
 ---
@@ -26,7 +36,10 @@ This document maps each section of the software architecture documentation to th
 | File | Lines | Key Classes/Functions |
 |------|-------|----------------------|
 | `h2_plant/reporting/stream_table.py` | 273 | `print_stream_summary_table()` |
-| `h2_plant/visualization/static_graphs.py` | 4656 | 95+ graph functions: `create_dispatch_figure`, `create_h2_production_figure`, `create_cumulative_h2_figure`, etc. |
+| `h2_plant/visualization/graph_catalog.py` | — | `GRAPH_REGISTRY` — declarative catalog of all graphs; primary entry point for post-run visualization |
+| `h2_plant/visualization/unified_executor.py` | — | `UnifiedGraphExecutor` — reads `GRAPH_REGISTRY`, renders and exports all graphs from the history DataFrame |
+
+> **Note:** `h2_plant/visualization/static_graphs.py` and `GraphOrchestrator` are legacy; the active runner uses `GRAPH_REGISTRY` + `UnifiedGraphExecutor`. `static_graphs.py` may still exist as a source of individual figure functions but is no longer the orchestration entry point.
 
 ---
 
@@ -82,16 +95,30 @@ This document maps each section of the software architecture documentation to th
 | `h2_plant/optimization/lut_manager.py` | 1126 | `LUTManager`, `LUTConfig`, `initialize()`, `lookup()`, `lookup_batch()`, `lookup_mixture_enthalpy()` |
 | `h2_plant/optimization/numba_ops.py` | 2831 | 64+ JIT functions: `calculate_stream_enthalpy_jit`, `calculate_compression_work`, `counter_flow_ntu_effectiveness`, `solve_rachford_rice_single_condensable`, etc. |
 
-### Component Physics (Representative Examples)
+### Component Physics (Sub-package Map)
 
-| Subdirectory | Files | Examples |
-|--------------|-------|----------|
-| `components/electrolysis/` | 2 | `soec.py`, `pem_electrolyzer.py` |
-| `components/compression/` | 3 | `compressor_single.py` |
-| `components/cooling/` | 2 | `dry_cooler.py`, `chiller.py` |
-| `components/separation/` | 8 | `knock_out_drum.py`, `hydrogen_cyclone.py`, `coalescer.py`, `psa_syngas.py` |
-| `components/storage/` | 7 | `detailed_tank.py` |
-| `components/thermal/` | 8 | `interchanger.py`, `attemperator.py` |
+The table below reflects the current `h2_plant/components/` directory layout. Paths marked ⚠ were incorrect in the previous revision and have been updated.
+
+| Sub-package | Representative Files | Notes |
+|-------------|---------------------|-------|
+| `components/electrolysis/` | `soec_operator.py` ⚠, `pem_electrolyzer.py` | `SOECOperator` is in `soec_operator.py`, not `soec.py` |
+| `components/reforming/` | `integrated_atr_plant.py` ⚠ | ATR namespace — absent from previous revision |
+| `components/compression/` | `compressor_single.py` | |
+| `components/separation/` | `knock_out_drum.py`, `hydrogen_cyclone.py`, `coalescer.py`, `psa_syngas.py` | |
+| `components/purification/` | `deoxo_reactor.py` | |
+| `components/thermal/` | `chiller.py` ⚠, `interchanger.py`, `attemperator.py` | `Chiller` is in `thermal/`, not `cooling/` |
+| `components/cooling/` | `dry_cooler.py` | Dry cooler remains here |
+| `components/storage/` | `detailed_tank.py` | |
+| `components/control/` | `valve.py` | |
+| `components/water/` | `water_balance_tracker.py` | |
+| `components/delivery/` | `discharge_station.py` | |
+| `components/external/` | Boundary conditions (Water, Biogas, etc.) | |
+| `components/mixing/` | Stream mixer components | Previously undocumented |
+| `components/coordination/` | Multi-component coordination logic | Previously undocumented |
+| `components/power/` | Power source / grid interface components | Previously undocumented |
+| `components/utility/` | Utility / ancillary components | Previously undocumented |
+| `components/logistics/` | Logistics and scheduling components | Previously undocumented |
+| `components/environment/` | Environmental boundary components | Previously undocumented |
 
 ---
 
@@ -111,9 +138,11 @@ This document maps each section of the software architecture documentation to th
 
 | File | Lines | Key Classes/Functions |
 |------|-------|----------------------|
-| `h2_plant/visualization/graph_orchestrator.py` | 154 | `GraphOrchestrator`, `generate_all()` |
+| `h2_plant/visualization/graph_catalog.py` | — | `GRAPH_REGISTRY` — declarative graph definitions; **active orchestration entry point** |
+| `h2_plant/visualization/unified_executor.py` | — | `UnifiedGraphExecutor` — renders all graphs from `GRAPH_REGISTRY` against the history DataFrame |
 | `h2_plant/visualization/dashboard_generator.py` | ~400 | `DashboardGenerator`: HTML dashboard creation |
-| `h2_plant/visualization/static_graphs.py` | 4656 | Individual `create_*_figure()` functions |
+| `h2_plant/visualization/static_graphs.py` ⚠ | 4656 | Individual `create_*_figure()` functions — **legacy; no longer the orchestration path** |
+| `h2_plant/visualization/graph_orchestrator.py` ⚠ | 154 | `GraphOrchestrator` — **legacy/deprecated; replaced by `UnifiedGraphExecutor`** |
 | `visualization/graphs/` submodules | — | `profiles.py`, `thermal.py`, `separation.py`, `economics.py`, `production.py`, `performance.py`, `soec.py`, `storage.py` |
 
 ---
@@ -122,23 +151,26 @@ This document maps each section of the software architecture documentation to th
 
 ```mermaid
 graph TD
-    A[run_integrated_simulation.py] --> B[ConfigLoader.load_context]
-    B --> C[PlantGraphBuilder.build]
-    C --> D[ComponentRegistry]
-    A --> E[EnergyPriceLoader.load_data]
-    A --> F[SimulationEngine]
-    F --> G[HybridArbitrageEngineStrategy]
+    A["run_integrated_simulation.py"] --> B["ConfigLoader.load_context"]
+    B --> C["PlantGraphBuilder.build"]
+    C --> D["ComponentRegistry"]
+    A --> E["EnergyPriceLoader.load_data"]
+    A --> F["SimulationEngine"]
+    F --> G["HybridArbitrageEngineStrategy"]
     F --> H["run() Loop"]
-    H --> I[registry.step_all]
-    H --> J[strategy.decide_and_apply]
-    H --> K[strategy.record_post_step]
-    K --> L[ChunkedHistoryManager]
-    H --> M[Checkpointing]
-    A --> N[stream_table.print_summary]
-    A --> O[generate_graphs]
-    O --> P[GraphOrchestrator]
-    O --> Q[static_graphs.*]
+    H --> I["registry.step_all"]
+    H --> J["strategy.decide_and_apply"]
+    H --> K["strategy.record_post_step"]
+    K --> L["ChunkedHistoryManager"]
+    H --> M["Checkpointing"]
+    A --> N["stream_table.print_summary"]
+    A --> O["generate_graphs()"]
+    O --> P["GRAPH_REGISTRY (graph_catalog.py)"]
+    P --> Q["UnifiedGraphExecutor (unified_executor.py)"]
+    Q --> R["PNG / HTML outputs"]
 ```
+
+> **Note:** The previous diagram showed `O --> GraphOrchestrator` and `O --> static_graphs.*`. The active path is `GRAPH_REGISTRY` → `UnifiedGraphExecutor`. `GraphOrchestrator` and the `GRAPH_MAP` loop have been removed from `run_integrated_simulation.py`.
 
 ---
 
@@ -189,7 +221,7 @@ graph TD
 ### Key Algorithms
 
 | Algorithm | File | Function | Lines |
-|-----------|------|----------|-------|
+|-----------|------|----------|---------|
 | Polytropic Compression | `h2_plant/optimization/numba_ops.py` | `calculate_compression_work()` | L242-286 |
 | Real-Gas Compression | `h2_plant/optimization/numba_ops.py` | `calculate_compression_realgas_jit()` | ~L800-900 |
 | ε-NTU Heat Transfer | `h2_plant/optimization/numba_ops.py` | `counter_flow_ntu_effectiveness()` | ~L1200 |
@@ -212,13 +244,16 @@ graph TD
 
 ### Physical Models (Component Implementations)
 
+Paths marked ⚠ were corrected from the previous revision.
+
 | Component Type | File | Lines | Key Physics |
 |----------------|------|-------|-------------|
-| SOEC Electrolyzer | `h2_plant/components/electrolysis/soec.py` | ~600 | Module ramping, degradation, steam conversion |
+| SOEC Electrolyzer | `h2_plant/components/electrolysis/soec_operator.py` ⚠ | ~600 | Module ramping, degradation, steam conversion |
 | PEM Electrolyzer | `h2_plant/components/electrolysis/pem_electrolyzer.py` | ~350 | Polynomial efficiency curves |
+| ATR Plant | `h2_plant/components/reforming/integrated_atr_plant.py` ⚠ | — | Autothermal reforming, syngas production |
 | Compressor | `h2_plant/components/compression/compressor_single.py` | ~400 | Temperature-limited compression, real-gas EOS |
 | Dry Cooler | `h2_plant/components/cooling/dry_cooler.py` | 616 | ε-NTU method, condensation flash |
-| Chiller | `h2_plant/components/thermal/chiller.py` | ~250 | Sub-ambient cooling |
+| Chiller | `h2_plant/components/thermal/chiller.py` ⚠ | ~250 | Sub-ambient cooling |
 | KOD | `h2_plant/components/separation/knock_out_drum.py` | ~350 | Gravity separation, liquid holdup |
 | Cyclone | `h2_plant/components/separation/hydrogen_cyclone.py` | ~300 | Centrifugal separation efficiency |
 | Coalescer | `h2_plant/components/separation/coalescer.py` | ~250 | Permeability-based pressure drop |
