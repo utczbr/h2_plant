@@ -118,10 +118,10 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    A[Producer] -->|step()| B[output_stream]
-    B -->|receive_input| C[Consumer.inlet]
-    C -->|step()| D[Consumer Output]
-    
+    A["Producer"] -->|"step()"| B["Output stream"]
+    B -->|"receive_input()"| C["Consumer inlet"]
+    C -->|"step()"| D["Consumer output"]
+
     style A fill:#e1f5fe
     style C fill:#fff3e0
 ```
@@ -130,11 +130,11 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    E[Engine] -->|record_post_step| F[Dispatch]
-    F -->|get_state| G[Component]
-    G -->|actual_power| F
-    F -->|write| H[History Arrays]
-    
+    E["Engine"] -->|"record_post_step()"| F["Dispatch"]
+    F -->|"get_state()"| G["Component"]
+    G -->|"actual_power"| F
+    F -->|"write"| H["History Arrays"]
+
     style E fill:#f3e5f5
     style H fill:#e8f5e9
 ```
